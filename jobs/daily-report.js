@@ -67,7 +67,12 @@ async function runDailyReport(dateStr) {
 
 const dateArg = process.argv[2]; // Optional: specific date
 
-(async () => {
-  await runDailyReport(dateArg);
-  process.exit(0);
-})();
+// Only auto-run when executed directly (not when required by server.js)
+if (require.main === module) {
+  (async () => {
+    await runDailyReport(dateArg);
+    process.exit(0);
+  })();
+}
+
+module.exports = { runDailyReport };
