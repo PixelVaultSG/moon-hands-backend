@@ -9,7 +9,7 @@
  */
 
 require('dotenv').config();
-const { createClient } = require('../supabase/client');
+const { supabase } = require('../supabase/client');
 const { sendDailyClosingSummary } = require('../telegram/booking-notifications');
 const { getTodaySG, isClinicOpenNow } = require('../utils/date-helpers');
 
@@ -32,8 +32,6 @@ async function checkAndSendClosingSummaries() {
   }
   
   try {
-    const supabase = createClient();
-    
     // Get all active clinics with their operating hours
     const { data: clinics, error } = await supabase
       .from('clients')

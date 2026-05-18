@@ -9,7 +9,7 @@ const { notifyBookingCreated, notifyBookingCancelled, sendWeeklyRoundup } = requ
 
 // ─── HELPER: Get Supabase client ──────────────────────────────────
 function getSupabase() {
-  return db.createClient();
+  return db.supabase;
 }
 
 // ─── 1. CHECK_AVAILABILITY ────────────────────────────────────────
