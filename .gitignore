@@ -1,0 +1,36 @@
+# Pixel Vault - Git Ignore
+# NEVER commit these files
+
+# Environment variables (contains ALL secrets)
+.env
+.env.local
+.env.*.local
+
+# Node modules
+node_modules/
+package-lock.json
+yarn.lock
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Temporary files
+*.tmp
+*.temp
+
+# Build artifacts
+dist/
+build/
+coverage/

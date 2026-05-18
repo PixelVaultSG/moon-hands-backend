@@ -1,0 +1,22 @@
+{
+  "name": "moon-hands-backend",
+  "version": "1.0.0",
+  "description": "Moon Hands - AI Receptionist Backend (Telegram + Webhooks)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js",
+    "scheduler": "node telegram/scheduler.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.103.3",
+    "dotenv": "^16.6.1",
+    "node-cron": "^3.0.3",
+    "openai": "^4.28.0",
+    "googleapis": "^133.0.0",
+    "telegraf": "^4.16.3"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.9"
+  }
+}

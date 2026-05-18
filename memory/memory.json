@@ -1,0 +1,161 @@
+{
+  "version": "1.0",
+  "project": "moon-hands",
+  "lastUpdated": "2026-05-12T16:00:00Z",
+  "categories": {
+    "architecture": [
+      {
+        "id": "arch-001",
+        "title": "Webhook is one-way only",
+        "content": "360dialog webhook delivers messages TO our server but NEVER automatically sends replies back. We MUST explicitly POST to /v1/messages to deliver responses to users.",
+        "tags": ["webhook", "360dialog", "whatsapp", "architecture"],
+        "confidence": "confirmed",
+        "date": "2026-05-12",
+        "source": "deployment-debug"
+      },
+      {
+        "id": "arch-002",
+        "title": "360dialog webhook message format",
+        "content": "360dialog sends webhooks in deeply nested format: body.entry[0].changes[0].value.messages[0]. NOT body.messages[0] directly. The extractMessage() function must traverse this nesting.",
+        "tags": ["webhook", "360dialog", "message-format", "parsing"],
+        "confidence": "confirmed",
+        "date": "2026-05-12",
+        "source": "deployment-debug"
+      },
+      {
+        "id": "arch-003",
+        "title": "Hybrid AI routing system",
+        "content": "The bot uses a two-tier system: (1) Hardcoded pattern matching for common questions (pricing, hours, treatments) — free, instant. (2) OpenAI for complex/emotional queries — costs ~$0.002-0.003 per message. ~70% of questions are handled by hardcoded responses.",
+        "tags": ["ai", "routing", "openai", "cost", "architecture"],
+        "confidence": "confirmed",
+        "date": "2026-05-12",
+        "source": "design-decision"
+      }
+    ],
+    "third_party": [
+      {
+        "id": "3p-001",
+        "title": "360dialog sandbox endpoint",
+        "content": "Sandbox API uses waba-sandbox.360dialog.io. Production uses waba.360dialog.io. Sandbox keys are ~30 uppercase characters. Sandbox can only send messages to the verified phone number.",
+        "tags": ["360dialog", "sandbox", "endpoint", "api"],
+        "confidence": "confirmed",
+        "date": "2026-05-12",
+        "source": "api-testing"
+      },
+      {
+        "id": "3p-002",
+        "title": "Render free tier overlapping instances",
+        "content": "Render free tier keeps old instances running during deploy transition. New instance starts before old one dies. Causes Telegram 409 Conflict. Fix: dropPendingUpdates: true + retry logic with delays.",
+        "tags": ["render", "deployment", "free-tier", "telegram", "409"],
+        "confidence": "confirmed",
+        "date": "2026-05-12",
+        "source": "deployment-debug"
+      },
+      {
+        "id": "3p-003",
+        "title": "360dialog webhook registration via API",
+        "content": "Webhook URL is configured via POST to /v1/configs/webhook with the D360-API-KEY header. NOT through a dashboard. GET to same endpoint verifies current configuration.",
+        "tags": ["360dialog", "webhook", "registration", "api"],
+        "confidence": "confirmed",
+        "date": "2026-05-12",
+        "source": "api-testing"
+      }
+    ],
+    "lessons_learned": [
+      {
+        "id": "lesson-001",
+        "title": "Never assume webhook is two-way",
+        "content": "I assumed receiving a webhook meant the provider would forward our HTTP response to the user. This was wrong. 360dialog's webhook is strictly inbound. Outbound messages require a separate API call. Always check the provider's docs for the outbound endpoint.",
+        "tags": ["webhook", "assumption", "360dialog", "lesson"],
+        "confidence": "confirmed",
+        "date": "2026-05-12",
+        "source": "mistake"
+      },
+      {
+        "id": "lesson-002",
+        "title": "Verify message format with actual payload",
+        "content": "I assumed 360dialog's webhook format was body.messages[0] based on common patterns. The actual format is body.entry[0].changes[0].value.messages[0]. Always test with a real provider payload, never assume.",
+        "tags": [ "webhook", "message-format", "testing", "lesson" ],
+        "confidence": "confirmed",
+        "date": "2026-05-12",
+        "source": "mistake"
+      },
+      {
+        "id": "lesson-003",
+        "title": "node -c every file before deploy",
+        "content": "Context limits can silently truncate files during edits. A file that looks complete may be missing its last 20 lines. Running 'node -c filename.js' catches syntax errors in 0.5 seconds. This should be mandatory before every deploy.",
+        "tags": [ "deploy", "syntax-check", "node -c", "lesson" ],
+        "confidence": "confirmed",
+        "date": "2026-05-12",
+        "source": "mistake"
+      },
+      {
+        "id": "lesson-004",
+        "title": "The deploy source matters",
+        "content": "The user's GitHub repo deploys from pixel-vault/backend/. Fixes in app-extract/ are invisible until synced. Always verify the deploy source path and sync fixes there before creating the ZIP.",
+        "tags": [ "deploy", "sync", "github", "lesson" ],
+        "confidence": "confirmed",
+        "date": "2026-05-12",
+        "source": "mistake"
+      },
+      {
+        "id": "lesson-005",
+        "title": "Circular dependencies crash silently",
+        "content": "bot-engine.js requires smart-router.js which requires bot-engine.js back. Node gives a vague warning: 'Accessing non-existent property inside circular dependency'. Functions silently disappear. Fix: use lazy require() inside function scope.",
+        "tags": [ "circular-dependency", "node.js", "lesson", "smart-router" ],
+        "confidence": "confirmed",
+        "date": "2026-05-12",
+        "source": "mistake"
+      },
+      {
+        "id": "lesson-006",
+        "title": "Duplicate module.exports overwrites",
+        "content": "bot-engine.js had two module.exports blocks. The second overwrote the first. Functions exported only in the first block silently disappeared. Always grep for 'module.exports' count — should be exactly 1.",
+        "tags": [ "module.exports", "bug", "lesson", "bot-engine" ],
+        "confidence": "confirmed",
+        "date": "2026-05-12",
+        "source": "mistake"
+      }
+    ],
+    "configuration": [
+      {
+        "id": "config-001",
+        "title": "Render environment variables",
+        "content": "Required: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, OPENAI_API_KEY, D360_API_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_ADMIN_CHAT_ID, PORT=10000, NODE_ENV=production. Optional: D360_API_URL (auto-detected). For sandbox testing: remove API_KEY to disable auth.",
+        "tags": [ "render", "env-vars", "configuration", "required" ],
+        "confidence": "confirmed",
+        "date": "2026-05-12",
+        "source": "deployment"
+      },
+      {
+        "id": "config-002",
+        "title": "360dialog sandbox API key format",
+        "content": "Sandbox key: J6BC2J3LY2XWMKRG6ZP2S4FIA6Y2FF6C. Pattern: 32 uppercase alphanumeric characters. Auto-detected by isSandbox = key.length >= 25 && key === key.toUpperCase().",
+        "tags": [ "360dialog", "sandbox", "api-key", "format" ],
+        "confidence": "confirmed",
+        "date": "2026-05-12",
+        "source": "deployment"
+      }
+    ],
+    "code_patterns": [
+      {
+        "id": "code-001",
+        "title": "Lazy require for circular dependencies",
+        "content": "When module A requires B and B requires A, use lazy require: const { fn } = require('./a'); inside the function that uses it, not at module top level. This breaks the circular loop at runtime.",
+        "tags": [ "circular-dependency", "require", "pattern", "fix" ],
+        "confidence": "confirmed",
+        "date": "2026-05-12",
+        "source": "fix"
+      },
+      {
+        "id": "code-002",
+        "title": "Send WhatsApp reply pattern",
+        "content": "After routeToAI() returns a response, always call sendWhatsAppReply(toPhone, text, messageId). Use POST to waba-sandbox.360dialog.io/v1/messages (sandbox) or waba.360dialog.io/v1/messages (production). Include D360-API-KEY header.",
+        "tags": [ "whatsapp", "reply", "360dialog", "pattern" ],
+        "confidence": "confirmed",
+        "date": "2026-05-12",
+        "source": "fix"
+      }
+    ]
+  }
+}

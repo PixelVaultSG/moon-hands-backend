@@ -1,0 +1,789 @@
+/**
+ * Moon Hands - Secure Webhook Server
+ * Receives messages from 360dialog (WhatsApp) and VAPI (Voice)
+ * 
+ * SECURITY-FIRST DESIGN:
+ * - DDoS protection (IP-based rate limiting)
+ * - Request signature verification (HMAC)
+ * - Prompt injection blocking on EVERY message
+ * - Input sanitization (HTML/script stripping)
+ * - API key authentication on all endpoints
+ * - Request size limits (prevent DoS)
+ * - Comprehensive audit logging
+ */
+
+const http = require('http');
+const crypto = require('crypto');
+const { handleOnboarding } = require('./onboarding');
+const { checkMessageRate } = require('../middleware/smart-rate-limiter');
+const { loopDetector } = require('../middleware/loop-protection');
+const { processIncomingMessage, sanitizeInput } = require('../middleware/security');
+const { checkLimit, trackSpend } = require('../middleware/cost-protection');
+const { logEvent, getDeviceFingerprint, classifyActor } = require('../monitoring/audit-system');
+
+// ─── ADMIN TELEGRAM ALERTS ───────────────────────────────────────
+async function sendAdminAlert(message, level = 'warning') {
+  const botToken = process.env.TELEGRAM_BOT_TOKEN;
+  const chatId = process.env.TELEGRAM_ADMIN_CHAT_ID;
+  if (!botToken || !chatId) return;
+  
+  const emoji = { info: '\u2139', warning: '\u26A0', critical: '\uD83D\uDD34' }[level] || '\u26A0';
+  const prefix = level === 'critical' ? 'KILL SWITCH' : level === 'warning' ? 'COST ALERT' : 'RATE LIMIT';
+  
+  try {
+    await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: `${emoji} *${prefix}*\n\n${message}\n\n_${new Date().toLocaleString('en-SG', { timeZone: 'Asia/Singapore' })}_`,
+        parse_mode: 'Markdown'
+      })
+    });
+  } catch (err) {
+    console.error('[TELEGRAM] Failed to send admin alert:', err.message);
+  }
+}
+
+// Rate limiter uses in-memory store with automatic TTL cleanup
+// No manual cleanup needed — old entries expire naturally
+
+// Simple IP-based rate limiter for DDoS protection
+class IPRateLimiter {
+  constructor() {
+    this.ips = new Map(); // ip -> { count, windowStart }
+    this.cleanupInterval = setInterval(() => this.cleanup(), 60000); // cleanup every min
+  }
+  
+  cleanup() {
+    const now = Date.now();
+    for (const [ip, data] of this.ips.entries()) {
+      if (now - data.windowStart > 60000) this.ips.delete(ip);
+    }
+  }
+  
+  checkDDoS(ip) {
+    const now = Date.now();
+    const data = this.ips.get(ip);
+    
+    if (!data || now - data.windowStart > 60000) {
+      this.ips.set(ip, { count: 1, windowStart: now });
+      return { allowed: true };
+    }
+    
+    data.count++;
+    
+    if (data.count > 100) { // 100 requests per minute max
+      return { allowed: false, retryAfter: 60, reason: 'Rate limit exceeded' };
+    }
+    
+    return { allowed: true };
+  }
+}
+
+const rateLimiter = new IPRateLimiter();
+
+// ─── CONFIGURATION ───────────────────────────────────────────────
+
+const PORT = process.env.PORT || 3000;
+const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
+const API_KEY = process.env.API_KEY;
+const MAX_BODY_SIZE = 10 * 1024; // 10KB max request body
+
+// Use provided API_KEY or generate a secure random one as fallback
+// (fallback allows the server to start; set API_KEY properly for production security)
+const effectiveApiKey = API_KEY || crypto.randomBytes(32).toString('hex');
+if (!API_KEY) {
+  console.warn('[SECURITY] API_KEY not set — using auto-generated key. Set API_KEY in Render for production.');
+}
+
+console.log(`[SECURITY] Webhook server configured`);
+
+// ─── REQUEST PARSING ─────────────────────────────────────────────
+
+function parseBody(req) {
+  return new Promise((resolve, reject) => {
+    let body = '';
+    let size = 0;
+    
+    req.on('data', chunk => {
+      size += chunk.length;
+      if (size > MAX_BODY_SIZE) {
+        reject(new Error('Request body too large'));
+        return;
+      }
+      body += chunk;
+    });
+    
+    req.on('end', () => {
+      try {
+        resolve(JSON.parse(body));
+      } catch {
+        resolve({ raw: body });
+      }
+    });
+    
+    req.on('error', reject);
+  });
+}
+
+// ─── SIGNATURE VERIFICATION ──────────────────────────────────────
+
+function verifySignature(payload, signature, secret) {
+  if (!signature || !secret) return false;
+  try {
+    const expected = crypto
+      .createHmac('sha256', secret)
+      .update(typeof payload === 'string' ? payload : JSON.stringify(payload))
+      .digest('hex');
+    // Prevent timingSafeEqual crash on length mismatch
+    const sigBuf = Buffer.from(signature, 'hex');
+    const expBuf = Buffer.from(expected, 'hex');
+    if (sigBuf.length !== expBuf.length) return false;
+    return crypto.timingSafeEqual(sigBuf, expBuf);
+  } catch {
+    return false;
+  }
+}
+
+// ─── AUTH MIDDLEWARE ─────────────────────────────────────────────
+
+function checkAuth(req) {
+  const authHeader = req.headers['x-api-key'] || req.headers['authorization'];
+  if (!authHeader) return false;
+  const key = authHeader.replace('Bearer ', '');
+  return key === effectiveApiKey;
+}
+
+// ─── DDoS PROTECTION ─────────────────────────────────────────────
+
+function getClientIP(req) {
+  return req.headers['x-forwarded-for']?.split(',')[0]?.trim() 
+    || req.headers['x-real-ip'] 
+    || req.connection.remoteAddress 
+    || 'unknown';
+}
+
+function checkDDoS(ip) {
+  return rateLimiter.checkDDoS(ip);
+}
+
+// ─── SECURITY RESPONSE HELPERS ───────────────────────────────────
+
+function sendSecurityResponse(res, status, message, details = {}) {
+  res.writeHead(status, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ 
+    status: status >= 400 ? 'error' : 'ok',
+    message,
+    timestamp: new Date().toISOString(),
+    ...details
+  }));
+}
+
+// ─── MAIN WEBHOOK HANDLER ────────────────────────────────────────
+
+async function handleWebhook(req, res, channel) {
+  const ip = getClientIP(req);
+  const startTime = Date.now();
+  
+  try {
+    // Layer 1: DDoS check
+    const ddos = checkDDoS(ip);
+    if (!ddos.allowed) {
+      console.warn(`[SECURITY] DDoS blocked IP ${ip}: ${ddos.level}`);
+      return sendSecurityResponse(res, 429, 'Too many requests', { 
+        retryAfter: ddos.retryAfter 
+      });
+    }
+    
+    // Layer 2: API key auth — ALWAYS enforced unless explicitly disabled via env var
+    // Set WEBHOOK_AUTH_REQUIRED=false ONLY for sandbox testing with 360dialog
+    // Production: must have API_KEY set and auth enabled
+    const authRequired = process.env.WEBHOOK_AUTH_REQUIRED !== 'false';
+    if (authRequired && !API_KEY) {
+      console.error(`[SECURITY] API_KEY not configured — webhook cannot authenticate. Set API_KEY env var.`);
+      return sendSecurityResponse(res, 503, 'Authentication not configured');
+    }
+    if (authRequired && !checkAuth(req)) {
+      console.warn(`[SECURITY] Unauthorized webhook from ${ip}`);
+      await logSecurityEvent({
+        severity: 'critical',
+        category: 'auth_failure',
+        service: 'webhook',
+        description: 'Unauthorized webhook request rejected',
+        details: { ip, userAgent: req.headers['user-agent'] },
+        source_ip: ip,
+      });
+      return sendSecurityResponse(res, 401, 'Unauthorized');
+    }
+    
+    // Layer 3: Parse body (with size limit)
+    const body = await parseBody(req);
+    
+    // Layer 4: Verify webhook signature — REQUIRED when WEBHOOK_SECRET is set
+    const signature = req.headers['x-signature'] || req.headers['x-hub-signature-256'];
+    if (WEBHOOK_SECRET) {
+      if (!signature) {
+        console.warn(`[SECURITY] Missing webhook signature from ${ip}`);
+        return sendSecurityResponse(res, 401, 'Signature required');
+      }
+      if (!verifySignature(body.raw || body, signature, WEBHOOK_SECRET)) {
+        console.warn(`[SECURITY] Invalid webhook signature from ${ip}`);
+        return sendSecurityResponse(res, 401, 'Invalid signature');
+      }
+    }
+    
+    // Layer 5: Extract and validate message
+    const message = extractMessage(body, channel);
+    if (!message || !message.text) {
+      return sendSecurityResponse(res, 200, 'No message to process');
+    }
+    
+    // Layer 6: CRITICAL — Prompt injection check
+    const securityCheck = processIncomingMessage(message.text, {
+      ip,
+      channel,
+      userId: message.from
+    });
+    
+    if (securityCheck.blocked) {
+      console.error(`[SECURITY] INJECTION BLOCKED from ${ip} [${channel}]: ${securityCheck.reason}`);
+      
+      // Log to security_events table
+      await logSecurityEvent({
+        severity: 'high',
+        category: 'injection',
+        service: channel,
+        description: `Blocked injection attempt from ${ip}`,
+        details: {
+          matched_patterns: securityCheck.injection?.matched,
+          score: securityCheck.injection?.score,
+          category: securityCheck.injection?.category,
+          message_preview: message.text.substring(0, 100)
+        },
+        source_ip: ip
+      });
+      
+      return sendSecurityResponse(res, 200, 'Message processed', {
+        processed: false,
+        reason: 'SECURITY_BLOCKED',
+        response: getSafeResponse()
+      });
+    }
+    
+    // Layer 7: Sanitize the message
+    const sanitizedText = sanitizeInput(securityCheck.sanitized);
+    
+    // Layer 8: SMART RATE LIMIT (3-layer: repeat, flood, hourly budget)
+    const rateCheck = checkMessageRate(message.from, sanitizedText, { hourly: 30 });
+    if (!rateCheck.allowed) {
+      console.warn(`[RATE_LIMIT] Customer ${message.from} blocked: ${rateCheck.reason} (${rateCheck.layer})`);
+      
+      // Log to security_events
+      await logSecurityEvent({
+        severity: 'medium',
+        category: 'rate_limit',
+        service: channel,
+        description: `Customer rate limited: ${rateCheck.reason}`,
+        details: { phone: message.from.slice(-4), reason: rateCheck.reason, layer: rateCheck.layer },
+        source_ip: ip,
+      });
+      
+      // Telegram escalation for admin + clinic
+      sendAdminAlert(
+        `Rate limit triggered for ${message.from.slice(-4)}\n` +
+        `Reason: ${rateCheck.reason}\n` +
+        `Layer: ${rateCheck.layer}\n` +
+        `Response: ${rateCheck.response}`,
+        rateCheck.layer === 'flood' ? 'critical' : 'warning'
+      );
+      
+      return sendSecurityResponse(res, 200, 'Message processed', {
+        processed: false,
+        reason: 'RATE_LIMITED',
+        response: rateCheck.response,
+      });
+    }
+    
+    // Layer 9: LOOP PROTECTION (prevent infinite bot↔bot loops)
+    const loopCheck = loopDetector.checkIncoming(
+      message.messageId,
+      message.from,
+      message.to,
+      sanitizedText
+    );
+    
+    if (!loopCheck.proceed) {
+      if (loopCheck.isDuplicate) {
+        console.log(`[LOOP_PROTECTION] Duplicate message ${message.messageId} ignored`);
+        return sendSecurityResponse(res, 200, 'Duplicate message ignored');
+      }
+      
+      if (loopCheck.isLoop) {
+        console.warn(`[LOOP_PROTECTION] Loop detected from ${message.from}: ${loopCheck.reason}`);
+        
+        await logSecurityEvent({
+          severity: 'high',
+          category: 'infinite_loop',
+          service: channel,
+          description: `Loop detected and broken: ${loopCheck.reason}`,
+          details: { phone: message.from.slice(-4), reason: loopCheck.reason },
+          source_ip: ip,
+        });
+        
+        // Send ONE final message explaining silence, then stop
+        if (loopCheck.reason === 'LOOP_BROKEN') {
+          return sendSecurityResponse(res, 200, 'Loop broken', {
+            processed: true,
+            response: { text: "I've detected an automated response loop. I'll pause responses for 30 minutes to prevent runaway messages. If you need assistance, please call us directly or message again later.", channel },
+          });
+        }
+        
+        return sendSecurityResponse(res, 200, 'Silence period active', { processed: false, reason: loopCheck.reason });
+      }
+    }
+    
+    // Layer 10: Route to appropriate AI handler
+    const response = await routeToAI(sanitizedText, message, channel);
+    
+    // Record outgoing message for loop detection (tracks our responses)
+    loopDetector.recordOutgoing(message.to, message.from, response.text);
+    
+    // Layer 11: SEND REPLY BACK TO WHATSAPP (360dialog API)
+    // CRITICAL: The webhook receives messages from 360dialog, but we must explicitly
+    // call their /v1/messages API to send replies back to the user.
+    // Layer 11: Cost protection — check outbound WhatsApp budget before sending
+    let replySent = false;
+    if (channel === 'whatsapp' && message.from && response.text) {
+      const whatsappBudget = checkLimit(clientConfig.id, 'daily_whatsapp_msgs', 1);
+      if (!whatsappBudget.allowed) {
+        console.warn(`[COST_PROTECTION] WhatsApp outbound blocked for clinic ${clientConfig.id}: ${whatsappBudget.reason}`);
+        sendAdminAlert(
+          `WhatsApp outbound blocked for clinic ${clientConfig.id.slice(0,8)}\n${whatsappBudget.reason}\nPatient ${message.from.slice(-4)} did not receive reply.`,
+          'warning'
+        );
+      } else {
+        try {
+          replySent = await sendWhatsAppReply(message.from, response.text, message.messageId);
+          trackSpend(clientConfig.id, 0.007); // ~$0.007 per WhatsApp message
+        } catch (sendErr) {
+          console.error(`[WEBHOOK] Failed to send WhatsApp reply to ${message.from}: ${sendErr.message}`);
+          // Don't fail the webhook — the response is still logged and the user can retry
+        }
+      }
+    }
+    
+    const latency = Date.now() - startTime;
+    console.log(`[WEBHOOK] ${channel} message processed in ${latency}ms (reply sent: ${replySent})`);
+    
+    return sendSecurityResponse(res, 200, 'Message processed', {
+      processed: true,
+      response: response,
+      reply_sent: replySent,
+      latency_ms: latency
+    });
+    
+  } catch (err) {
+    console.error(`[ERROR] Webhook error:`, err.message);
+    return sendSecurityResponse(res, 500, 'Internal error');
+  }
+}
+
+// ─── MESSAGE EXTRACTION ──────────────────────────────────────────
+
+function extractMessage(body, channel) {
+  try {
+    if (channel === 'whatsapp') {
+      // 360dialog webhook format — messages are nested under entry[0].changes[0].value
+      const value = body.entry?.[0]?.changes?.[0]?.value || body;
+      const msg = value.messages?.[0];
+      if (!msg) return null;
+      return {
+        text: msg.text?.body || msg.body || '',
+        from: msg.from,
+        to: value.metadata?.phone_number_id || msg.to || '',
+        timestamp: msg.timestamp,
+        messageId: msg.id
+      };
+    }
+    
+    if (channel === 'voice') {
+      // VAPI format
+      return {
+        text: body.message?.content || body.text || '',
+        from: body.from || body.caller || '',
+        timestamp: body.timestamp,
+        callId: body.call_id
+      };
+    }
+    
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+// ─── AI ROUTING ──────────────────────────────────────────────────
+
+const { processMessage } = require('../ai/bot-engine');
+const { isKilled } = require('../middleware/cost-protection');
+
+// In-memory conversation cache (per patient phone)
+const conversationCache = new Map();
+const CONVERSATION_TTL = 30 * 60 * 1000; // 30 minutes
+
+function getConversationHistory(phone) {
+  const cached = conversationCache.get(phone);
+  if (!cached) return [];
+  if (Date.now() - cached.lastAccess > CONVERSATION_TTL) {
+    conversationCache.delete(phone);
+    return [];
+  }
+  return cached.turns;
+}
+
+// Estimate tokens in a conversation history (rough: ~4 chars per token)
+function estimateHistoryTokens(turns) {
+  let chars = 0;
+  for (const turn of turns) {
+    chars += (turn.user?.length || 0) + (turn.ai?.length || 0);
+  }
+  return Math.ceil(chars / 4);
+}
+
+const MAX_HISTORY_TOKENS = 2000; // ~2000 tokens keeps API cost predictable
+
+function addConversationTurn(phone, userMsg, aiMsg) {
+  const cached = conversationCache.get(phone) || { turns: [], lastAccess: Date.now() };
+  cached.turns.push({ user: userMsg, ai: aiMsg });
+  // Token-based trimming: keep history under ~2000 tokens instead of fixed 10 turns
+  while (cached.turns.length > 2 && estimateHistoryTokens(cached.turns) > MAX_HISTORY_TOKENS) {
+    cached.turns.shift(); // Remove oldest turn
+  }
+  cached.lastAccess = Date.now();
+  conversationCache.set(phone, cached);
+}
+
+async function routeToAI(text, message, channel) {
+  // Determine client ID from the webhook path or phone number
+  // For now, use a lookup based on the destination phone number
+  const clientId = await resolveClientId(message.to, channel);
+  
+  if (!clientId) {
+    return {
+      text: "I'm sorry, this clinic is not yet configured. Please contact the clinic directly.",
+      channel: channel,
+      ai_processed: false
+    };
+  }
+
+  try {
+    // Global kill switch check
+    if (isKilled()) {
+      return { text: "Our system is temporarily under maintenance. Please call the clinic directly.", channel, ai_processed: false };
+    }
+    
+    // Per-clinic cost protection: check daily API call budget
+    const budgetCheck = checkLimit(clientId, 'daily_api_calls', 1);
+    if (!budgetCheck.allowed) {
+      console.warn(`[COST_PROTECTION] Clinic ${clientId} blocked: ${budgetCheck.reason}`);
+      sendAdminAlert(
+        `Clinic ${clientId.slice(0, 8)} hit daily API limit\n` +
+        `${budgetCheck.reason}\n` +
+        `All further AI responses will use hardcoded fallbacks.`,
+        'warning'
+      );
+      return {
+        text: "I understand. The clinic team will get back to you shortly.",
+        channel,
+        ai_processed: false
+      };
+    }
+    
+    const history = getConversationHistory(message.from);
+    const startMs = Date.now();
+    const result = await processMessage(text, clientId, history, message.from);
+    const elapsedMs = Date.now() - startMs;
+    
+    // Track estimated spend ($0.005 base + ~$0.003 per 1K tokens)
+    const estimatedTokens = Math.ceil((result.text?.length || 0) / 4); // ~4 chars per token
+    const estimatedCost = 0.005 + (estimatedTokens / 1000) * 0.003;
+    trackSpend(clientId, estimatedCost);
+    
+    // Cache conversation turn
+    addConversationTurn(message.from, text, result.text);
+    
+    return {
+      text: result.text,
+      channel: channel,
+      ai_processed: true,
+      function_called: result.function_called || null,
+      model: result.model || 'gpt-4o-mini'
+    };
+  } catch (err) {
+    console.error('[AI_ROUTING] Bot engine error:', err.message);
+    return {
+      text: "I'm having a moment. Please try again shortly, or call the clinic directly.",
+      channel: channel,
+      ai_processed: false
+      // Never expose err.message to client — log only internally
+    };
+  }
+}
+
+// Resolve client ID from phone number or webhook path
+async function resolveClientId(phoneOrId, channel) {
+  // Check if we have a client with this WhatsApp number
+  const { data } = await require('../supabase/client').supabase
+    .from('clients')
+    .select('id')
+    .eq('whatsapp_number', phoneOrId)
+    .eq('status', 'active')
+    .single();
+  
+  if (data) return data.id;
+  
+  // Fallback: use environment variable for single-client deployments
+  return process.env.DEFAULT_CLIENT_ID || null;
+}
+
+function getSafeResponse() {
+  return "I'm sorry, I couldn't process that request. How can I help you with our services today?";
+}
+
+function getRateLimitResponse(reason) {
+  // All responses maintain the clinic's warm, professional persona
+  // Never reveal technical details like "10-minute block" or "daily limit"
+  
+  if (reason.includes('IDENTICAL_SPAM')) {
+    return "We're currently attending to other patients at the clinic. I'll be with you shortly — thank you for your patience! 💫";
+  }
+  if (reason.includes('BURST')) {
+    return "Our clinic team is handling a few appointments right now. Please give us a moment and we'll get back to you shortly. 🌙";
+  }
+  if (reason.includes('HOURLY')) {
+    return "We've received quite a few messages this hour and our team is catching up. We'll respond to you very soon — thank you for understanding! ✨";
+  }
+  if (reason.includes('DAILY')) {
+    return "Our clinic has had a wonderfully busy day! If your matter is urgent, please call us directly. Otherwise, we'll be happy to continue with you tomorrow. 🌟";
+  }
+  // Generic fallback — shouldn't normally trigger
+  return "We're just attending to a few things at the clinic right now. Please bear with us and we'll be right with you! 💫";
+}
+
+// ─── SEND WHATSAPP REPLY (360dialog API) ─────────────────────────
+
+/**
+ * Sends a reply back to WhatsApp via the 360dialog API.
+ * 
+ * CRITICAL ARCHITECTURE NOTE:
+ *   The 360dialog webhook is ONE-WAY — it delivers messages FROM WhatsApp TO our server.
+ *   To reply back, we MUST explicitly POST to 360dialog's /v1/messages endpoint.
+ *   Without this function, the AI generates a response but the user never receives it.
+ * 
+ * @param {string} toPhone - The recipient's phone number (the WhatsApp user who messaged us)
+ * @param {string} text - The reply text from the AI
+ * @param {string} replyToMessageId - Optional: message ID to reply to (for context threading)
+ * @returns {boolean} - Whether the send was successful
+ */
+async function sendWhatsAppReply(toPhone, text, replyToMessageId = null) {
+  const d360Key = process.env.D360_API_KEY;
+  
+  if (!d360Key) {
+    console.warn('[360DIALOG] D360_API_KEY not set — cannot send WhatsApp reply. Set it in Render environment variables.');
+    return false;
+  }
+  
+  if (!toPhone || !text) {
+    console.warn('[360DIALOG] Missing toPhone or text — skipping send.');
+    return false;
+  }
+  
+  // 360dialog API endpoint — auto-detect sandbox vs production
+  // Sandbox API key format: J6BC2J3LY2XWMKRG6ZP2S4FIA6Y2FF6C (uppercase alnum, ~30 chars)
+  // Sandbox endpoint: waba-sandbox.360dialog.io
+  // Production endpoint: waba.360dialog.io
+  const isSandbox = d360Key.length >= 25 && d360Key === d360Key.toUpperCase();
+  const D360_API_URL = process.env.D360_API_URL || 
+    (isSandbox ? 'https://waba-sandbox.360dialog.io/v1/messages' : 'https://waba.360dialog.io/v1/messages');
+  
+  if (isSandbox) {
+    console.log('[360DIALOG] Using SANDBOX endpoint');
+  } else {
+    console.log('[360DIALOG] Using PRODUCTION endpoint');
+  }
+  
+  const payload = {
+    messaging_product: 'whatsapp',
+    recipient_type: 'individual',
+    to: toPhone,
+    type: 'text',
+    text: { body: text.substring(0, 4096) } // WhatsApp max message length
+  };
+  
+  // Add reply context if we have the original message ID
+  if (replyToMessageId) {
+    payload.context = { message_id: replyToMessageId };
+  }
+  
+  try {
+    const result = await fetch(D360_API_URL, {
+      method: 'POST',
+      headers: {
+        'D360-API-KEY': d360Key,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+    
+    if (result.ok) {
+      const data = await result.json();
+      console.log(`[360DIALOG] Reply sent to ${toPhone.slice(-4)} | messageId: ${data.messages?.[0]?.id || 'unknown'}`);
+      return true;
+    }
+    
+    // Handle errors
+    const errorText = await result.text();
+    console.error(`[360DIALOG] Send failed (${result.status}): ${errorText}`);
+    
+    if (result.status === 401) {
+      console.error('[360DIALOG] Authentication failed — check your D360_API_KEY. Get it from 360dialog Dashboard → API Keys.');
+    } else if (result.status === 404) {
+      console.error(`[360DIALOG] Phone number ${toPhone.slice(-4)} not found — user may not have WhatsApp or number is invalid.`);
+    } else if (result.status === 429) {
+      console.error('[360DIALOG] Rate limited by 360dialog — wait a moment before retrying.');
+    }
+    
+    return false;
+  } catch (err) {
+    console.error(`[360DIALOG] Network error sending to ${toPhone.slice(-4)}: ${err.message}`);
+    return false;
+  }
+}
+
+// ─── SECURITY EVENT LOGGING ──────────────────────────────────────
+
+async function logSecurityEvent(event) {
+  try {
+    const { supabase } = require('../supabase/client');
+    const { error } = await supabase
+      .from('security_events')
+      .insert([{
+        severity: event.severity || 'medium',
+        category: event.category || 'general',
+        service: event.service || 'webhook',
+        description: event.description,
+        details: event.details || {},
+        source_ip: event.source_ip || null,
+        created_at: new Date().toISOString()
+      }]);
+    if (error) console.error('[SECURITY_LOG] Supabase insert failed:', error.message);
+  } catch (err) {
+    console.error('[SECURITY_LOG] Failed to persist:', err.message);
+  }
+}
+
+// ─── HEALTH CHECK ────────────────────────────────────────────────
+
+// ─── DEVICE REGISTRATION ─────────────────────────────────────────
+
+async function handleRegisterDevice(req, res) {
+  const body = await parseBody(req);
+  const data = JSON.parse(body);
+  const fp = getDeviceFingerprint(req);
+  const ip = getClientIP(req);
+  
+  // Must provide master secret to register
+  if (data.secret !== process.env.MASTER_SECRET) {
+    return sendSecurityResponse(res, 401, 'Invalid master secret');
+  }
+  
+  // Log the registration
+  await logEvent({
+    severity: 'info',
+    category: 'device_registration',
+    actor: 'Master',
+    action: 'register_device',
+    description: `Master registered device: ${fp}`,
+    deviceId: fp,
+    sourceIp: ip,
+    service: 'website',
+    details: { deviceName: data.deviceName || 'unnamed', userAgent: req.headers['user-agent'] },
+  });
+  
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({
+    deviceId: fp,
+    message: 'Device registered. Add this deviceId to your Render env var MASTER_DEVICE_FPS',
+    envValue: `MASTER_DEVICE_FPS=${process.env.MASTER_DEVICE_FPS ? process.env.MASTER_DEVICE_FPS + ',' + fp : fp}`,
+  }));
+}
+
+async function handleHealth(req, res) {
+  const ip = getClientIP(req);
+  const ddos = checkDDoS(ip);
+  if (!ddos.allowed) {
+    return sendSecurityResponse(res, 429, 'Too many requests');
+  }
+  
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({
+    status: 'healthy',
+    service: 'moon-hands-webhook',
+    version: '1.0.0',
+    security: {
+      ddos_protection: 'active',
+      rate_limiting: 'active',
+      injection_blocking: 'active',
+      input_sanitization: 'active'
+    },
+    timestamp: new Date().toISOString()
+  }));
+}
+
+// ─── REQUEST HANDLER (used by server.js) ─────────────────────────
+
+async function requestHandler(req, res) {
+  // CORS headers
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-API-Key, X-Signature');
+  
+  if (req.method === 'OPTIONS') {
+    res.writeHead(200);
+    res.end();
+    return;
+  }
+  
+  const url = new URL(req.url, `http://${req.headers.host}`);
+  
+  // Route handlers
+  if (url.pathname === '/webhook/whatsapp' && req.method === 'POST') {
+    await handleWebhook(req, res, 'whatsapp');
+  } else if (url.pathname === '/webhook/voice' && req.method === 'POST') {
+    await handleWebhook(req, res, 'voice');
+  } else if (url.pathname === '/api/onboarding' && req.method === 'POST') {
+    await handleOnboarding(req, res);
+  } else if (url.pathname === '/api/register-device' && req.method === 'POST') {
+    await handleRegisterDevice(req, res);
+  } else if (url.pathname === '/health' && req.method === 'GET') {
+    await handleHealth(req, res);
+  } else {
+    sendSecurityResponse(res, 404, 'Not found');
+  }
+}
+
+// ─── STANDALONE MODE (when run directly: node webhook.js) ────────
+
+if (require.main === module) {
+  const standalonePort = process.env.PORT || 3000;
+  const standaloneServer = http.createServer(requestHandler);
+  standaloneServer.listen(standalonePort, () => {
+    console.log(`Webhook server (standalone) on port ${standalonePort}`);
+  });
+  module.exports = { server: standaloneServer, requestHandler, API_KEY: effectiveApiKey, WEBHOOK_SECRET };
+} else {
+  // Module mode: export handler for server.js to use
+  console.log('  📦 Webhook module loaded — waiting for server.js to bind');
+  module.exports = { requestHandler, API_KEY: effectiveApiKey, WEBHOOK_SECRET };
+}

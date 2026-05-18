@@ -1,0 +1,242 @@
+/**
+ * Moon Hands - Combined Server
+ * Starts both Telegram Bot and Webhook Server
+ * 
+ * Usage: node server.js
+ */
+
+require('dotenv').config();
+
+const http = require('http');
+const { logDeployment } = require('./monitoring/audit-system');
+const PORT = process.env.PORT || 10000;
+
+console.log(`[${new Date().toISOString()}] Starting Moon Hands servers...`);
+console.log(`PORT=${PORT}, NODE_ENV=${process.env.NODE_ENV || 'development'}`);
+
+// Log this deployment event
+logDeployment().catch(() => {}); // fire-and-forget
+
+// ─── CREATE SERVER FIRST (always bind to port) ───────────────────
+// This ensures Render always sees an open port, even if modules fail
+
+const server = http.createServer(async (req, res) => {
+  // CORS
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-API-Key');
+  
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204); res.end(); return;
+  }
+
+  const url = new URL(req.url, `http://${req.headers.host}`);
+  
+  // Health check — always available
+  if (url.pathname === '/health' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      status: 'ok',
+      service: 'moon-hands',
+      version: '2.0.0',
+      webhook: !!webhookHandler,
+      telegram: telegramOk,
+      uptime: process.uptime(),
+      timestamp: new Date().toISOString()
+    }));
+    return;
+  }
+
+  // Debug endpoint
+  if (url.pathname === '/debug' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      status: 'ok',
+      checks: {
+        webhook: !!webhookHandler,
+        telegram: telegramOk,
+        supabase: !!process.env.SUPABASE_URL,
+        openai: !!process.env.OPENAI_API_KEY,
+        telegram_bot: !!process.env.TELEGRAM_BOT_TOKEN,
+        d360: !!process.env.D360_API_KEY,
+      },
+      env: {
+        PORT: process.env.PORT,
+        NODE_ENV: process.env.NODE_ENV,
+        has_supabase: !!process.env.SUPABASE_URL,
+        has_openai: !!process.env.OPENAI_API_KEY,
+        has_telegram: !!process.env.TELEGRAM_BOT_TOKEN,
+        has_d360: !!process.env.D360_API_KEY,
+      },
+      uptime: process.uptime(),
+      node_version: process.version,
+      timestamp: new Date().toISOString()
+    }, null, 2));
+    return;
+  }
+
+  // If webhook handler loaded, delegate to it
+  if (webhookHandler) {
+    try {
+      await webhookHandler(req, res);
+      return;
+    } catch (err) {
+      console.error('[SERVER] Webhook handler error:', err.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Internal server error' }));
+      return;
+    }
+  }
+
+  // Fallback: webhook not loaded yet
+  res.writeHead(503, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ 
+    error: 'Service initializing',
+    message: 'Webhook handler not loaded yet. Please retry in 10 seconds.'
+  }));
+});
+
+server.listen(PORT, () => {
+  console.log(`\n${'='.repeat(50)}`);
+  console.log('  MOON HANDS SERVER');
+  console.log(`  Port: ${PORT}`);
+  console.log(`  Health: GET /health`);
+  console.log(`  Debug:  GET /debug`);
+  console.log(`${'='.repeat(50)}\n`);
+});
+
+// ─── ENVIRONMENT CHECK (non-blocking) ────────────────────────────
+
+const ENV_CHECKS = [
+  { key: 'SUPABASE_URL',              critical: true,  pattern: /^https:\/\/.+\.supabase\.co$/ },
+  { key: 'SUPABASE_SERVICE_ROLE_KEY', critical: true,  pattern: /^eyJ/ },
+  { key: 'TELEGRAM_BOT_TOKEN',        critical: true,  pattern: /^\d+:[A-Za-z0-9_-]+$/ },
+  { key: 'TELEGRAM_ADMIN_CHAT_ID',    critical: true,  pattern: /^-?\d+$/ },
+  { key: 'OPENAI_API_KEY',            critical: true,  pattern: /^sk-(proj-)?[A-Za-z0-9_-]+$/ },
+  { key: 'D360_API_KEY',              critical: true,  pattern: null },
+  { key: 'API_KEY',                   critical: false, pattern: /^.{8,}$/ },
+  { key: 'WEBHOOK_SECRET',            critical: false, pattern: /^.{8,}$/ },
+  { key: 'NODE_ENV',                  critical: false, pattern: null, defaultValue: 'production' },
+];
+
+const missingCritical = [];
+
+for (const check of ENV_CHECKS) {
+  const val = process.env[check.key];
+  if (!val) {
+    if (check.defaultValue) {
+      process.env[check.key] = check.defaultValue;
+    } else if (check.critical) {
+      missingCritical.push(check.key);
+    }
+    continue;
+  }
+  if (check.pattern && !check.pattern.test(val)) {
+    if (check.critical) missingCritical.push(`${check.key} (invalid format)`);
+  }
+}
+
+if (missingCritical.length) {
+  console.error(`\n❌ CRITICAL env vars missing:`);
+  missingCritical.forEach(k => console.error(`   - ${k}`));
+  console.error('   Go to Render Dashboard → Environment → Add them');
+  console.error('   Webhook routes will return 503 until fixed.\n');
+  // DON'T exit — server is already listening
+} else {
+  console.log('\n✅ All critical env vars OK. Loading modules...\n');
+}
+
+// ─── LOAD WEBHOOK HANDLER ────────────────────────────────────────
+
+let webhookHandler = null;
+let telegramOk = false;
+
+// Load webhook module and extract the handler
+setTimeout(async () => {
+  try {
+    const webhookModule = require('./server/webhook');
+    if (webhookModule.requestHandler) {
+      webhookHandler = webhookModule.requestHandler;
+      console.log('  ✅ Webhook handler loaded');
+    } else if (webhookModule.server) {
+      // Legacy: extract handler from server
+      const listeners = webhookModule.server.listeners('request');
+      if (listeners.length > 0) {
+        webhookHandler = listeners[0];
+        console.log('  ✅ Webhook handler extracted from server');
+      }
+    } else {
+      console.error('  ⚠️  Webhook module loaded but no handler found');
+    }
+  } catch (err) {
+    console.error('  ❌ Webhook module failed:', err.message);
+    console.error('     Stack:', err.stack?.split('\n')?.[1]?.trim());
+  }
+}, 100);
+
+// ─── START TELEGRAM BOT ──────────────────────────────────────────
+
+setTimeout(async () => {
+  try {
+    require('./telegram/bot');
+    telegramOk = true;
+    console.log('  ✅ Telegram bot started');
+  } catch (err) {
+    console.error('  ❌ Telegram bot failed:', err.message);
+  }
+}, 200);
+
+// ─── CLINIC CLOSING SUMMARY SCHEDULER ────────────────────────────
+// Sends tomorrow's booking summary at each clinic's closing time
+// (NOT midnight — doctor needs it when clinic closes, not when sleeping)
+
+setTimeout(() => {
+  try {
+    const { checkAndSendClosingSummaries } = require('./jobs/closing-summary');
+    // Run immediately on startup
+    checkAndSendClosingSummaries();
+    // Then every 15 minutes
+    setInterval(checkAndSendClosingSummaries, 15 * 60 * 1000);
+    console.log('  ✅ Closing summary scheduler started (every 15 min)');
+  } catch (err) {
+    console.error('  ❌ Closing summary scheduler failed:', err.message);
+  }
+}, 300);
+
+// ─── DAILY REPORT SCHEDULER ──────────────────────────────────────
+// Midnight cost report (for admin only)
+
+setTimeout(() => {
+  try {
+    const { runDailyReport } = require('./jobs/daily-report');
+    // Run at midnight Singapore time
+    const now = new Date();
+    const sgNow = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Singapore' }));
+    const midnight = new Date(sgNow);
+    midnight.setHours(24, 0, 0, 0);
+    const msUntilMidnight = midnight - sgNow;
+    
+    setTimeout(() => {
+      runDailyReport();
+      setInterval(runDailyReport, 24 * 60 * 60 * 1000); // Every 24 hours
+    }, msUntilMidnight);
+    console.log('  ✅ Daily report scheduler started (midnight SGT)');
+  } catch (err) {
+    console.error('  ❌ Daily report scheduler failed:', err.message);
+  }
+}, 400);
+
+// ─── FINAL STATUS ────────────────────────────────────────────────
+
+setTimeout(() => {
+  const allOk = webhookHandler && telegramOk;
+  console.log(`\n${'='.repeat(50)}`);
+  console.log(allOk
+    ? `  🌙 Moon Hands is LIVE`
+    : `  ⚠️  Partially started (see errors above)`);
+  console.log(`  Server:         http://0.0.0.0:${PORT}`);
+  console.log(`  Webhook:        ${webhookHandler ? '✅' : '❌'}`);
+  console.log(`  Telegram:       ${telegramOk ? '✅' : '❌'}`);
+  console.log(`  Node:           ${process.version}`);
+  console.log(`${'='.repeat(50)}\n`);
+}, 3000);
