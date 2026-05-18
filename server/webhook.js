@@ -221,8 +221,9 @@ async function handleWebhook(req, res, channel) {
     const body = await parseBody(req);
     
     // Layer 4: Verify webhook signature — REQUIRED when WEBHOOK_SECRET is set
+    // SKIPPED in sandbox mode (WEBHOOK_AUTH_REQUIRED=false) — 360dialog doesn't send signatures
     const signature = req.headers['x-signature'] || req.headers['x-hub-signature-256'];
-    if (WEBHOOK_SECRET) {
+    if (authRequired && WEBHOOK_SECRET) {
       if (!signature) {
         console.warn(`[SECURITY] Missing webhook signature from ${ip}`);
         return sendSecurityResponse(res, 401, 'Signature required');
