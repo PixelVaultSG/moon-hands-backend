@@ -5,7 +5,7 @@
 **Last Updated:** 2026-05-18  
 **Legal Entity:** Pixel Vault Pte Ltd (UEN: 202504500D)  
 **Registered Address:** 60 Paya Lebar Road, #08-55, Singapore 409051  
-**Data Protection Officer (DPO):** privacy@pixelvault.sg  
+**Data Protection Officer (DPO):** pixelvaultsg@gmail.com  
 **Product:** Moon Hands  
 **Jurisdiction:** Republic of Singapore  
 
@@ -16,8 +16,8 @@
 **Pixel Vault Pte Ltd** ("Moon Hands", "we", "us", "our") operates the Moon Hands AI receptionist service for aesthetic clinics in Singapore. We act as a **data intermediary** under the Singapore Personal Data Protection Act 2012 (PDPA) on behalf of the clinics (our Clients) who subscribe to our Service.
 
 **Our DPO can be reached at:**  
-- Email: privacy@pixelvault.sg  
-- Clinic enquiries: pixelvaultsg@gmail.com  
+- Email: pixelvaultsg@gmail.com  
+- Subject line: "DPO — [your query]"  
 - Response time: Within 3 business days  
 
 ---
@@ -267,7 +267,7 @@ Clinics must notify us within **24 hours** of discovering or suspecting any data
 
 You have the right to request access to the personal data we hold about you. We will respond within **30 calendar days** of receiving your request.
 
-**How to request:** Email privacy@pixelvault.sg with subject line "Data Access Request" and provide:
+**How to request:** Email pixelvaultsg@gmail.com with subject line "DPO — Data Access Request" and provide:
 - Your full name
 - Your WhatsApp phone number
 - The clinic you interacted with
@@ -279,7 +279,7 @@ You have the right to request access to the personal data we hold about you. We 
 
 You have the right to request correction of inaccurate or incomplete personal data. We will respond within **30 calendar days**.
 
-**How to request:** Email privacy@pixelvault.sg with subject line "Data Correction Request" and provide:
+**How to request:** Email pixelvaultsg@gmail.com with subject line "DPO — Data Correction Request" and provide:
 - The specific data to be corrected
 - Supporting documentation (if applicable)
 
@@ -290,7 +290,7 @@ You may withdraw your consent for us to process your personal data at any time. 
 - Existing bookings will not be affected
 - We may need to retain certain data for legal compliance even after withdrawal
 
-**How to withdraw:** Email privacy@pixelvault.sg with subject line "Consent Withdrawal" or inform the clinic directly.
+**How to withdraw:** Email pixelvaultsg@gmail.com with subject line "DPO — Consent Withdrawal" or inform the clinic directly.
 
 ### 10.4 Deletion Right
 
@@ -299,7 +299,7 @@ You may request deletion of your personal data. We will:
 - Retain anonymised usage metrics for service improvement
 - Notify you once deletion is complete
 
-**How to request:** Email privacy@pixelvault.sg with subject line "Data Deletion Request"
+**How to request:** Email pixelvaultsg@gmail.com with subject line "DPO — Data Deletion Request"
 
 ### 10.5 Data Portability
 
@@ -373,8 +373,7 @@ For any privacy-related questions, concerns, or to exercise your rights:
 
 **Data Protection Officer**  
 Pixel Vault Pte Ltd  
-Email: privacy@pixelvault.sg  
-Business enquiries: pixelvaultsg@gmail.com  
+Email: pixelvaultsg@gmail.com (subject line: "DPO — [your query]")  
 Address: 60 Paya Lebar Road, #08-55, Singapore 409051  
 
 **Response times:**
