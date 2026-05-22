@@ -748,7 +748,7 @@ async function requestHandler(req, res) {
   // CORS headers
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-API-Key, X-Signature');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-API-Key, X-Signature, X-Moonhands-Master, X-Moonhands-Agent');
   
   if (req.method === 'OPTIONS') {
     res.writeHead(200);
