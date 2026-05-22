@@ -699,13 +699,15 @@ async function logSecurityEvent(event) {
 // ─── DEVICE REGISTRATION ─────────────────────────────────────────
 
 async function handleRegisterDevice(req, res) {
-  const body = await parseBody(req);
-  const data = JSON.parse(body);
+  const data = await parseBody(req); // already parsed JSON
   const fp = getDeviceFingerprint(req);
   const ip = getClientIP(req);
   
+  // Accept secret from header (x-moonhands-master) or body (secret)
+  const providedSecret = req.headers['x-moonhands-master'] || data.secret || '';
+  
   // Must provide master secret to register
-  if (data.secret !== process.env.MASTER_SECRET) {
+  if (providedSecret !== process.env.MASTER_SECRET) {
     return sendSecurityResponse(res, 401, 'Invalid master secret');
   }
   
@@ -719,13 +721,15 @@ async function handleRegisterDevice(req, res) {
     deviceId: fp,
     sourceIp: ip,
     service: 'website',
-    details: { deviceName: data.deviceName || 'unnamed', userAgent: req.headers['user-agent'] },
+    details: { label: data.label || data.deviceName || 'unnamed', userAgent: req.headers['user-agent'] },
   });
   
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({
+    success: true,
     deviceId: fp,
-    message: 'Device registered. Add this deviceId to your Render env var MASTER_DEVICE_FPS',
+    actor: 'Master',
+    message: 'Device registered as Master. Add this to your Render env var MASTER_DEVICE_FPS if needed.',
     envValue: `MASTER_DEVICE_FPS=${process.env.MASTER_DEVICE_FPS ? process.env.MASTER_DEVICE_FPS + ',' + fp : fp}`,
   }));
 }
