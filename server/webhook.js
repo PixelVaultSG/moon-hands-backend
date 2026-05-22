@@ -344,8 +344,11 @@ async function handleWebhook(req, res, channel) {
       }
     }
     
+    // Layer 9.5: Resolve client ID for cost tracking and AI routing
+    const clientId = await resolveClientId(message.to, channel);
+    
     // Layer 10: Route to appropriate AI handler
-    const response = await routeToAI(sanitizedText, message, channel);
+    const response = await routeToAI(sanitizedText, message, channel, clientId);
     
     // Record outgoing message for loop detection (tracks our responses)
     loopDetector.recordOutgoing(message.to, message.from, response.text);
@@ -355,22 +358,29 @@ async function handleWebhook(req, res, channel) {
     // call their /v1/messages API to send replies back to the user.
     // Layer 11: Cost protection — check outbound WhatsApp budget before sending
     let replySent = false;
-    if (channel === 'whatsapp' && message.from && response.text) {
-      const whatsappBudget = checkLimit(clientConfig.id, 'daily_whatsapp_msgs', 1);
+    if (channel === 'whatsapp' && message.from && response.text && clientId) {
+      const whatsappBudget = checkLimit(clientId, 'daily_whatsapp_msgs', 1);
       if (!whatsappBudget.allowed) {
-        console.warn(`[COST_PROTECTION] WhatsApp outbound blocked for clinic ${clientConfig.id}: ${whatsappBudget.reason}`);
+        console.warn(`[COST_PROTECTION] WhatsApp outbound blocked for clinic ${clientId}: ${whatsappBudget.reason}`);
         sendAdminAlert(
-          `WhatsApp outbound blocked for clinic ${clientConfig.id.slice(0,8)}\n${whatsappBudget.reason}\nPatient ${message.from.slice(-4)} did not receive reply.`,
+          `WhatsApp outbound blocked for clinic ${clientId.slice(0,8)}\n${whatsappBudget.reason}\nPatient ${message.from.slice(-4)} did not receive reply.`,
           'warning'
         );
       } else {
         try {
           replySent = await sendWhatsAppReply(message.from, response.text, message.messageId);
-          trackSpend(clientConfig.id, 0.007); // ~$0.007 per WhatsApp message
+          trackSpend(clientId, 0.007); // ~$0.007 per WhatsApp message
         } catch (sendErr) {
           console.error(`[WEBHOOK] Failed to send WhatsApp reply to ${message.from}: ${sendErr.message}`);
           // Don't fail the webhook — the response is still logged and the user can retry
         }
+      }
+    } else if (channel === 'whatsapp' && !clientId) {
+      console.warn('[WEBHOOK] No clientId resolved — cannot track cost, but attempting to send reply anyway');
+      try {
+        replySent = await sendWhatsAppReply(message.from, response.text, message.messageId);
+      } catch (sendErr) {
+        console.error(`[WEBHOOK] Failed to send WhatsApp reply (no clientId): ${sendErr.message}`);
       }
     }
     
@@ -465,10 +475,10 @@ function addConversationTurn(phone, userMsg, aiMsg) {
   conversationCache.set(phone, cached);
 }
 
-async function routeToAI(text, message, channel) {
+async function routeToAI(text, message, channel, preResolvedClientId = null) {
   // Determine client ID from the webhook path or phone number
   // For now, use a lookup based on the destination phone number
-  const clientId = await resolveClientId(message.to, channel);
+  const clientId = preResolvedClientId || await resolveClientId(message.to, channel);
   
   if (!clientId) {
     return {
