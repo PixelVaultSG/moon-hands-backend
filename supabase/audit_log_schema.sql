@@ -21,20 +21,20 @@ CREATE TABLE IF NOT EXISTS audit_log (
   service         TEXT NOT NULL DEFAULT 'webhook'    -- which service: github | render | supabase | telegram | whatsapp | website
     CHECK (service IN ('github', 'render', 'supabase', 'telegram', 'whatsapp', 'website', 'webhook')),
   details         JSONB DEFAULT '{}',                 -- flexible JSON for extra context
-  created_at      TIMESTAMPTZ DEFAULT now(),
-  
-  -- Indexes for fast queries
-  INDEX idx_audit_severity (severity),
-  INDEX idx_audit_category (category),
-  INDEX idx_audit_actor (actor),
-  INDEX idx_audit_service (service),
-  INDEX idx_audit_created (created_at DESC),
-  INDEX idx_audit_device (device_id),
-  INDEX idx_audit_ip (source_ip),
-  
-  -- Composite index for the most common query: "show me recent high-severity events"
-  INDEX idx_audit_severity_created (severity, created_at DESC)
+  created_at      TIMESTAMPTZ DEFAULT now()
 );
+
+-- Indexes for fast queries (created separately — PostgreSQL inline INDEX doesn't support DESC)
+CREATE INDEX IF NOT EXISTS idx_audit_severity ON audit_log (severity);
+CREATE INDEX IF NOT EXISTS idx_audit_category ON audit_log (category);
+CREATE INDEX IF NOT EXISTS idx_audit_actor ON audit_log (actor);
+CREATE INDEX IF NOT EXISTS idx_audit_service ON audit_log (service);
+CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_device ON audit_log (device_id);
+CREATE INDEX IF NOT EXISTS idx_audit_ip ON audit_log (source_ip);
+
+-- Composite index for the most common query: "show me recent high-severity events"
+CREATE INDEX IF NOT EXISTS idx_audit_severity_created ON audit_log (severity, created_at DESC);
 
 -- Enable Row Level Security (RLS) — only service_role can read/write for now
 -- After auth is set up, restrict to admin users only
