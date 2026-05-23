@@ -84,6 +84,24 @@ class IPRateLimiter {
 
 const rateLimiter = new IPRateLimiter();
 
+// ─── MESSAGE TRACE LOG (for diagnostics) ─────────────────────────
+
+const MAX_TRACE_LOG = 50;
+const messageTraceLog = [];
+
+function addTrace(phone, stage, status, detail = '') {
+  const trace = {
+    time: new Date().toISOString(),
+    phone: phone ? phone.slice(-4) : 'unknown',
+    stage,
+    status,
+    detail: detail.length > 200 ? detail.slice(0, 200) + '...' : detail
+  };
+  messageTraceLog.push(trace);
+  if (messageTraceLog.length > MAX_TRACE_LOG) messageTraceLog.shift();
+  console.log(`[TRACE] ${trace.phone} | ${stage} | ${status}${detail ? ' | ' + detail.slice(0, 100) : ''}`);
+}
+
 // ─── CONFIGURATION ───────────────────────────────────────────────
 
 const PORT = process.env.PORT || 3000;
@@ -280,32 +298,28 @@ async function handleWebhook(req, res, channel) {
     const rateCheck = checkMessageRate(message.from, sanitizedText, { hourly: 30 });
     if (!rateCheck.allowed) {
       console.warn(`[RATE_LIMIT] Customer ${message.from} blocked: ${rateCheck.reason} (${rateCheck.layer})`);
+      addTrace(message.from, 'RATE_LIMIT', 'BLOCKED', `${rateCheck.layer}: ${rateCheck.reason}`);
       
-      // Log to security_events
-      await logSecurityEvent({
-        severity: 'medium',
-        category: 'rate_limit',
-        service: channel,
-        description: `Customer rate limited: ${rateCheck.reason}`,
-        details: { phone: message.from.slice(-4), reason: rateCheck.reason, layer: rateCheck.layer },
-        source_ip: ip,
-      });
-      
-      // Telegram escalation for admin + clinic
-      sendAdminAlert(
-        `Rate limit triggered for ${message.from.slice(-4)}\n` +
-        `Reason: ${rateCheck.reason}\n` +
-        `Layer: ${rateCheck.layer}\n` +
-        `Response: ${rateCheck.response}`,
-        rateCheck.layer === 'flood' ? 'critical' : 'warning'
-      );
+      // CRITICAL FIX: Send the graceful response to WhatsApp even when rate limited
+      // The patient should know WHY they're not getting a full response
+      if (channel === 'whatsapp' && message.from && rateCheck.gracefulResponse) {
+        try {
+          await sendWhatsAppReply(message.from, rateCheck.gracefulResponse, message.messageId);
+          console.log(`[RATE_LIMIT] Graceful response sent to ${message.from.slice(-4)}`);
+          addTrace(message.from, 'RATE_LIMIT_REPLY', 'SENT', 'Graceful response delivered');
+        } catch (sendErr) {
+          console.error(`[RATE_LIMIT] Failed to send graceful response: ${sendErr.message}`);
+          addTrace(message.from, 'RATE_LIMIT_REPLY', 'FAILED', sendErr.message);
+        }
+      }
       
       return sendSecurityResponse(res, 200, 'Message processed', {
         processed: false,
         reason: 'RATE_LIMITED',
-        response: rateCheck.response,
+        response: rateCheck.gracefulResponse,
       });
     }
+    addTrace(message.from, 'RATE_LIMIT', 'PASSED');
     
     // Layer 9: LOOP PROTECTION (prevent infinite bot↔bot loops)
     const loopCheck = loopDetector.checkIncoming(
@@ -318,11 +332,13 @@ async function handleWebhook(req, res, channel) {
     if (!loopCheck.proceed) {
       if (loopCheck.isDuplicate) {
         console.log(`[LOOP_PROTECTION] Duplicate message ${message.messageId} ignored`);
+        addTrace(message.from, 'LOOP', 'DUPLICATE', message.messageId);
         return sendSecurityResponse(res, 200, 'Duplicate message ignored');
       }
       
       if (loopCheck.isLoop) {
         console.warn(`[LOOP_PROTECTION] Loop detected from ${message.from}: ${loopCheck.reason}`);
+        addTrace(message.from, 'LOOP', 'DETECTED', loopCheck.reason);
         
         await logSecurityEvent({
           severity: 'high',
@@ -335,21 +351,35 @@ async function handleWebhook(req, res, channel) {
         
         // Send ONE final message explaining silence, then stop
         if (loopCheck.reason === 'LOOP_BROKEN') {
+          const loopMsg = "I've detected an automated response loop. I'll pause responses for 30 minutes to prevent runaway messages. If you need assistance, please call us directly or message again later.";
+          if (channel === 'whatsapp' && message.from) {
+            await sendWhatsAppReply(message.from, loopMsg, message.messageId);
+          }
           return sendSecurityResponse(res, 200, 'Loop broken', {
             processed: true,
-            response: { text: "I've detected an automated response loop. I'll pause responses for 30 minutes to prevent runaway messages. If you need assistance, please call us directly or message again later.", channel },
+            response: { text: loopMsg, channel },
           });
         }
         
         return sendSecurityResponse(res, 200, 'Silence period active', { processed: false, reason: loopCheck.reason });
       }
     }
+    addTrace(message.from, 'LOOP', 'PASSED');
     
     // Layer 9.5: Resolve client ID for cost tracking and AI routing
     const clientId = await resolveClientId(message.to, channel);
+    addTrace(message.from, 'CLIENT', clientId ? 'RESOLVED' : 'NOT_FOUND', clientId);
     
     // Layer 10: Route to appropriate AI handler
-    const response = await routeToAI(sanitizedText, message, channel, clientId);
+    let response;
+    try {
+      response = await routeToAI(sanitizedText, message, channel, clientId);
+      addTrace(message.from, 'AI', 'RESPONSE', `len=${response.text?.length}, fn=${response.function_called || 'none'}`);
+    } catch (aiErr) {
+      console.error(`[AI_ROUTING] Error: ${aiErr.message}`);
+      addTrace(message.from, 'AI', 'ERROR', aiErr.message);
+      response = { text: "I'm having a moment. Please try again shortly.", channel, ai_processed: false };
+    }
     
     // Record outgoing message for loop detection (tracks our responses)
     loopDetector.recordOutgoing(message.to, message.from, response.text);
@@ -357,36 +387,42 @@ async function handleWebhook(req, res, channel) {
     // Layer 11: SEND REPLY BACK TO WHATSAPP (360dialog API)
     // CRITICAL: The webhook receives messages from 360dialog, but we must explicitly
     // call their /v1/messages API to send replies back to the user.
-    // Layer 11: Cost protection — check outbound WhatsApp budget before sending
     let replySent = false;
     if (channel === 'whatsapp' && message.from && response.text && clientId) {
       const whatsappBudget = checkLimit(clientId, 'daily_whatsapp_msgs', 1);
       if (!whatsappBudget.allowed) {
         console.warn(`[COST_PROTECTION] WhatsApp outbound blocked for clinic ${clientId}: ${whatsappBudget.reason}`);
+        addTrace(message.from, 'WHATSAPP', 'COST_BLOCKED', whatsappBudget.reason);
         sendAdminAlert(
           `WhatsApp outbound blocked for clinic ${clientId.slice(0,8)}\n${whatsappBudget.reason}\nPatient ${message.from.slice(-4)} did not receive reply.`,
           'warning'
         );
       } else {
         try {
+          addTrace(message.from, 'WHATSAPP', 'SENDING', `text=${response.text?.slice(0,50)}`);
           replySent = await sendWhatsAppReply(message.from, response.text, message.messageId);
-          trackSpend(clientId, 0.007); // ~$0.007 per WhatsApp message
+          trackSpend(clientId, 0.007);
+          addTrace(message.from, 'WHATSAPP', replySent ? 'SENT' : 'FAILED_360DIALOG');
         } catch (sendErr) {
           console.error(`[WEBHOOK] Failed to send WhatsApp reply to ${message.from}: ${sendErr.message}`);
-          // Don't fail the webhook — the response is still logged and the user can retry
+          addTrace(message.from, 'WHATSAPP', 'ERROR', sendErr.message);
         }
       }
     } else if (channel === 'whatsapp' && !clientId) {
       console.warn('[WEBHOOK] No clientId resolved — cannot track cost, but attempting to send reply anyway');
+      addTrace(message.from, 'WHATSAPP', 'NO_CLIENTID_TRYING');
       try {
         replySent = await sendWhatsAppReply(message.from, response.text, message.messageId);
+        addTrace(message.from, 'WHATSAPP', replySent ? 'SENT' : 'FAILED');
       } catch (sendErr) {
         console.error(`[WEBHOOK] Failed to send WhatsApp reply (no clientId): ${sendErr.message}`);
+        addTrace(message.from, 'WHATSAPP', 'ERROR', sendErr.message);
       }
     }
     
     const latency = Date.now() - startTime;
     console.log(`[WEBHOOK] ${channel} message processed in ${latency}ms (reply sent: ${replySent})`);
+    addTrace(message.from, 'COMPLETE', replySent ? 'SUCCESS' : 'NO_REPLY', `${latency}ms`);
     
     return sendSecurityResponse(res, 200, 'Message processed', {
       processed: true,
@@ -695,6 +731,32 @@ async function logSecurityEvent(event) {
   }
 }
 
+// ─── TRACE DIAGNOSTIC ────────────────────────────────────────────
+
+async function handleTrace(req, res) {
+  const traces = [...messageTraceLog].reverse(); // Most recent first
+  
+  // Group traces by phone
+  const byPhone = {};
+  for (const t of traces) {
+    if (!byPhone[t.phone]) byPhone[t.phone] = [];
+    byPhone[t.phone].push(t);
+  }
+  
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({
+    status: 'ok',
+    total_traces: traces.length,
+    by_phone: byPhone,
+    recent: traces.slice(0, 20),
+    summary: {
+      webhooks_ok: webhookHandler ? true : false,
+      trace_buffer_capacity: MAX_TRACE_LOG,
+      trace_buffer_used: messageTraceLog.length
+    }
+  }, null, 2));
+}
+
 // ─── HEALTH CHECK ────────────────────────────────────────────────
 
 // ─── DEVICE REGISTRATION ─────────────────────────────────────────
@@ -784,6 +846,8 @@ async function requestHandler(req, res) {
     await handleRegisterDevice(req, res);
   } else if (url.pathname === '/health' && req.method === 'GET') {
     await handleHealth(req, res);
+  } else if (url.pathname === '/trace' && req.method === 'GET') {
+    await handleTrace(req, res);
   } else if (url.pathname.match(/^\/ical\/[^\/]+\.ics$/) && req.method === 'GET') {
     await handleICalFeed(req, res, url.pathname);
   } else if (url.pathname === '/auth/google/callback' && req.method === 'GET') {
