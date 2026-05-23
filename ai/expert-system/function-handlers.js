@@ -557,13 +557,22 @@ async function getTreatmentInfo({ client_id, treatment_name, treatment }) {
     
     // Exact match
     let match = services.find(s => s.name.toLowerCase() === normalized);
-    // Partial match
+    // Partial match (e.g. "botox" → "Botox Consultation")
     if (!match) {
       match = services.find(s => s.name.toLowerCase().includes(normalized));
     }
-    // Reverse partial
+    // Reverse partial (e.g. "Botox Consultation" → "botox")
     if (!match) {
       match = services.find(s => normalized.includes(s.name.toLowerCase()));
+    }
+    // Word-level match: check each word in the search term against each service name
+    // (e.g. "do you do botox" → "botox" matches "Botox Consultation")
+    if (!match) {
+      const searchWords = normalized.split(/\s+/).filter(w => w.length > 2);
+      match = services.find(s => {
+        const serviceWords = s.name.toLowerCase().split(/\s+/);
+        return searchWords.some(sw => serviceWords.includes(sw) || sw.includes(s.name.toLowerCase()) || s.name.toLowerCase().includes(sw));
+      });
     }
     
     if (!match) {

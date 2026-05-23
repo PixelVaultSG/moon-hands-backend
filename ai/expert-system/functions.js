@@ -93,11 +93,11 @@ const ALL_FUNCTIONS = [
   },
   {
     name: 'get_treatment_info',
-    description: 'Get detailed information about a specific treatment or service including description, duration, and price.',
+    description: 'Get details about a specific treatment. Use when patient asks "Do you do [treatment]?", "What is [treatment]?", "Tell me about [treatment]". Handles partial matches (e.g. "BOTOX" will match "Botox Consultation").',
     parameters: {
       type: 'object',
       properties: {
-        treatment_name: { type: 'string', description: 'Name of the treatment or service' }
+        treatment_name: { type: 'string', description: 'Treatment name or keyword. Can be partial (e.g. "botox", "facial", "laser")' }
       },
       required: ['treatment_name']
     },
@@ -105,11 +105,11 @@ const ALL_FUNCTIONS = [
   },
   {
     name: 'get_pricing',
-    description: 'Get pricing for a specific treatment or the full clinic price list. Use when patient asks about costs, packages, or comparisons.',
+    description: 'Get pricing for a specific treatment OR the full list of all services with prices. Use when patient asks: "What services do you offer?", "What treatments do you have?", "Show me your services", "What do you do?", or any pricing question. Call with NO treatment_name to get the complete list.',
     parameters: {
       type: 'object',
       properties: {
-        treatment_name: { type: 'string', description: 'Optional: specific treatment name. If omitted, returns full price list.' },
+        treatment_name: { type: 'string', description: 'Specific treatment name. OMIT this to get the full service list with all prices.' },
         include_packages: { type: 'boolean', description: 'Whether to include package deals and promotions' }
       }
     },
