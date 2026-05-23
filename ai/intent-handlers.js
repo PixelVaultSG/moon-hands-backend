@@ -182,7 +182,6 @@ function handlePricingGeneral({ clinicConfig }) {
   
   return `Sure thing! Here's what we offer: ${treatments}. Prices are tailored to your needs so they may vary a bit. Want me to go into detail on any of these?`;
 }
-}
 
 // ─── SERVICE INQUIRY ─────────────────────────────────────────────
 
