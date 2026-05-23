@@ -56,16 +56,20 @@ async function executeHandler(intentName, context) {
 // ─── GREETING ─────────────────────────────────────────────────────
 
 function handleGreeting({ clinicConfig }) {
-  const name = clinicConfig.clinic_name || 'our clinic';
-  const greeting = clinicConfig.greeting || `Hello! Welcome to ${name}.`;
+  const name = clinicConfig.clinic_name || clinicConfig.name || 'our clinic';
+  const agentName = clinicConfig.agent_name || 'Sophia';
   const treatments = getTopTreatments(clinicConfig, 3);
   
-  return `${greeting} I can help you with:
-• Booking appointments${treatments ? ` for ${treatments}` : ''}
-• Treatment enquiries and pricing
-• Operating hours and location
-
-What can I help you with today?`;
+  // Warm, natural greeting — no bullet points, no menu
+  const greeting = clinicConfig.greeting 
+    ? clinicConfig.greeting.replace(/{businessName}/g, name)
+    : `Hey there! Welcome to ${name} ✨`;
+  
+  if (treatments) {
+    return `${greeting} I'm ${agentName}, your virtual receptionist. I can help you book appointments, check prices, or answer questions about our treatments like ${treatments}. What brings you in today?`;
+  }
+  
+  return `${greeting} I'm ${agentName}, your virtual receptionist. I can help you with bookings, treatment info, or pricing. What can I do for you?`;
 }
 
 // ─── GOODBYE ──────────────────────────────────────────────────────
@@ -167,18 +171,17 @@ ${match.description || 'Would you like to book this treatment?'}`;
 
 function handlePricingGeneral({ clinicConfig }) {
   const services = clinicConfig.services || [];
+  const name = clinicConfig.clinic_name || clinicConfig.name || 'our clinic';
   
   if (services.length === 0) {
-    return `We offer competitive pricing for all our treatments. Would you like me to check pricing for a specific treatment?`;
+    return `We offer a range of treatments at ${name}. Let me know what you're interested in and I'll give you the details!`;
   }
   
-  // Show top 5 treatments with prices
-  const topServices = services.slice(0, 5);
-  const list = topServices.map(s => `• ${s.name}: ${formatPrice(s.price, s.price_unit)}`).join('\n');
+  // Conversational list — no bullet points
+  const treatments = services.map(s => `${s.name} (${formatPrice(s.price, s.price_unit)})`).join(', ');
   
-  const more = services.length > 5 ? `\n...and ${services.length - 5} more treatments.` : '';
-  
-  return `Here are some of our popular treatments and prices:\n\n${list}${more}\n\nPrices may vary based on individual assessment. Would you like details on any specific treatment?`;
+  return `Sure thing! Here's what we offer: ${treatments}. Prices are tailored to your needs so they may vary a bit. Want me to go into detail on any of these?`;
+}
 }
 
 // ─── SERVICE INQUIRY ─────────────────────────────────────────────
