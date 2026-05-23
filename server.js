@@ -54,8 +54,10 @@ const server = http.createServer(async (req, res) => {
       status: 'ok',
       checks: {
         webhook: !!webhookHandler,
+        webhook_error: webhookLoadError,
         telegram: telegramOk,
         supabase: !!process.env.SUPABASE_URL,
+        supabase_module: (() => { try { require('./supabase/client'); return 'ok'; } catch(e) { return e.message; } })(),
         openai: !!process.env.OPENAI_API_KEY,
         telegram_bot: !!process.env.TELEGRAM_BOT_TOKEN,
         d360: !!process.env.D360_API_KEY,
@@ -149,6 +151,7 @@ if (missingCritical.length) {
 // ─── LOAD WEBHOOK HANDLER ────────────────────────────────────────
 
 let webhookHandler = null;
+let webhookLoadError = null;
 let telegramOk = false;
 
 // Load webhook module and extract the handler
@@ -169,6 +172,11 @@ setTimeout(async () => {
       console.error('  ⚠️  Webhook module loaded but no handler found');
     }
   } catch (err) {
+    webhookLoadError = {
+      message: err.message,
+      stack: err.stack?.split('\n')?.slice(0, 4).join('\n'),
+      time: new Date().toISOString()
+    };
     console.error('  ❌ Webhook module failed:', err.message);
     console.error('     Stack:', err.stack?.split('\n')?.[1]?.trim());
   }
