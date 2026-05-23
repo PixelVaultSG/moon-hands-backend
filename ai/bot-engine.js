@@ -403,19 +403,30 @@ async function handleCreateBooking(args, clientConfig) {
   }
 
   // Create in Google Calendar if connected
+  let googleEventId = null;
   if (clientConfig.googleCalendarId && clientConfig.googleRefreshToken) {
     try {
       const calendar = getCalendarClient(clientConfig.googleRefreshToken);
-      await calendar.events.insert({
+      const treatmentDuration = clientConfig.config.services?.find(
+        s => s.name.toLowerCase() === (treatment || '').toLowerCase()
+      )?.duration || 60;
+      const endDateTime = new Date(`${date}T${time}:00+08:00`);
+      endDateTime.setMinutes(endDateTime.getMinutes() + treatmentDuration);
+      
+      const eventResult = await calendar.events.insert({
         calendarId: clientConfig.googleCalendarId,
         requestBody: {
           summary: `${treatment} - ${patient_name}`,
           description: `Booking via Moon Hands AI\nPhone: ${patient_phone}\nNotes: ${notes || 'N/A'}`,
           start: { dateTime: `${date}T${time}:00+08:00`, timeZone: 'Asia/Singapore' },
-          end: { dateTime: `${date}T${time}:00+08:00`, timeZone: 'Asia/Singapore' },
-          attendees: [{ email: clientConfig.contactEmail }].filter(Boolean)
+          end: { dateTime: endDateTime.toISOString(), timeZone: 'Asia/Singapore' }
         }
       });
+      googleEventId = eventResult.data.id;
+      console.log(`[CALENDAR] Event created: ${googleEventId}`);
+      
+      // Store the event ID in the appointment
+      await db.supabase.from('appointments').update({ google_event_id: googleEventId }).eq('id', appointment.id);
     } catch (err) {
       console.error('[CALENDAR] Event creation error:', err.message);
       // Don't fail the booking if calendar fails
@@ -451,8 +462,35 @@ async function handleCancelBooking(args, clientConfig) {
     const booking = bookings[0];
     await db.supabase.from('appointments').update({ status: 'cancelled' }).eq('id', booking.id);
     
-    // Remove from Google Calendar
-    // ... implementation
+    // Remove from Google Calendar if connected
+    if (booking.google_event_id && clientConfig.googleCalendarId && clientConfig.googleRefreshToken) {
+      try {
+        const calendar = getCalendarClient(clientConfig.googleRefreshToken);
+        await calendar.events.delete({
+          calendarId: clientConfig.googleCalendarId,
+          eventId: booking.google_event_id
+        });
+        console.log(`[CALENDAR] Event deleted: ${booking.google_event_id}`);
+      } catch (err) {
+        console.error('[CALENDAR] Event deletion error:', err.message);
+        // Don't fail cancellation if calendar delete fails
+      }
+    }
+    
+    // Send Telegram notification about cancellation
+    try {
+      const { notifyBookingCancelled } = require('../telegram/booking-notifications');
+      await notifyBookingCancelled({
+        clinicName: clientConfig.name || 'Your Clinic',
+        patientName: booking.customer_name || 'Unknown',
+        patientPhone: booking.customer_phone || '',
+        service: booking.service || 'Appointment',
+        date: booking.appointment_date,
+        time: booking.appointment_time,
+        clinicId: clientConfig.id,
+        message: 'Patient cancelled via WhatsApp'
+      });
+    } catch (e) { /* notification is best-effort */ }
 
     return { success: true, message: `Your ${booking.service} appointment on ${booking.appointment_date} at ${booking.appointment_time} has been cancelled. We hope to see you again soon!` };
   }

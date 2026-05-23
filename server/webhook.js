@@ -18,6 +18,7 @@ const { handleOnboarding } = require('./onboarding');
 const { checkMessageRate } = require('../middleware/smart-rate-limiter');
 const { loopDetector } = require('../middleware/loop-protection');
 const { processIncomingMessage, sanitizeInput } = require('../middleware/security');
+const { generateICalFeed } = require('../utils/ical-generator');
 const { checkLimit, trackSpend } = require('../middleware/cost-protection');
 const { logEvent, getDeviceFingerprint, classifyActor } = require('../monitoring/audit-system');
 
@@ -783,8 +784,93 @@ async function requestHandler(req, res) {
     await handleRegisterDevice(req, res);
   } else if (url.pathname === '/health' && req.method === 'GET') {
     await handleHealth(req, res);
+  } else if (url.pathname.match(/^\/ical\/[^\/]+\.ics$/) && req.method === 'GET') {
+    await handleICalFeed(req, res, url.pathname);
+  } else if (url.pathname === '/auth/google/callback' && req.method === 'GET') {
+    await handleGoogleCallback(req, res, url);
   } else {
     sendSecurityResponse(res, 404, 'Not found');
+  }
+}
+
+// ─── iCAL FEED HANDLER ───────────────────────────────────────────
+
+async function handleICalFeed(req, res, pathname) {
+  const token = pathname.replace('/ical/', '').replace('.ics', '');
+  
+  try {
+    const { ical, clinicName } = await generateICalFeed(token);
+    
+    res.writeHead(200, {
+      'Content-Type': 'text/calendar; charset=utf-8',
+      'Content-Disposition': `inline; filename="${clinicName.replace(/\s+/g, '-').toLowerCase()}-bookings.ics"`,
+      'Cache-Control': 'no-cache'
+    });
+    res.end(ical);
+  } catch (err) {
+    console.error('[iCal] Feed error:', err.message);
+    sendSecurityResponse(res, 404, 'Calendar feed not found');
+  }
+}
+
+// ─── GOOGLE OAUTH CALLBACK ───────────────────────────────────────
+
+async function handleGoogleCallback(req, res, url) {
+  const code = url.searchParams.get('code');
+  const state = url.searchParams.get('state'); // contains client_id
+  const error = url.searchParams.get('error');
+  
+  if (error) {
+    return sendSecurityResponse(res, 400, `Google auth denied: ${error}`);
+  }
+  if (!code) {
+    return sendSecurityResponse(res, 400, 'Missing authorization code');
+  }
+  
+  try {
+    const { google } = require('googleapis');
+    const { supabase } = require('../supabase/client');
+    
+    const oauth2Client = new google.auth.OAuth2(
+      process.env.GOOGLE_CLIENT_ID,
+      process.env.GOOGLE_CLIENT_SECRET,
+      process.env.GOOGLE_REDIRECT_URI
+    );
+    
+    // Exchange code for tokens
+    const { tokens } = await oauth2Client.getToken(code);
+    
+    if (!tokens.refresh_token) {
+      return sendSecurityResponse(res, 400, 'No refresh token received. Clinic may need to revoke access and re-authenticate.');
+    }
+    
+    // Get clinic's primary calendar ID
+    oauth2Client.setCredentials({ refresh_token: tokens.refresh_token });
+    const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
+    const calendarList = await calendar.calendarList.list();
+    const primaryCalendar = calendarList.data.items.find(c => c.primary) || calendarList.data.items[0];
+    
+    // Update the client record
+    const { error: updateErr } = await supabase
+      .from('clients')
+      .update({
+        google_refresh_token: tokens.refresh_token,
+        google_calendar_id: primaryCalendar.id,
+        calendar_provider: 'google'
+      })
+      .eq('id', state || 'demo');
+    
+    if (updateErr) {
+      console.error('[GOOGLE_OAUTH] Supabase update error:', updateErr.message);
+      return sendSecurityResponse(res, 500, 'Failed to save calendar connection');
+    }
+    
+    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.end(`<html><body style="font-family:sans-serif;text-align:center;padding:50px;"><h1>✅ Google Calendar Connected!</h1><p>Your clinic bookings will now sync to <strong>${primaryCalendar.summary}</strong>.</p><p>You can close this window.</p></body></html>`);
+    
+  } catch (err) {
+    console.error('[GOOGLE_OAUTH] Callback error:', err.message);
+    sendSecurityResponse(res, 500, 'Calendar connection failed');
   }
 }
 
