@@ -756,7 +756,6 @@ async function handleTrace(req, res) {
       by_phone: byPhone,
       recent: traces.slice(0, 20),
       summary: {
-        webhooks_ok: !!webhookHandler,
         trace_buffer_capacity: MAX_TRACE_LOG,
         trace_buffer_used: messageTraceLog.length
       }
