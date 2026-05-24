@@ -19,6 +19,7 @@ const { checkMessageRate } = require('../middleware/smart-rate-limiter');
 const { loopDetector } = require('../middleware/loop-protection');
 const { processIncomingMessage, sanitizeInput } = require('../middleware/security');
 const { generateICalFeed } = require('../utils/ical-generator');
+const { recordMessage, recordRateLimit, recordLoop, recordError } = require('../monitoring/uptime-metrics');
 const { checkLimit, trackSpend } = require('../middleware/cost-protection');
 const { logEvent, getDeviceFingerprint, classifyActor } = require('../monitoring/audit-system');
 
@@ -299,6 +300,7 @@ async function handleWebhook(req, res, channel) {
     if (!rateCheck.allowed) {
       console.warn(`[RATE_LIMIT] Customer ${message.from} blocked: ${rateCheck.reason} (${rateCheck.layer})`);
       addTrace(message.from, 'RATE_LIMIT', 'BLOCKED', `${rateCheck.layer}: ${rateCheck.reason}`);
+      recordRateLimit();
       
       // CRITICAL FIX: Send the graceful response to WhatsApp even when rate limited
       // The patient should know WHY they're not getting a full response
@@ -339,6 +341,7 @@ async function handleWebhook(req, res, channel) {
       if (loopCheck.isLoop) {
         console.warn(`[LOOP_PROTECTION] Loop detected from ${message.from}: ${loopCheck.reason}`);
         addTrace(message.from, 'LOOP', 'DETECTED', loopCheck.reason);
+        recordLoop();
         
         await logSecurityEvent({
           severity: 'high',
@@ -378,6 +381,7 @@ async function handleWebhook(req, res, channel) {
     } catch (aiErr) {
       console.error(`[AI_ROUTING] Error: ${aiErr.message}`);
       addTrace(message.from, 'AI', 'ERROR', aiErr.message);
+      recordError(`AI routing: ${aiErr.message}`);
       response = { text: "I'm having a moment. Please try again shortly.", channel, ai_processed: false };
     }
     
@@ -403,9 +407,11 @@ async function handleWebhook(req, res, channel) {
           replySent = await sendWhatsAppReply(message.from, response.text, message.messageId);
           trackSpend(clientId, 0.007);
           addTrace(message.from, 'WHATSAPP', replySent ? 'SENT' : 'FAILED_360DIALOG');
+          recordMessage(replySent, replySent ? null : '360dialog send failed');
         } catch (sendErr) {
           console.error(`[WEBHOOK] Failed to send WhatsApp reply to ${message.from}: ${sendErr.message}`);
           addTrace(message.from, 'WHATSAPP', 'ERROR', sendErr.message);
+          recordError(`WhatsApp send: ${sendErr.message}`);
         }
       }
     } else if (channel === 'whatsapp' && !clientId) {

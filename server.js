@@ -49,6 +49,7 @@ const server = http.createServer(async (req, res) => {
 
   // Debug endpoint
   if (url.pathname === '/debug' && req.method === 'GET') {
+    const metrics = (() => { try { return require('./monitoring/uptime-metrics').getMetrics(); } catch(e) { return { error: e.message }; } })();
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
       status: 'ok',
@@ -62,6 +63,7 @@ const server = http.createServer(async (req, res) => {
         telegram_bot: !!process.env.TELEGRAM_BOT_TOKEN,
         d360: !!process.env.D360_API_KEY,
       },
+      metrics,
       env: {
         PORT: process.env.PORT,
         NODE_ENV: process.env.NODE_ENV,
