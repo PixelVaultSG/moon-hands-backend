@@ -740,27 +740,35 @@ async function logSecurityEvent(event) {
 // ─── TRACE DIAGNOSTIC ────────────────────────────────────────────
 
 async function handleTrace(req, res) {
-  const traces = [...messageTraceLog].reverse(); // Most recent first
-  
-  // Group traces by phone
-  const byPhone = {};
-  for (const t of traces) {
-    if (!byPhone[t.phone]) byPhone[t.phone] = [];
-    byPhone[t.phone].push(t);
-  }
-  
-  res.writeHead(200, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify({
-    status: 'ok',
-    total_traces: traces.length,
-    by_phone: byPhone,
-    recent: traces.slice(0, 20),
-    summary: {
-      webhooks_ok: webhookHandler ? true : false,
-      trace_buffer_capacity: MAX_TRACE_LOG,
-      trace_buffer_used: messageTraceLog.length
+  try {
+    const traces = [...messageTraceLog].reverse();
+    
+    const byPhone = {};
+    for (const t of traces) {
+      const p = t.phone || 'unknown';
+      if (!byPhone[p]) byPhone[p] = [];
+      byPhone[p].push(t);
     }
-  }, null, 2));
+    
+    const payload = {
+      status: 'ok',
+      total_traces: traces.length,
+      by_phone: byPhone,
+      recent: traces.slice(0, 20),
+      summary: {
+        webhooks_ok: !!webhookHandler,
+        trace_buffer_capacity: MAX_TRACE_LOG,
+        trace_buffer_used: messageTraceLog.length
+      }
+    };
+    
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(payload));
+  } catch (err) {
+    console.error('[TRACE] Error:', err.message);
+    res.writeHead(500, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: 'error', message: err.message }));
+  }
 }
 
 // ─── HEALTH CHECK ────────────────────────────────────────────────
@@ -828,38 +836,46 @@ async function handleHealth(req, res) {
 // ─── REQUEST HANDLER (used by server.js) ─────────────────────────
 
 async function requestHandler(req, res) {
-  // CORS headers
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-API-Key, X-Signature, X-Moonhands-Master, X-Moonhands-Agent');
-  
-  if (req.method === 'OPTIONS') {
-    res.writeHead(200);
-    res.end();
-    return;
-  }
-  
-  const url = new URL(req.url, `http://${req.headers.host}`);
-  
-  // Route handlers
-  if (url.pathname === '/webhook/whatsapp' && req.method === 'POST') {
-    await handleWebhook(req, res, 'whatsapp');
-  } else if (url.pathname === '/webhook/voice' && req.method === 'POST') {
-    await handleWebhook(req, res, 'voice');
-  } else if (url.pathname === '/api/onboarding' && req.method === 'POST') {
-    await handleOnboarding(req, res);
-  } else if (url.pathname === '/api/register-device' && req.method === 'POST') {
-    await handleRegisterDevice(req, res);
-  } else if (url.pathname === '/health' && req.method === 'GET') {
-    await handleHealth(req, res);
-  } else if (url.pathname === '/trace' && req.method === 'GET') {
-    await handleTrace(req, res);
-  } else if (url.pathname.match(/^\/ical\/[^\/]+\.ics$/) && req.method === 'GET') {
-    await handleICalFeed(req, res, url.pathname);
-  } else if (url.pathname === '/auth/google/callback' && req.method === 'GET') {
-    await handleGoogleCallback(req, res, url);
-  } else {
-    sendSecurityResponse(res, 404, 'Not found');
+  try {
+    // CORS headers
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-API-Key, X-Signature, X-Moonhands-Master, X-Moonhands-Agent');
+    
+    if (req.method === 'OPTIONS') {
+      res.writeHead(200);
+      res.end();
+      return;
+    }
+    
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    
+    // Route handlers
+    if (url.pathname === '/webhook/whatsapp' && req.method === 'POST') {
+      await handleWebhook(req, res, 'whatsapp');
+    } else if (url.pathname === '/webhook/voice' && req.method === 'POST') {
+      await handleWebhook(req, res, 'voice');
+    } else if (url.pathname === '/api/onboarding' && req.method === 'POST') {
+      await handleOnboarding(req, res);
+    } else if (url.pathname === '/api/register-device' && req.method === 'POST') {
+      await handleRegisterDevice(req, res);
+    } else if (url.pathname === '/health' && req.method === 'GET') {
+      await handleHealth(req, res);
+    } else if (url.pathname === '/trace' && req.method === 'GET') {
+      await handleTrace(req, res);
+    } else if (url.pathname.match(/^\/ical\/[^\/]+\.ics$/) && req.method === 'GET') {
+      await handleICalFeed(req, res, url.pathname);
+    } else if (url.pathname === '/auth/google/callback' && req.method === 'GET') {
+      await handleGoogleCallback(req, res, url);
+    } else {
+      sendSecurityResponse(res, 404, 'Not found');
+    }
+  } catch (err) {
+    console.error(`[REQUEST_HANDLER] Unhandled error: ${err.message}`);
+    console.error(err.stack);
+    if (!res.headersSent) {
+      sendSecurityResponse(res, 500, 'Internal server error', { detail: err.message });
+    }
   }
 }
 
