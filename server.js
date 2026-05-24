@@ -148,6 +148,49 @@ if (missingCritical.length) {
   console.log('\n✅ All critical env vars OK. Loading modules...\n');
 }
 
+// ─── PRE-DEPLOY SAFETY CHECKS ────────────────────────────────────
+// Validate ALL JS files have valid syntax BEFORE loading them.
+// This prevents deploying broken code that crashes the webhook.
+
+function validateAllModules() {
+  const filesToCheck = [
+    './server/webhook.js',
+    './ai/bot-engine.js',
+    './ai/smart-router.js',
+    './ai/conversation-state.js',
+    './ai/intent-matcher.js',
+    './ai/intent-handlers.js',
+    './ai/expert-system/functions.js',
+    './ai/expert-system/function-handlers.js',
+    './middleware/smart-rate-limiter.js',
+    './middleware/cost-protection.js',
+    './telegram/booking-notifications.js',
+    './utils/ical-generator.js',
+    './supabase/client.js',
+  ];
+  
+  let allOk = true;
+  for (const file of filesToCheck) {
+    try {
+      require('child_process').execSync(`node -c ${require('path').join(__dirname, file)}`, { stdio: 'pipe' });
+    } catch (err) {
+      console.error(`  ❌ SYNTAX ERROR in ${file}: ${err.stderr?.toString().slice(0, 200)}`);
+      allOk = false;
+    }
+  }
+  
+  if (allOk) {
+    console.log('  ✅ All module syntax checks passed');
+  } else {
+    console.error('\n🚨 DEPLOY BLOCKED: Syntax errors found in modules.');
+    console.error('   Fix the errors and redeploy. Webhook will NOT load until fixed.\n');
+  }
+  return allOk;
+}
+
+// Run validation immediately (before attempting to load webhook)
+const modulesValid = validateAllModules();
+
 // ─── LOAD WEBHOOK HANDLER ────────────────────────────────────────
 
 let webhookHandler = null;
@@ -156,6 +199,12 @@ let telegramOk = false;
 
 // Load webhook module and extract the handler
 setTimeout(async () => {
+  // If syntax checks failed, don't even try loading
+  if (!modulesValid) {
+    console.error('  ⛔ Webhook loading skipped due to syntax errors');
+    return;
+  }
+  
   try {
     const webhookModule = require('./server/webhook');
     if (webhookModule.requestHandler) {
@@ -181,6 +230,20 @@ setTimeout(async () => {
     console.error('     Stack:', err.stack?.split('\n')?.[1]?.trim());
   }
 }, 100);
+
+// ─── 24/7 KEEPALIVE MONITORING ───────────────────────────────────
+// Self-ping + webhook verification + auto-recovery alerts
+// Starts only after webhook is loaded (to avoid false alerts during startup)
+
+setTimeout(() => {
+  try {
+    const { startKeepalive } = require('./monitoring/keepalive');
+    startKeepalive();
+    console.log('  ✅ 24/7 keepalive monitor started');
+  } catch (err) {
+    console.error('  ❌ Keepalive monitor failed:', err.message);
+  }
+}, 5000); // Start 5 seconds after webhook attempt
 
 // ─── START TELEGRAM BOT ──────────────────────────────────────────
 
