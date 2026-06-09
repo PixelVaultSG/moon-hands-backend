@@ -14,7 +14,7 @@
 
 const http = require('http');
 const crypto = require('crypto');
-const { handleOnboarding } = require('./onboarding');
+const { handleOnboarding, activateClinic } = require('./onboarding');
 const { checkMessageRate } = require('../middleware/smart-rate-limiter');
 const { loopDetector } = require('../middleware/loop-protection');
 const { processIncomingMessage, sanitizeInput } = require('../middleware/security');
@@ -914,6 +914,8 @@ async function requestHandler(req, res) {
       await handleWebhook(req, res, 'voice');
     } else if (url.pathname === '/api/onboarding' && req.method === 'POST') {
       await handleOnboarding(req, res);
+    } else if (url.pathname === '/api/activate-clinic' && req.method === 'POST') {
+      await activateClinic(req, res);
     } else if (url.pathname === '/api/register-device' && req.method === 'POST') {
       await handleRegisterDevice(req, res);
     } else if (url.pathname === '/health' && req.method === 'GET') {

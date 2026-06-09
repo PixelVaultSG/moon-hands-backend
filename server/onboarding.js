@@ -293,11 +293,16 @@ async function sendTelegramAlert(submission) {
       '',
       `*Booking:* ${submission.booking_auto_confirm ? 'Auto-confirm' : 'Hold for approval'} · ${submission.booking_allow_same_day ? 'Same-day OK' : 'No same-day'} · ${submission.booking_min_notice_hours || 2}h notice`,
       '',
+      `*Payment Required:*`,
+      `💰 Amount: ${planName.includes('547') ? 'S\\$547' : 'S\\$347'}`,
+      `📊 Status: PENDING\\_PAYMENT`,
+      `🏦 Bank: DBS Bank · Pixel Vault Pte Ltd`,
+      ``,
       `*Actions:*`,
-      `1\. Review: /review ${submission.id?.substring(0, 8) || 'N/A'}`,
-      `2\. Insert into clients \+ client\_configs`,
-      `3\. Test bot with their treatments`,
-      `4\. Mark active when ready`,
+      `1\. Wait for payment screenshot via email`,
+      `2\. Confirm payment → activate clinic`,
+      `3\. Guide clinic to set up 360dialog`,
+      `4\. Test bot → mark active when ready`,
       '',
       `_Received: ${new Date().toLocaleString('en-SG', { timeZone: 'Asia/Singapore' })}_`,
     ].filter(Boolean).join('\n');
@@ -387,23 +392,33 @@ async function handleOnboarding(req, res) {
     // Step 4: Sanitize
     const sanitized = sanitizeSubmission(body);
     
-    // Step 5: Save to database
+    // Step 5: Save to database (status: pending_payment)
     const submission = await saveSubmission(sanitized);
     
-    // Step 6: Send Telegram alert
+    // Step 6: Send Telegram alert to Pixel Vault admin with payment details
     await sendTelegramAlert(submission);
     
-    // Step 7: Return success
+    // Step 7: Return success with payment instructions
+    const planPrice = sanitized.plan === 'professional' ? 547 : 347;
     return res.writeHead(201, { 'Content-Type': 'application/json' }).end(JSON.stringify({
       status: 'success',
-      message: 'Onboarding submission received. Our team will contact you within 24 hours.',
+      message: 'Onboarding submitted! Please complete payment to activate your AI receptionist.',
       submission_id: submission.id,
+      status: 'pending_payment',
+      payment: {
+        bank: 'DBS Bank',
+        account_name: 'Pixel Vault Pte Ltd',
+        account_number: '[UPDATE_THIS]',
+        amount: `S$${planPrice}`,
+        reference: sanitized.clinicName || 'Clinic',
+        instructions: 'Email payment screenshot to hello@pixelvault.sg'
+      },
       next_steps: [
-        'We will review your submission within 24 hours',
-        'We configure your AI receptionist with your treatments, hours and preferences',
-        'We connect your WhatsApp Business number',
-        'You receive a WhatsApp test message to confirm everything works',
-        'Your 14-day free trial begins'
+        '1. Make bank transfer (details above)',
+        '2. Email payment screenshot to hello@pixelvault.sg',
+        '3. We activate your AI receptionist within 24 hours',
+        '4. Set up your 360dialog WhatsApp Business API account (we will guide you)',
+        '5. Your AI receptionist goes LIVE!'
       ]
     }));
     
@@ -418,4 +433,174 @@ async function handleOnboarding(req, res) {
 
 // ─── EXPORTS ─────────────────────────────────────────────────────
 
-module.exports = { handleOnboarding };
+// ─── ACTIVATE CLINIC (Admin-only, after payment confirmed) ───────
+
+async function activateClinic(req, res) {
+  const masterSecret = req.headers['x-moonhands-master'];
+  if (masterSecret !== process.env.MASTER_SECRET) {
+    return res.writeHead(401, { 'Content-Type': 'application/json' }).end(JSON.stringify({
+      status: 'error', message: 'Unauthorized'
+    }));
+  }
+  
+  try {
+    let body;
+    try {
+      const raw = await new Promise((resolve, reject) => {
+        let data = '';
+        req.on('data', chunk => { data += chunk; if (data.length > 1e6) reject(new Error('Body too large')); });
+        req.on('end', () => resolve(data));
+        req.on('error', reject);
+      });
+      body = JSON.parse(raw);
+    } catch {
+      return res.writeHead(400, { 'Content-Type': 'application/json' }).end(JSON.stringify({
+        status: 'error', message: 'Invalid JSON body'
+      }));
+    }
+    
+    const { submission_id } = body;
+    if (!submission_id) {
+      return res.writeHead(400, { 'Content-Type': 'application/json' }).end(JSON.stringify({
+        status: 'error', message: 'submission_id required'
+      }));
+    }
+    
+    // Fetch the submission
+    const { data: submission, error: fetchErr } = await db.supabase
+      .from('onboarding_submissions')
+      .select('*')
+      .eq('id', submission_id)
+      .single();
+    
+    if (fetchErr || !submission) {
+      return res.writeHead(404, { 'Content-Type': 'application/json' }).end(JSON.stringify({
+        status: 'error', message: 'Submission not found'
+      }));
+    }
+    
+    // Generate client ID
+    const clientId = require('crypto').randomUUID();
+    
+    // Parse treatments
+    let treatments = [];
+    try {
+      treatments = typeof submission.treatment_menu === 'string' 
+        ? JSON.parse(submission.treatment_menu) 
+        : (submission.treatment_menu || []);
+    } catch { treatments = []; }
+    
+    // Parse operating hours
+    let hours = [];
+    try {
+      hours = typeof submission.operating_hours === 'string'
+        ? JSON.parse(submission.operating_hours)
+        : (submission.operating_hours || []);
+    } catch { hours = []; }
+    
+    // Parse FAQs
+    let faqs = [];
+    try {
+      faqs = typeof submission.faqs === 'string'
+        ? JSON.parse(submission.faqs)
+        : (submission.faqs || []);
+    } catch { faqs = []; }
+    
+    // 1. Create client record
+    const { error: clientErr } = await db.supabase.from('clients').insert({
+      id: clientId,
+      name: submission.clinic_name,
+      slug: submission.clinic_name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, ''),
+      whatsapp_number: submission.whatsapp_number,
+      email: submission.clinic_email,
+      phone: submission.clinic_phone,
+      status: 'active',
+      plan: submission.selected_plan || 'starter',
+      ical_token: require('crypto').randomUUID(),
+    });
+    
+    if (clientErr) throw clientErr;
+    
+    // 2. Create client config
+    const { error: configErr } = await db.supabase.from('client_configs').insert({
+      client_id: clientId,
+      operating_hours: hours,
+      services: treatments,
+      faqs: faqs,
+      special_notes: submission.special_notes || '',
+      booking_auto_confirm: submission.booking_auto_confirm || false,
+      booking_after_hours_action: 'hold_for_approval',
+      booking_waitlist_enabled: true,
+      booking_max_advance_days: 30,
+      booking_min_notice_hours: submission.booking_min_notice_hours || 2,
+      booking_allow_same_day: submission.booking_allow_same_day || false,
+      booking_require_phone: true,
+      buffer_time: 15,
+    });
+    
+    if (configErr) throw configErr;
+    
+    // 3. Update submission status
+    await db.supabase.from('onboarding_submissions')
+      .update({ status: 'active', activated_at: new Date().toISOString() })
+      .eq('id', submission_id);
+    
+    // 4. Send welcome email
+    let emailResult = null;
+    try {
+      const { sendWelcomeEmail } = require('../utils/welcome-email');
+      const planPrice = submission.selected_plan === 'professional' ? 547 : 347;
+      const { data: clientRecord } = await db.supabase
+        .from('clients')
+        .select('ical_token')
+        .eq('id', clientId)
+        .single();
+      
+      emailResult = await sendWelcomeEmail({
+        to: submission.clinic_email,
+        clinicName: submission.clinic_name,
+        contactName: submission.contact_name,
+        plan: submission.selected_plan === 'professional' ? 'Premium' : 'Basic',
+        monthlyPrice: planPrice,
+        iCalUrl: `https://moon-hands-backend.onrender.com/ical/${clientRecord?.ical_token}.ics`,
+      });
+    } catch (emailErr) {
+      console.error('[ACTIVATE] Welcome email failed:', emailErr.message);
+    }
+    
+    // 5. Send Telegram confirmation
+    const botToken = process.env.TELEGRAM_BOT_TOKEN;
+    const adminChatId = process.env.TELEGRAM_ADMIN_CHAT_ID;
+    if (botToken && adminChatId) {
+      await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: adminChatId,
+          text: `✅ CLINIC ACTIVATED\n\n${submission.clinic_name}\nStatus: ACTIVE\nClient ID: ${clientId.slice(0,8)}\nEmail sent: ${emailResult ? 'Yes' : 'No'}`,
+        })
+      });
+    }
+    
+    return res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({
+      status: 'success',
+      message: 'Clinic activated successfully',
+      client_id: clientId,
+      email_sent: !!emailResult,
+      next_steps: [
+        'Clinic created in database',
+        'Welcome email sent',
+        'Guide clinic to set up 360dialog WhatsApp Business API',
+        'Clinic tests bot → goes LIVE'
+      ]
+    }));
+    
+  } catch (err) {
+    console.error('[ACTIVATE] Error:', err);
+    return res.writeHead(500, { 'Content-Type': 'application/json' }).end(JSON.stringify({
+      status: 'error', message: err.message
+    }));
+  }
+}
+
+module.exports = { handleOnboarding, activateClinic };
