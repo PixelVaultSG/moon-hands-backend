@@ -6,12 +6,12 @@
  * 
  * Setup:
  *   1. Go to https://myaccount.google.com/apppasswords
- *   2. Sign in with Pixel Vault's Gmail
- *   3. Select app: "Mail", Select device: "Other (Custom name)"
- *   4. Name it "Moon Hands Welcome Email"
- *   5. Copy the 16-character app password
- *   6. Set as env var: GMAIL_APP_PASSWORD=your_16_char_password
- *   7. Set as env var: GMAIL_FROM=hello@pixelvault.sg (or your Gmail)
+ *   2. Sign in with Pixel Vault's Gmail (pixelvaultsg@gmail.com)
+ *   3. Click in "App name" field → type "Moon Hands Welcome Email"
+ *   4. Click "Create"
+ *   5. Copy the 16-character app password (remove spaces when pasting)
+ *   6. Set as env var: GMAIL_APP_PASSWORD=rllblohsohvpwgrc (no spaces)
+ *   7. Set as env var: GMAIL_FROM=pixelvaultsg@gmail.com
  * 
  * Usage:
  *   const { sendWelcomeEmail } = require('./utils/welcome-email');
