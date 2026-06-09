@@ -926,6 +926,8 @@ async function requestHandler(req, res) {
       await handleICalFeed(req, res, url.pathname);
     } else if (url.pathname === '/auth/google/callback' && req.method === 'GET') {
       await handleGoogleCallback(req, res, url);
+    } else if (url.pathname === '/api/send-test-email' && req.method === 'POST') {
+      await handleTestEmail(req, res);
     } else {
       sendSecurityResponse(res, 404, 'Not found');
     }
@@ -1016,6 +1018,32 @@ async function handleGoogleCallback(req, res, url) {
   } catch (err) {
     console.error('[GOOGLE_OAUTH] Callback error:', err.message);
     sendSecurityResponse(res, 500, 'Calendar connection failed');
+  }
+}
+
+// ─── TEST EMAIL SENDER ───────────────────────────────────────────
+
+async function handleTestEmail(req, res) {
+  try {
+    const body = await parseBody(req);
+    const data = typeof body === 'string' ? JSON.parse(body) : body;
+    
+    const { sendWelcomeEmail } = require('../utils/welcome-email');
+    const result = await sendWelcomeEmail({
+      to: data.to || 'pixelvaultsg@gmail.com',
+      clinicName: data.clinicName || 'Test Clinic',
+      contactName: data.contactName || 'Test User',
+      plan: data.plan || 'Premium',
+      monthlyPrice: data.monthlyPrice || 547,
+      iCalUrl: data.iCalUrl || 'https://moon-hands-backend.onrender.com/ical/test.ics',
+    });
+    
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: 'success', message: 'Test email sent', result }));
+  } catch (err) {
+    console.error('[TEST_EMAIL] Error:', err.message);
+    res.writeHead(500, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: 'error', message: err.message }));
   }
 }
 
