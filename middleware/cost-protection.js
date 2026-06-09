@@ -59,20 +59,39 @@ function getCounter(clinicId) {
 
 // ─── CHECK FUNCTIONS ─────────────────────────────────────────────
 
+// Track which alerts have been sent today (clinicId_type -> boolean)
+const alertsSentToday = new Map();
+
 function checkLimit(clinicId, type, increment = 1) {
-  if (globalKillSwitch) return { allowed: false, reason: `GLOBAL KILL: ${killReason}` };
+  if (globalKillSwitch) return { allowed: false, reason: `GLOBAL KILL: ${killReason}`, alerted: false };
   
   const counter = getCounter(clinicId);
   const limit = HARD_LIMITS[type];
   const current = counter[type] || 0;
+  const newValue = current + increment;
   
-  if (current + increment > limit) {
-    console.warn(`[COST_PROTECTION] Clinic ${clinicId} exceeded ${type}: ${current}/${limit}`);
-    return { allowed: false, reason: `Daily ${type} limit reached (${limit})` };
+  // Always allow — never block clinic operations
+  counter[type] = newValue;
+  
+  // Check if we've crossed the primary limit
+  const alertKey = `${clinicId}_${type}`;
+  if (current <= limit && newValue > limit) {
+    console.warn(`[COST_PROTECTION] Clinic ${clinicId} exceeded ${type}: ${newValue}/${limit}`);
+    alertsSentToday.set(alertKey, 'primary');
+    return { allowed: true, reason: `Daily ${type} limit reached (${limit})`, alerted: true, threshold: 'primary' };
   }
   
-  counter[type] = current + increment;
-  return { allowed: true };
+  // Check if we've crossed the double limit (e.g., $40 for spend)
+  const doubleLimit = limit * 2;
+  if (current <= doubleLimit && newValue > doubleLimit) {
+    if (alertsSentToday.get(alertKey) !== 'double') {
+      console.warn(`[COST_PROTECTION] Clinic ${clinicId} exceeded DOUBLE ${type}: ${newValue}/${doubleLimit}`);
+      alertsSentToday.set(alertKey, 'double');
+      return { allowed: true, reason: `Daily ${type} DOUBLE limit reached (${doubleLimit})`, alerted: true, threshold: 'double' };
+    }
+  }
+  
+  return { allowed: true, alerted: false };
 }
 
 function trackSpend(clinicId, costUsd) {

@@ -47,6 +47,59 @@ async function sendAdminAlert(message, level = 'warning') {
   }
 }
 
+// ─── DUAL-ROUTING COST ALERT ─────────────────────────────────────
+// Sends cost overusage alerts to BOTH Moon Hands admin AND clinic admin
+// Security alerts go to Moon Hands admin ONLY (see sendAdminAlert)
+
+async function sendClinicCostAlert(clinicId, type, reason, isDouble = false) {
+  const botToken = process.env.TELEGRAM_BOT_TOKEN;
+  if (!botToken) return;
+  
+  const label = type === 'whatsapp' ? 'WhatsApp messages' : 'AI API calls';
+  const tier = isDouble ? 'DOUBLE' : 'daily';
+  const emoji = isDouble ? '🚨' : '⚠️';
+  
+  const message = [
+    `${emoji} *Cost ${tier} limit reached*`,
+    ``,
+    `Your clinic has exceeded the ${tier} limit for ${label}.`,
+    ``,
+    `*Details:* ${reason}`,
+    ``,
+    isDouble
+      ? `🔴 This is your SECOND alert. Your usage is significantly above your plan. Our team will contact you shortly to discuss your account and options.`
+      : `🟡 This is a friendly heads-up. You're at your plan's daily usage limit. Service continues uninterrupted — no disruption to your patients.`,
+    ``,
+    `*Questions?* Contact Pixel Vault support.`,
+    ``,
+    `_This alert is also sent to our operations team._`,
+  ].join('\n');
+  
+  // Try to send to clinic's Telegram chat (if configured)
+  try {
+    const { supabase } = require('./supabase/client');
+    const { data: client } = await supabase
+      .from('clients')
+      .select('telegram_chat_id, name')
+      .eq('id', clinicId)
+      .single();
+    
+    if (client?.telegram_chat_id) {
+      await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: client.telegram_chat_id,
+          text: message,
+          parse_mode: 'Markdown'
+        })
+      });
+    }
+  } catch (err) {
+    // Clinic may not have telegram_chat_id configured — that's ok, admin still gets it
+  }
+}
+
 // Rate limiter uses in-memory store with automatic TTL cleanup
 // No manual cleanup needed — old entries expire naturally
 
@@ -391,28 +444,34 @@ async function handleWebhook(req, res, channel) {
     // Layer 11: SEND REPLY BACK TO WHATSAPP (360dialog API)
     // CRITICAL: The webhook receives messages from 360dialog, but we must explicitly
     // call their /v1/messages API to send replies back to the user.
+    // COST PROTECTION: We NEVER block outbound messages — clinics must operate.
+    // Instead, we alert both Moon Hands admin and clinic admin when limits are hit.
     let replySent = false;
     if (channel === 'whatsapp' && message.from && response.text && clientId) {
       const whatsappBudget = checkLimit(clientId, 'daily_whatsapp_msgs', 1);
-      if (!whatsappBudget.allowed) {
-        console.warn(`[COST_PROTECTION] WhatsApp outbound blocked for clinic ${clientId}: ${whatsappBudget.reason}`);
-        addTrace(message.from, 'WHATSAPP', 'COST_BLOCKED', whatsappBudget.reason);
-        sendAdminAlert(
-          `WhatsApp outbound blocked for clinic ${clientId.slice(0,8)}\n${whatsappBudget.reason}\nPatient ${message.from.slice(-4)} did not receive reply.`,
-          'warning'
-        );
-      } else {
-        try {
-          addTrace(message.from, 'WHATSAPP', 'SENDING', `text=${response.text?.slice(0,50)}`);
-          replySent = await sendWhatsAppReply(message.from, response.text, message.messageId);
-          trackSpend(clientId, 0.007);
-          addTrace(message.from, 'WHATSAPP', replySent ? 'SENT' : 'FAILED_360DIALOG');
-          recordMessage(replySent, replySent ? null : '360dialog send failed');
-        } catch (sendErr) {
-          console.error(`[WEBHOOK] Failed to send WhatsApp reply to ${message.from}: ${sendErr.message}`);
-          addTrace(message.from, 'WHATSAPP', 'ERROR', sendErr.message);
-          recordError(`WhatsApp send: ${sendErr.message}`);
-        }
+      
+      // Alert on cost limits (but never block)
+      if (whatsappBudget.alerted) {
+        const isDouble = whatsappBudget.threshold === 'double';
+        const alertMsg = isDouble
+          ? `🚨 Clinic ${clientId.slice(0,8)} hit DOUBLE WhatsApp limit\n${whatsappBudget.reason}\nPatient ${message.from.slice(-4)} still received reply (service never blocked).`
+          : `⚠️ Clinic ${clientId.slice(0,8)} hit WhatsApp daily limit\n${whatsappBudget.reason}\nPatient ${message.from.slice(-4)} still received reply (service never blocked).`;
+        addTrace(message.from, 'WHATSAPP', isDouble ? 'COST_ALERT_DOUBLE' : 'COST_ALERT', whatsappBudget.reason);
+        sendAdminAlert(alertMsg, isDouble ? 'critical' : 'warning');
+        // Also notify clinic admin of overusage
+        sendClinicCostAlert(clientId, 'whatsapp', whatsappBudget.reason, isDouble);
+      }
+      
+      try {
+        addTrace(message.from, 'WHATSAPP', 'SENDING', `text=${response.text?.slice(0,50)}`);
+        replySent = await sendWhatsAppReply(message.from, response.text, message.messageId);
+        trackSpend(clientId, 0.007);
+        addTrace(message.from, 'WHATSAPP', replySent ? 'SENT' : 'FAILED_360DIALOG');
+        recordMessage(replySent, replySent ? null : '360dialog send failed');
+      } catch (sendErr) {
+        console.error(`[WEBHOOK] Failed to send WhatsApp reply to ${message.from}: ${sendErr.message}`);
+        addTrace(message.from, 'WHATSAPP', 'ERROR', sendErr.message);
+        recordError(`WhatsApp send: ${sendErr.message}`);
       }
     } else if (channel === 'whatsapp' && !clientId) {
       console.warn('[WEBHOOK] No clientId resolved — cannot track cost, but attempting to send reply anyway');
@@ -538,20 +597,19 @@ async function routeToAI(text, message, channel, preResolvedClientId = null) {
     }
     
     // Per-clinic cost protection: check daily API call budget
+    // NEVER block — always process through AI. Alert on overusage.
     const budgetCheck = checkLimit(clientId, 'daily_api_calls', 1);
-    if (!budgetCheck.allowed) {
-      console.warn(`[COST_PROTECTION] Clinic ${clientId} blocked: ${budgetCheck.reason}`);
+    if (budgetCheck.alerted) {
+      const isDouble = budgetCheck.threshold === 'double';
+      console.warn(`[COST_PROTECTION] Clinic ${clientId} API limit alert: ${budgetCheck.reason}`);
       sendAdminAlert(
-        `Clinic ${clientId.slice(0, 8)} hit daily API limit\n` +
+        `⚠️ Clinic ${clientId.slice(0, 8)} ${isDouble ? 'DOUBLE' : ''} daily API limit\n` +
         `${budgetCheck.reason}\n` +
-        `All further AI responses will use hardcoded fallbacks.`,
-        'warning'
+        `AI responses still working (service never blocked).`,
+        isDouble ? 'critical' : 'warning'
       );
-      return {
-        text: "I understand. The clinic team will get back to you shortly.",
-        channel,
-        ai_processed: false
-      };
+      // Notify clinic admin of overusage
+      sendClinicCostAlert(clientId, 'api_calls', budgetCheck.reason, isDouble);
     }
     
     const history = getConversationHistory(message.from);
