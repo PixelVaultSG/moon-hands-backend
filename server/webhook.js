@@ -1036,6 +1036,7 @@ async function handleTestEmail(req, res) {
       plan: data.plan || 'Premium',
       monthlyPrice: data.monthlyPrice || 547,
       iCalUrl: data.iCalUrl || 'https://moon-hands-backend.onrender.com/ical/test.ics',
+      agentName: data.agentName || null,
     });
     
     res.writeHead(200, { 'Content-Type': 'application/json' });

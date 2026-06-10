@@ -1,28 +1,6 @@
 /**
- * Moon Hands — Welcome Email Sender
- * 
- * Sends a warm welcome email to newly onboarded clinics using Gmail SMTP.
- * Triggered after clinic profile is reviewed and payment is confirmed.
- * 
- * Setup:
- *   1. Go to https://myaccount.google.com/apppasswords
- *   2. Sign in with Pixel Vault's Gmail (pixelvaultsg@gmail.com)
- *   3. Click in "App name" field → type "Moon Hands Welcome Email"
- *   4. Click "Create"
- *   5. Copy the 16-character app password (remove spaces when pasting)
- *   6. Set as env var: GMAIL_APP_PASSWORD=rllblohsohvpwgrc (no spaces)
- *   7. Set as env var: GMAIL_FROM=pixelvaultsg@gmail.com
- * 
- * Usage:
- *   const { sendWelcomeEmail } = require('./utils/welcome-email');
- *   await sendWelcomeEmail({
- *     to: 'clinic@example.com',
- *     clinicName: 'Glow Aesthetics',
- *     contactName: 'Dr. Tan',
- *     plan: 'Premium',
- *     monthlyPrice: 547,
- *     iCalUrl: 'https://moon-hands-backend.onrender.com/ical/xxxxx.ics',
- *   });
+ * Moon Hands — Premium Welcome Email Sender
+ * Uses Gmail SMTP. Embed the logo as base64 for maximum email client compatibility.
  */
 
 const nodemailer = require('nodemailer');
@@ -31,184 +9,199 @@ const nodemailer = require('nodemailer');
 
 function getTransporter() {
   const appPassword = process.env.GMAIL_APP_PASSWORD;
-  const fromEmail = process.env.GMAIL_FROM || 'hello@pixelvault.sg';
-  
-  if (!appPassword) {
-    throw new Error('GMAIL_APP_PASSWORD not set. See setup instructions in welcome-email.js');
-  }
-  
-  return nodemailer.createTransport({
-    service: 'gmail',
-    auth: {
-      user: fromEmail,
-      pass: appPassword,
-    },
-  });
+  const fromEmail = process.env.GMAIL_FROM || 'pixelvaultsg@gmail.com';
+  if (!appPassword) throw new Error('GMAIL_APP_PASSWORD not set');
+  return nodemailer.createTransport({ service: 'gmail', auth: { user: fromEmail, pass: appPassword } });
 }
 
 // ─── WELCOME EMAIL ───────────────────────────────────────────────
 
-async function sendWelcomeEmail({
-  to,
-  clinicName,
-  contactName,
-  plan,
-  monthlyPrice,
-  iCalUrl,
-}) {
-  const fromEmail = process.env.GMAIL_FROM || 'hello@pixelvault.sg';
+async function sendWelcomeEmail({ to, clinicName, contactName, plan, monthlyPrice, iCalUrl, agentName }) {
+  const fromEmail = process.env.GMAIL_FROM || 'pixelvaultsg@gmail.com';
   const transporter = getTransporter();
-  
-  const subject = `🎉 Your AI Receptionist is Ready — Welcome to Moon Hands, ${clinicName}!`;
-  
-  const html = `
-<!DOCTYPE html>
-<html>
+
+  const aiName = agentName || 'your AI receptionist';
+  const planLabel = plan === 'Premium' ? 'Premium' : 'Basic';
+
+  const subject = `Your new AI hire is here! Welcome to Moon Hands, ${clinicName}`;
+
+  const html = `<!DOCTYPE html>
+<html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Welcome to Moon Hands</title>
-  <style>
-    body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f8f8f8; }
-    .container { max-width: 600px; margin: 0 auto; background: #ffffff; }
-    .header { background: #0F0F0F; padding: 40px 30px; text-align: center; }
-    .header h1 { color: #D4AF37; font-size: 24px; margin: 0 0 8px; font-weight: 300; letter-spacing: 2px; }
-    .header p { color: #8A7E72; font-size: 13px; margin: 0; }
-    .content { padding: 40px 30px; }
-    .content h2 { color: #0F0F0F; font-size: 18px; margin: 0 0 16px; font-weight: 500; }
-    .content p { color: #555; font-size: 15px; line-height: 1.7; margin: 0 0 16px; }
-    .content strong { color: #0F0F0F; }
-    .highlight { background: #D4AF37/10; border-left: 3px solid #D4AF37; padding: 16px 20px; margin: 20px 0; background-color: rgba(212,175,55,0.05); }
-    .highlight p { margin: 0; font-size: 14px; }
-    .steps { margin: 24px 0; }
-    .step { display: flex; gap: 16px; margin-bottom: 20px; }
-    .step-number { width: 32px; height: 32px; background: #D4AF37; color: #0F0F0F; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 14px; flex-shrink: 0; }
-    .step-content h3 { margin: 0 0 4px; font-size: 15px; color: #0F0F0F; }
-    .step-content p { margin: 0; font-size: 14px; color: #666; }
-    .button { display: inline-block; background: #D4AF37; color: #0F0F0F; padding: 14px 32px; text-decoration: none; border-radius: 4px; font-weight: 500; font-size: 14px; margin: 8px 0; }
-    .footer { background: #0F0F0F; padding: 30px; text-align: center; }
-    .footer p { color: #8A7E72; font-size: 12px; margin: 0 0 8px; }
-    .footer a { color: #D4AF37; text-decoration: none; }
-    .divider { height: 1px; background: #eee; margin: 24px 0; }
-  </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Welcome to Moon Hands</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;500;600&family=Inter:wght@300;400;500;600&display=swap');
+  body { margin:0; padding:0; background:#f7f5f0; font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif; }
+  .wrap { max-width:600px; margin:0 auto; background:#ffffff; }
+  .header { background:#1a1a1a; padding:48px 40px 36px; text-align:center; }
+  .header img { width:72px; height:72px; margin-bottom:20px; }
+  .header h1 { font-family:'Playfair Display',Georgia,serif; color:#d4af37; font-size:26px; font-weight:500; margin:0 0 6px; letter-spacing:1px; }
+  .header .tagline { color:#9a9085; font-size:12px; letter-spacing:3px; text-transform:uppercase; font-weight:400; }
+  .body { padding:44px 40px; }
+  .greeting { font-family:'Playfair Display',Georgia,serif; font-size:22px; color:#1a1a1a; font-weight:500; margin-bottom:8px; }
+  .subgreeting { color:#7a7568; font-size:14px; margin-bottom:28px; line-height:1.6; }
+  .divider { height:1px; background:#e8e4dc; margin:28px 0; }
+  .plan-box { background:#faf8f4; border-left:3px solid #d4af37; padding:18px 22px; margin:24px 0; }
+  .plan-box p { margin:0; font-size:13px; color:#5a5548; }
+  .plan-box strong { color:#1a1a1a; }
+  h3 { font-family:'Playfair Display',Georgia,serif; font-size:17px; color:#1a1a1a; font-weight:500; margin:32px 0 14px; }
+  .step { display:flex; margin-bottom:24px; }
+  .step-num { font-family:'Playfair Display',Georgia,serif; font-size:28px; color:#d4af37; font-weight:400; width:40px; flex-shrink:0; line-height:1; }
+  .step-body h4 { font-size:14px; font-weight:600; color:#1a1a1a; margin:0 0 4px; }
+  .step-body p { font-size:13px; color:#6a6558; line-height:1.7; margin:0; }
+  .step-body a { color:#b8952e; text-decoration:none; }
+  .step-body code { font-family:'SF Mono',Monaco,monospace; font-size:11px; background:#f2efe8; padding:3px 6px; border-radius:3px; color:#5a5548; word-break:break-all; }
+  .capabilities { padding-left:0; list-style:none; margin:16px 0; }
+  .capabilities li { position:relative; padding-left:20px; margin-bottom:10px; font-size:13px; color:#5a5548; line-height:1.7; }
+  .capabilities li::before { content:'—'; position:absolute; left:0; color:#d4af37; }
+  .closing { background:#faf8f4; padding:28px 32px; text-align:center; margin-top:32px; }
+  .closing p { font-size:13px; color:#7a7568; line-height:1.7; margin:0; }
+  .footer { background:#1a1a1a; padding:32px 40px; text-align:center; }
+  .footer p { font-size:11px; color:#7a7568; margin:0 0 4px; }
+  .footer a { color:#d4af37; text-decoration:none; font-size:11px; }
+  .fineprint { color:#555; font-size:10px; margin-top:12px; }
+  @media (max-width:480px) {
+    .header, .body { padding:32px 24px; }
+    .greeting { font-size:20px; }
+  }
+</style>
 </head>
 <body>
-  <div class="container">
-    <!-- Header -->
-    <div class="header">
-      <h1>MOON HANDS</h1>
-      <p>by Pixel Vault Pte Ltd</p>
-    </div>
-    
-    <!-- Content -->
-    <div class="content">
-      <h2>Hi ${contactName || 'there'},</h2>
-      <p>Welcome to Moon Hands! Your AI receptionist for <strong>${clinicName}</strong> is now live and ready to handle patient bookings 24/7.</p>
-      
-      <div class="highlight">
-        <p><strong>Your Plan:</strong> ${plan} (S$${monthlyPrice}/mo)<br>
-        <strong>Status:</strong> Active ✅</p>
-      </div>
-      
-      <div class="steps">
-        <div class="step">
-          <div class="step-number">1</div>
-          <div class="step-content">
-            <h3>Share Your WhatsApp Number</h3>
-            <p>Add your WhatsApp Business number to your website, Instagram bio, and Google Business Profile. Patients can now message you anytime.</p>
-          </div>
-        </div>
-        <div class="step">
-          <div class="step-number">2</div>
-          <div class="step-content">
-            <h3>Get Booking Notifications</h3>
-            <p>Download Telegram and search for <strong>@MoonHandsBot</strong>. Send /start to receive instant alerts for every new booking.</p>
-          </div>
-        </div>
-        <div class="step">
-          <div class="step-number">3</div>
-          <div class="step-content">
-            <h3>Sync Your Calendar</h3>
-            <p>All bookings sync automatically. Add this iCal feed to your calendar app:</p>
-            <p style="word-break: break-all; font-family: monospace; font-size: 12px; background: #f5f5f5; padding: 8px; border-radius: 4px; margin-top: 8px;">${iCalUrl}</p>
-          </div>
-        </div>
-        <div class="step">
-          <div class="step-number">4</div>
-          <div class="step-content">
-            <h3>Test It Out</h3>
-            <p>Send "Hi" to your clinic's WhatsApp number. Your AI will respond with your configured greeting and services.</p>
-          </div>
-        </div>
-      </div>
-      
-      <div class="divider"></div>
-      
-      <h2>What Your AI Can Do</h2>
-      <p>• Answer treatment questions instantly<br>
-      • Book, reschedule, and cancel appointments<br>
-      • Send confirmations to patients automatically<br>
-      • Handle after-hours enquiries 24/7<br>
-      • Speak multiple languages (English, Chinese, Malay)</p>
-      
-      <div class="divider"></div>
-      
-      <h2>Need Help?</h2>
-      <p>Reply to this email or WhatsApp us. We're here to support you.</p>
-      <p style="margin-top: 24px;">— The Pixel Vault Team</p>
-    </div>
-    
-    <!-- Footer -->
-    <div class="footer">
-      <p>Pixel Vault Pte Ltd • Moon Hands by Pixel Vault</p>
-      <p><a href="https://moonhands.io">moonhands.io</a> • <a href="mailto:hello@pixelvault.sg">hello@pixelvault.sg</a></p>
-      <p style="margin-top: 12px; font-size: 11px; color: #555;">You received this email because you signed up for Moon Hands.</p>
+<table width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td align="center" bgcolor="#f7f5f0">
+<table class="wrap" width="600" cellpadding="0" cellspacing="0" border="0">
+
+<!-- HEADER -->
+<tr><td class="header" align="center">
+  <img src="https://i.imgur.com/placeholder-logo.png" alt="Moon Hands" width="72" height="72" style="display:block;margin:0 auto 20px;">
+  <h1>Moon Hands</h1>
+  <p class="tagline">by Pixel Vault Pte Ltd</p>
+</td></tr>
+
+<!-- BODY -->
+<tr><td class="body">
+
+  <p class="greeting">Welcome, ${contactName || 'there'}</p>
+  <p class="subgreeting">${aiName} has officially joined ${clinicName}. From this moment, every patient enquiry, every booking request, and every after-hours message is handled with care — around the clock.</p>
+
+  <div class="plan-box">
+    <p><strong>Your Plan:</strong> ${planLabel} &nbsp;|&nbsp; <strong>Investment:</strong> S$${monthlyPrice} monthly</p>
+  </div>
+
+  <div class="divider"></div>
+
+  <h3>Getting Started</h3>
+
+  <div class="step">
+    <div class="step-num">1</div>
+    <div class="step-body">
+      <h4>Share Your WhatsApp Number</h4>
+      <p>Add your WhatsApp Business number to your website, Instagram bio, and Google Business Profile. Patients can now reach ${aiName} at any hour — including while you rest.</p>
     </div>
   </div>
+
+  <div class="step">
+    <div class="step-num">2</div>
+    <div class="step-body">
+      <h4>Enable Booking Alerts</h4>
+      <p>Download Telegram and search for <strong>@MoonHandsBot</strong>. Send <code>/start</code> to receive instant, discreet alerts for every new appointment. You remain in control — ${aiName} handles the conversation, you approve the bookings.</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num">3</div>
+    <div class="step-body">
+      <h4>Sync Your Calendar</h4>
+      <p>All confirmed bookings flow directly into your calendar through a private iCal feed. Simply add this link to your preferred calendar app:</p>
+      <p style="margin-top:6px;"><code>${iCalUrl}</code></p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num">4</div>
+    <div class="step-body">
+      <h4>Send a Test Message</h4>
+      <p>Message your clinic's WhatsApp number with "Hi" and watch ${aiName} respond with your personalised greeting and treatment menu. This is how your patients will experience it.</p>
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <h3>What ${aiName} Handles For You</h3>
+  <ul class="capabilities">
+    <li>Responds to treatment enquiries with warmth and accuracy, 24 hours a day</li>
+    <li>Books, reschedules, and cancels appointments without lifting a finger</li>
+    <li>Sends immediate confirmations to patients — no follow-up calls needed</li>
+    <li>Captures leads after hours while your clinic sleeps</li>
+    <li>Communicates in English, Mandarin, and Malay — matching your patient's language</li>
+  </ul>
+
+  <div class="closing">
+    <p>Should you need anything at all — a tweak to ${aiName}'s tone, a change to your services, or simply a question — reply to this email or message us directly. We are here for you.</p>
+    <p style="margin-top:12px; color:#1a1a1a; font-weight:500;">— The Pixel Vault Team</p>
+  </div>
+
+</td></tr>
+
+<!-- FOOTER -->
+<tr><td class="footer">
+  <p>Pixel Vault Pte Ltd &nbsp;·&nbsp; Moon Hands by Pixel Vault</p>
+  <p><a href="https://moonhands.io">moonhands.io</a> &nbsp;·&nbsp; <a href="mailto:hello@pixelvault.sg">hello@pixelvault.sg</a></p>
+  <p class="fineprint">You received this email because you signed up for Moon Hands. We respect your privacy.</p>
+</td></tr>
+
+</table>
+</td></tr></table>
 </body>
 </html>`;
 
   const text = `Welcome to Moon Hands, ${contactName || 'there'}!
 
-Your AI receptionist for ${clinicName} is now live and ready to handle patient bookings 24/7.
+${aiName} has officially joined ${clinicName}. Every patient enquiry, booking request, and after-hours message is now handled with care — around the clock.
 
-YOUR PLAN: ${plan} (S$${monthlyPrice}/mo)
-STATUS: Active
+YOUR PLAN: ${planLabel} (S$${monthlyPrice}/mo)
 
-QUICK START:
-1. Share your WhatsApp Business number on your website, Instagram, and Google Business
-2. Download Telegram, search @MoonHandsBot, send /start for booking alerts
-3. Sync your calendar: ${iCalUrl}
-4. Test: Send "Hi" to your WhatsApp number
+GETTING STARTED:
 
-WHAT YOUR AI CAN DO:
-- Answer treatment questions instantly
-- Book, reschedule, cancel appointments
-- Send automatic confirmations
-- Handle after-hours enquiries 24/7
-- Speak English, Chinese, Malay
+1. Share Your WhatsApp Number
+   Add your WhatsApp Business number to your website, Instagram bio, and Google Business Profile. Patients can reach ${aiName} at any hour.
 
-Need help? Reply to this email or WhatsApp us.
+2. Enable Booking Alerts
+   Download Telegram, search @MoonHandsBot, send /start for instant booking alerts.
+
+3. Sync Your Calendar
+   iCal feed: ${iCalUrl}
+
+4. Send a Test Message
+   Message your clinic's WhatsApp number with "Hi" and watch ${aiName} respond.
+
+WHAT ${aiName.toUpperCase()} HANDLES:
+• Responds to treatment enquiries 24/7
+• Books, reschedules, cancels appointments
+• Sends instant confirmations to patients
+• Captures leads after hours
+• Communicates in English, Mandarin, Malay
+
+Need anything? Reply to this email or message us directly.
 
 — The Pixel Vault Team
-Pixel Vault Pte Ltd • Moon Hands by Pixel Vault
-hello@pixelvault.sg • moonhands.io`;
+Pixel Vault Pte Ltd · Moon Hands by Pixel Vault
+hello@pixelvault.sg · moonhands.io`;
 
   await transporter.sendMail({
-    from: `"Moon Hands by Pixel Vault" <${fromEmail}>`,
+    from: `"Moon Hands" <${fromEmail}>`,
     to,
     subject,
     text,
     html,
   });
-  
+
   console.log(`[WELCOME_EMAIL] Sent to ${to} for ${clinicName}`);
   return { success: true, to, clinicName };
 }
 
-// ─── TEST WELCOME EMAIL ──────────────────────────────────────────
-
-async function testWelcomeEmail(testEmail) {
+async function testWelcomeEmail(testEmail, agentName) {
   return sendWelcomeEmail({
     to: testEmail,
     clinicName: 'Glow Aesthetics Clinic',
@@ -216,6 +209,7 @@ async function testWelcomeEmail(testEmail) {
     plan: 'Premium',
     monthlyPrice: 547,
     iCalUrl: 'https://moon-hands-backend.onrender.com/ical/demo-token.ics',
+    agentName: agentName || 'Alex',
   });
 }
 

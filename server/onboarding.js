@@ -563,6 +563,7 @@ async function activateClinic(req, res) {
         plan: submission.selected_plan === 'professional' ? 'Premium' : 'Basic',
         monthlyPrice: planPrice,
         iCalUrl: `https://moon-hands-backend.onrender.com/ical/${clientRecord?.ical_token}.ics`,
+        agentName: submission.agent_name || null,
       });
     } catch (emailErr) {
       console.error('[ACTIVATE] Welcome email failed:', emailErr.message);
