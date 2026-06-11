@@ -506,6 +506,11 @@ async function activateClinic(req, res) {
         : (submission.faqs || []);
     } catch { faqs = []; }
     
+    // Generate unique webhook token for this clinic
+    const webhookToken = require('crypto').randomBytes(24).toString('hex');
+    const baseUrl = process.env.WEBHOOK_BASE_URL || 'https://moon-hands-backend.onrender.com';
+    const webhookUrl = `${baseUrl}/webhook/whatsapp?clinic_id=${clientId}&token=${webhookToken}`;
+
     // 1. Create client record
     const { error: clientErr } = await db.supabase.from('clients').insert({
       id: clientId,
@@ -517,6 +522,7 @@ async function activateClinic(req, res) {
       status: 'active',
       plan: submission.selected_plan || 'starter',
       ical_token: require('crypto').randomUUID(),
+      webhook_token: webhookToken,
     });
     
     if (clientErr) throw clientErr;
@@ -578,21 +584,23 @@ async function activateClinic(req, res) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           chat_id: adminChatId,
-          text: `✅ CLINIC ACTIVATED\n\n${submission.clinic_name}\nStatus: ACTIVE\nClient ID: ${clientId.slice(0,8)}\nEmail sent: ${emailResult ? 'Yes' : 'No'}`,
+          text: `✅ CLINIC ACTIVATED\n\n${submission.clinic_name}\nStatus: ACTIVE\nClient ID: ${clientId.slice(0,8)}\nWebhook URL configured\nEmail sent: ${emailResult ? 'Yes' : 'No'}`,
         })
       });
     }
-    
+
     return res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({
       status: 'success',
       message: 'Clinic activated successfully',
       client_id: clientId,
       email_sent: !!emailResult,
+      webhook_url: webhookUrl,
       next_steps: [
         'Clinic created in database',
         'Welcome email sent',
-        'Guide clinic to set up 360dialog WhatsApp Business API',
-        'Clinic tests bot → goes LIVE'
+        `Webhook URL: ${webhookUrl}`,
+        'Share this webhook URL with clinic for their 360dialog configuration',
+        'Clinic configures 360dialog → tests bot → goes LIVE'
       ]
     }));
     

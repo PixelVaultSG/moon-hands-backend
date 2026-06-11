@@ -1,13 +1,25 @@
 /**
  * Moon Hands - Secure Webhook Server
  * Receives messages from 360dialog (WhatsApp) and VAPI (Voice)
- * 
+ *
+ * AUTHENTICATION ARCHITECTURE — Per-Clinic Webhook URLs:
+ * Each clinic gets a unique webhook URL with embedded credentials:
+ *   /webhook/whatsapp?clinic_id=ABC123&token=xyz789
+ *
+ * The clinic's 360dialog account posts to this URL. We validate:
+ * 1. clinic_id exists in our database
+ * 2. token matches the clinic's webhook_token
+ * 3. clinic is active (status = 'active')
+ *
+ * Internal/admin endpoints use x-api-key header auth.
+ * No more WEBHOOK_AUTH_REQUIRED=false hack needed.
+ *
  * SECURITY-FIRST DESIGN:
+ * - Per-clinic query parameter authentication
  * - DDoS protection (IP-based rate limiting)
- * - Request signature verification (HMAC)
+ * - Request signature verification (HMAC) for internal endpoints
  * - Prompt injection blocking on EVERY message
  * - Input sanitization (HTML/script stripping)
- * - API key authentication on all endpoints
  * - Request size limits (prevent DoS)
  * - Comprehensive audit logging
  */
@@ -228,6 +240,93 @@ function checkAuth(req) {
   return key === effectiveApiKey;
 }
 
+// Cache for clinic webhook tokens — avoids repeated Supabase lookups
+// Format: { token: { clientId, expiresAt } }
+const clinicTokenCache = new Map();
+const TOKEN_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+/**
+ * Validate clinic webhook via query parameters.
+ * Each clinic's 360dialog account posts to:
+ *   /webhook/whatsapp?clinic_id=ABC123&token=xyz789
+ *
+ * @param {URL} url — The parsed request URL
+ * @returns {Promise<{valid: boolean, clientId: string|null, clinicName: string|null, error: string|null}>}
+ */
+async function validateClinicWebhook(url) {
+  const clinicId = url.searchParams.get('clinic_id');
+  const token = url.searchParams.get('token');
+
+  if (!clinicId || !token) {
+    return { valid: false, clientId: null, clinicName: null, error: 'Missing clinic_id or token parameter' };
+  }
+
+  // Check cache first
+  const cacheKey = `${clinicId}:${token}`;
+  const cached = clinicTokenCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return { valid: true, clientId: cached.clientId, clinicName: cached.clinicName, error: null };
+  }
+
+  try {
+    const { supabase } = require('../supabase/client');
+    const { data, error } = await supabase
+      .from('clients')
+      .select('id, name, webhook_token, status')
+      .eq('id', clinicId)
+      .single();
+
+    if (error || !data) {
+      return { valid: false, clientId: null, clinicName: null, error: 'Clinic not found' };
+    }
+
+    if (data.status !== 'active') {
+      return { valid: false, clientId: null, clinicName: null, error: 'Clinic is not active' };
+    }
+
+    // Constant-time comparison to prevent timing attacks
+    const expectedBuf = Buffer.from(data.webhook_token || '', 'utf8');
+    const providedBuf = Buffer.from(token, 'utf8');
+    if (expectedBuf.length !== providedBuf.length) {
+      return { valid: false, clientId: null, clinicName: null, error: 'Invalid token' };
+    }
+    const match = crypto.timingSafeEqual(expectedBuf, providedBuf);
+
+    if (!match) {
+      return { valid: false, clientId: null, clinicName: null, error: 'Invalid token' };
+    }
+
+    // Cache successful validation
+    clinicTokenCache.set(cacheKey, {
+      clientId: data.id,
+      clinicName: data.name,
+      expiresAt: Date.now() + TOKEN_CACHE_TTL
+    });
+
+    return { valid: true, clientId: data.id, clinicName: data.name, error: null };
+
+  } catch (err) {
+    console.error('[WEBHOOK_AUTH] Validation error:', err.message);
+    return { valid: false, clientId: null, clinicName: null, error: 'Validation error' };
+  }
+}
+
+/**
+ * Generate a unique webhook URL for a clinic.
+ * Called during onboarding / clinic activation.
+ */
+function generateWebhookToken() {
+  return crypto.randomBytes(24).toString('hex'); // 48-char hex string
+}
+
+/**
+ * Build the full webhook URL for a clinic to configure in 360dialog.
+ */
+function getClinicWebhookUrl(clinicId, token) {
+  const baseUrl = process.env.WEBHOOK_BASE_URL || 'https://moon-hands-backend.onrender.com';
+  return `${baseUrl}/webhook/whatsapp?clinic_id=${clinicId}&token=${token}`;
+}
+
 // ─── DDoS PROTECTION ─────────────────────────────────────────────
 
 function getClientIP(req) {
@@ -255,52 +354,59 @@ function sendSecurityResponse(res, status, message, details = {}) {
 
 // ─── MAIN WEBHOOK HANDLER ────────────────────────────────────────
 
-async function handleWebhook(req, res, channel) {
+async function handleWebhook(req, res, channel, url) {
   const ip = getClientIP(req);
   const startTime = Date.now();
-  
+
   try {
     // Layer 1: DDoS check
     const ddos = checkDDoS(ip);
     if (!ddos.allowed) {
-      console.warn(`[SECURITY] DDoS blocked IP ${ip}: ${ddos.level}`);
-      return sendSecurityResponse(res, 429, 'Too many requests', { 
-        retryAfter: ddos.retryAfter 
+      console.warn(`[SECURITY] DDoS blocked IP ${ip}: ${ddos.reason}`);
+      return sendSecurityResponse(res, 429, 'Too many requests', {
+        retryAfter: ddos.retryAfter
       });
     }
-    
-    // Layer 2: API key auth — ALWAYS enforced unless explicitly disabled via env var
-    // Set WEBHOOK_AUTH_REQUIRED=false ONLY for sandbox testing with 360dialog
-    // Production: must have API_KEY set and auth enabled
-    const authRequired = process.env.WEBHOOK_AUTH_REQUIRED !== 'false';
-    if (authRequired && !API_KEY) {
-      console.error(`[SECURITY] API_KEY not configured — webhook cannot authenticate. Set API_KEY env var.`);
-      return sendSecurityResponse(res, 503, 'Authentication not configured');
+
+    // Layer 2: PER-CLINIC QUERY PARAMETER AUTHENTICATION
+    // Each clinic's 360dialog account posts to:
+    //   /webhook/whatsapp?clinic_id=ABC123&token=xyz789
+    // We validate the token against the clinic's stored webhook_token in Supabase.
+    let preResolvedClientId = null;
+    let preResolvedClinicName = null;
+
+    if (channel === 'whatsapp') {
+      const auth = await validateClinicWebhook(url);
+      if (!auth.valid) {
+        console.warn(`[SECURITY] Invalid clinic webhook from ${ip}: ${auth.error}`);
+        await logSecurityEvent({
+          severity: 'high',
+          category: 'auth_failure',
+          service: 'webhook',
+          description: `Clinic webhook auth failed: ${auth.error}`,
+          details: { ip, error: auth.error, path: url.pathname },
+          source_ip: ip,
+        });
+        return sendSecurityResponse(res, 401, 'Unauthorized', { reason: auth.error });
+      }
+      preResolvedClientId = auth.clientId;
+      preResolvedClinicName = auth.clinicName;
+      addTrace(null, 'AUTH', 'CLINIC_TOKEN_VALID', `${auth.clinicName} (${auth.clientId.slice(0, 8)})`);
+    } else {
+      // Voice channel: still uses header auth (x-api-key)
+      if (!checkAuth(req)) {
+        console.warn(`[SECURITY] Unauthorized voice webhook from ${ip}`);
+        return sendSecurityResponse(res, 401, 'Unauthorized');
+      }
     }
-    if (authRequired && !checkAuth(req)) {
-      console.warn(`[SECURITY] Unauthorized webhook from ${ip}`);
-      await logSecurityEvent({
-        severity: 'critical',
-        category: 'auth_failure',
-        service: 'webhook',
-        description: 'Unauthorized webhook request rejected',
-        details: { ip, userAgent: req.headers['user-agent'] },
-        source_ip: ip,
-      });
-      return sendSecurityResponse(res, 401, 'Unauthorized');
-    }
-    
+
     // Layer 3: Parse body (with size limit)
     const body = await parseBody(req);
-    
-    // Layer 4: Verify webhook signature — REQUIRED when WEBHOOK_SECRET is set
-    // SKIPPED in sandbox mode (WEBHOOK_AUTH_REQUIRED=false) — 360dialog doesn't send signatures
+
+    // Layer 4: Verify webhook signature — for internal/protected endpoints
+    // Note: 360dialog cannot send custom signatures. Per-clinic token auth (Layer 2) is sufficient.
     const signature = req.headers['x-signature'] || req.headers['x-hub-signature-256'];
-    if (authRequired && WEBHOOK_SECRET) {
-      if (!signature) {
-        console.warn(`[SECURITY] Missing webhook signature from ${ip}`);
-        return sendSecurityResponse(res, 401, 'Signature required');
-      }
+    if (WEBHOOK_SECRET && signature) {
       if (!verifySignature(body.raw || body, signature, WEBHOOK_SECRET)) {
         console.warn(`[SECURITY] Invalid webhook signature from ${ip}`);
         return sendSecurityResponse(res, 401, 'Invalid signature');
@@ -423,8 +529,11 @@ async function handleWebhook(req, res, channel) {
     addTrace(message.from, 'LOOP', 'PASSED');
     
     // Layer 9.5: Resolve client ID for cost tracking and AI routing
-    const clientId = await resolveClientId(message.to, channel);
-    addTrace(message.from, 'CLIENT', clientId ? 'RESOLVED' : 'NOT_FOUND', clientId);
+    // If query param auth already resolved the clinic (WhatsApp), use that directly.
+    // Otherwise fall back to phone number lookup (voice channel).
+    const clientId = preResolvedClientId || await resolveClientId(message.to, channel);
+    const clinicName = preResolvedClinicName || null;
+    addTrace(message.from, 'CLIENT', clientId ? 'RESOLVED' : 'NOT_FOUND', `${clinicName || ''} ${clientId || ''}`.trim());
     
     // Layer 10: Route to appropriate AI handler
     let response;
@@ -909,9 +1018,9 @@ async function requestHandler(req, res) {
     
     // Route handlers
     if (url.pathname === '/webhook/whatsapp' && req.method === 'POST') {
-      await handleWebhook(req, res, 'whatsapp');
+      await handleWebhook(req, res, 'whatsapp', url);
     } else if (url.pathname === '/webhook/voice' && req.method === 'POST') {
-      await handleWebhook(req, res, 'voice');
+      await handleWebhook(req, res, 'voice', url);
     } else if (url.pathname === '/api/onboarding' && req.method === 'POST') {
       await handleOnboarding(req, res);
     } else if (url.pathname === '/api/activate-clinic' && req.method === 'POST') {
@@ -1056,9 +1165,9 @@ if (require.main === module) {
   standaloneServer.listen(standalonePort, () => {
     console.log(`Webhook server (standalone) on port ${standalonePort}`);
   });
-  module.exports = { server: standaloneServer, requestHandler, API_KEY: effectiveApiKey, WEBHOOK_SECRET };
+  module.exports = { server: standaloneServer, requestHandler, API_KEY: effectiveApiKey, WEBHOOK_SECRET, generateWebhookToken, getClinicWebhookUrl };
 } else {
   // Module mode: export handler for server.js to use
   console.log('  📦 Webhook module loaded — waiting for server.js to bind');
-  module.exports = { requestHandler, API_KEY: effectiveApiKey, WEBHOOK_SECRET };
+  module.exports = { requestHandler, API_KEY: effectiveApiKey, WEBHOOK_SECRET, generateWebhookToken, getClinicWebhookUrl };
 }
