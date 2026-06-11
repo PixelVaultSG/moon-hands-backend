@@ -2,19 +2,29 @@
 
 Your backend is deployed and healthy. Complete these steps to activate all security and monitoring features.
 
+> **Updated 2026-06-11:** Per-clinic query parameter authentication is now live. Each clinic gets a unique webhook URL (`?clinic_id=XXX&token=YYY`). The old `WEBHOOK_AUTH_REQUIRED=false` hack is no longer needed.
+
 ---
 
-## Step 1: WhatsApp Sandbox (Critical — Do First)
+## Step 1: Run the Webhook Token Migration (Critical — Do First)
 
-360dialog's sandbox cannot send custom authentication headers. You MUST disable webhook auth for sandbox mode.
+Run this SQL in your Supabase SQL Editor to add the `webhook_token` column:
 
-| Variable | Value | Where |
-|----------|-------|-------|
-| `WEBHOOK_AUTH_REQUIRED` | `false` | Render Dashboard → Environment |
+```sql
+-- Add webhook_token column to clients table
+ALTER TABLE clients 
+ADD COLUMN IF NOT EXISTS webhook_token TEXT UNIQUE;
 
-**Path:** [dashboard.render.com](https://dashboard.render.com) → Select `moon-hands-backend` → Environment → Add
+-- Index for fast lookups
+CREATE INDEX IF NOT EXISTS idx_clients_webhook_token ON clients(webhook_token);
 
-> ⚠️ **Remove this variable in production** — when you get a 360dialog production account, set it to `true` or delete it entirely.
+-- Generate tokens for existing clinics
+UPDATE clients 
+SET webhook_token = encode(gen_random_bytes(24), 'hex')
+WHERE webhook_token IS NULL AND status = 'active';
+```
+
+**Path:** Supabase Dashboard → SQL Editor → New Query → Paste → Run
 
 ---
 
@@ -117,18 +127,24 @@ Your booking notifications go to Telegram. Confirm:
 | `SUPABASE_URL` | ✅ Required | Your Supabase project URL |
 | `SUPABASE_SERVICE_ROLE_KEY` | ✅ Required | service_role key |
 | `OPENAI_API_KEY` | ✅ Required | platform.openai.com |
-| `DIALOG360_API_KEY` | ✅ Required | 360dialog Hub |
-| `WHATSAPP_PHONE_NUMBER_ID` | ✅ Required | Your WABA number ID |
+| `DIALOG360_API_KEY` | ✅ Required | Your 360dialog API key (for outbound replies) |
 | `TELEGRAM_BOT_TOKEN` | ✅ Required | @BotFather |
 | `TELEGRAM_ADMIN_CHAT_ID` | ✅ Required | @userinfobot |
 | `TELEGRAM_ALERT_CHAT_ID` | ✅ Required | Alerts channel |
-| `API_KEY` | ✅ Required | Webhook auth key |
-| `WEBHOOK_AUTH_REQUIRED` | ⚠️ Set to `false` | For sandbox only |
-| `MASTER_SECRET` | 🔲 Add now | `openssl rand -hex 32` |
-| `MOONHANDS_AGENT_SECRET` | 🔲 Add now | `openssl rand -hex 16` |
+| `API_KEY` | ✅ Required | Internal endpoint auth (x-api-key header) |
+| `MASTER_SECRET` | 🔲 Add now | `openssl rand -hex 32` — device registration |
+| `MOONHANDS_AGENT_SECRET` | 🔲 Add now | `openssl rand -hex 16` — agent identification |
 | `MASTER_DEVICE_FPS` | 🔲 Add after Step 3 | From /api/register-device |
-| `WEBHOOK_SECRET` | 🔲 Optional | For signature verification |
+| `WEBHOOK_BASE_URL` | ✅ Has default | `https://moon-hands-backend.onrender.com` |
 | `MAX_DAILY_COST_PER_CLINIC` | ✅ Has default | S~5 USD default |
+
+### No longer needed (removed)
+
+| Variable | Reason |
+|----------|--------|
+| `WEBHOOK_AUTH_REQUIRED` | Replaced by per-clinic query param auth |
+| `WEBHOOK_SECRET` | 360dialog cannot send custom signatures; clinic tokens are sufficient |
+| `WHATSAPP_PHONE_NUMBER_ID` | Resolved per-clinic via Supabase |
 
 ---
 
