@@ -1,36 +1,21 @@
 /**
- * Moon Hands — Welcome Email (v6 — CID Attachment + Minified HTML)
- *
- * - Logo attached as CID (inline, no external URL, no base64 bloat)
- * - HTML minified to ~4KB
- * - Total email ~15KB (well under Gmail 102KB limit)
- * - No emoji, no external dependencies
+ * Moon Hands — Welcome Email (v7 — Official Logo + Ultra-Compact)
+ * 
+ * - Official logo embedded as optimized base64 (80x80, 5.4KB)
+ * - Total email: ~12KB (well under Gmail 102KB limit)
+ * - No external dependencies, no CID attachments, no emoji
  */
 
 const nodemailer = require('nodemailer');
-const fs = require('fs');
-const path = require('path');
 
-let logoBuffer = null;
-try {
-  logoBuffer = fs.readFileSync(path.join(__dirname, '..', 'public', 'logo-email.png'));
-} catch (e) {
-  // fallback: try the full-size logo
-  try {
-    logoBuffer = fs.readFileSync(path.join(__dirname, '..', 'public', 'logo.png'));
-  } catch (e2) {
-    console.warn('[WELCOME_EMAIL] No logo file found');
-  }
-}
+// Official Moon Hands logo — 80x80 optimized PNG
+const LOGO_BASE64 = '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';
 
 function getTransporter() {
   const appPassword = process.env.GMAIL_APP_PASSWORD;
   const fromEmail = process.env.GMAIL_FROM || 'pixelvaultsg@gmail.com';
   if (!appPassword) throw new Error('GMAIL_APP_PASSWORD not set');
-  return nodemailer.createTransport({
-    service: 'gmail',
-    auth: { user: fromEmail, pass: appPassword }
-  });
+  return nodemailer.createTransport({ service: 'gmail', auth: { user: fromEmail, pass: appPassword } });
 }
 
 async function sendWelcomeEmail({ to, clinicName, contactName, plan, monthlyPrice, agentName }) {
@@ -40,64 +25,20 @@ async function sendWelcomeEmail({ to, clinicName, contactName, plan, monthlyPric
   const planLabel = plan === 'Premium' ? 'Premium' : 'Basic';
   const subject = `Your new AI hire is here! Welcome to Moon Hands, ${clinicName}`;
 
-  const attachments = [];
-  if (logoBuffer) {
-    attachments.push({
-      filename: 'logo.png',
-      content: logoBuffer,
-      cid: 'moonhands-logo',
-      contentType: 'image/png',
-    });
-  }
-
-  const logoHtml = logoBuffer
-    ? '<img src="cid:moonhands-logo" alt="Moon Hands" width="56" height="56" style="display:block;margin:0 auto 12px;">'
-    : '<div style="font-size:36px;text-align:center;margin-bottom:8px;">&#127769;</div>';
-
-  // MINIFIED HTML — compact, no unnecessary whitespace
   const html = `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
 <html xmlns="http://www.w3.org/1999/xhtml"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/></head>
 <body style="margin:0;padding:0;background:#f5f3ee;">
 <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f5f3ee;"><tr><td align="center" style="padding:16px 8px;">
 <table width="600" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;width:100%;background:#fff;border-radius:6px;overflow:hidden;font-family:Arial,Helvetica,sans-serif;color:#1a1a1a;">
-<tr><td align="center" style="background:#1a1a1a;padding:32px 20px 26px;">${logoHtml}<div style="font-family:Georgia,serif;font-size:26px;color:#c9a84c;letter-spacing:3px;text-transform:uppercase;">Moon Hands</div><div style="font-size:10px;color:#7a7568;letter-spacing:3px;text-transform:uppercase;margin-top:6px;">by Pixel Vault Pte Ltd</div></td></tr>
-<tr><td style="padding:32px 28px 24px;"><p style="margin:0 0 6px;font-family:Georgia,serif;font-size:22px;color:#1a1a1a;">Welcome, ${contactName || 'there'}</p><p style="margin:0 0 22px;font-size:15px;color:#4a4538;line-height:1.7;">${aiName} has officially joined <strong>${clinicName}</strong>. From this moment forward, every patient enquiry, booking request, and after-hours message is handled with care &mdash; around the clock.</p><table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#faf8f4;border-left:3px solid #c9a84c;margin:0 0 22px;"><tr><td style="padding:14px 16px;font-size:14px;color:#4a4538;"><strong>Your Plan:</strong> ${planLabel} &nbsp;&middot;&nbsp; <strong>Investment:</strong> S$${monthlyPrice} per month</td></tr></table><table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 22px;"><tr><td style="border-top:1px solid #e5e1d8;font-size:0;">&nbsp;</td></tr></table><p style="margin:0 0 18px;font-family:Georgia,serif;font-size:20px;color:#1a1a1a;">Getting Started</p><table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:18px;"><tr><td width="40" valign="top" style="font-family:Georgia,serif;font-size:28px;color:#c9a84c;opacity:0.7;">1</td><td valign="top"><p style="margin:0 0 4px;font-size:15px;font-weight:700;color:#1a1a1a;">Enable Booking Alerts</p><p style="margin:0;font-size:14px;color:#4a4538;line-height:1.7;">Download Telegram and search for <strong>@MoonHandsBot</strong>. Send <code style="background:#f2efe8;padding:2px 6px;border-radius:3px;font-size:13px;">/start</code> for instant alerts. You control &mdash; ${aiName} handles conversations, you approve bookings.</p></td></tr></table><table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:18px;"><tr><td width="40" valign="top" style="font-family:Georgia,serif;font-size:28px;color:#c9a84c;opacity:0.7;">2</td><td valign="top"><p style="margin:0 0 4px;font-size:15px;font-weight:700;color:#1a1a1a;">Send a Test Message</p><p style="margin:0;font-size:14px;color:#4a4538;line-height:1.7;">Message your clinic's WhatsApp Business number with &ldquo;Hi&rdquo; and watch ${aiName} respond with your personalised greeting and treatment menu.</p></td></tr></table><table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:22px;"><tr><td width="40" valign="top" style="font-family:Georgia,serif;font-size:28px;color:#c9a84c;opacity:0.7;">3</td><td valign="top"><p style="margin:0 0 4px;font-size:15px;font-weight:700;color:#1a1a1a;">Sync Your Calendar</p><p style="margin:0;font-size:14px;color:#4a4538;line-height:1.7;">Add your booking feed to your calendar app. Your daily closing summary arrives at your clinic's closing time every day.</p></td></tr></table><table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 22px;"><tr><td style="border-top:1px solid #e5e1d8;font-size:0;">&nbsp;</td></tr></table><p style="margin:0 0 16px;font-family:Georgia,serif;font-size:20px;color:#1a1a1a;">How ${aiName} Grows Your Business</p><p style="margin:0 0 10px;font-size:14px;color:#1a1a1a;line-height:1.6;"><span style="color:#c9a84c;">&#10022;</span> <strong>Captures every lead, even at 2 AM</strong> &mdash; no enquiries lost to voicemail</p><p style="margin:0 0 10px;font-size:14px;color:#1a1a1a;line-height:1.6;"><span style="color:#c9a84c;">&#10022;</span> <strong>Books appointments while you treat patients</strong> &mdash; scheduling, rescheduling, cancellations</p><p style="margin:0 0 10px;font-size:14px;color:#1a1a1a;line-height:1.6;"><span style="color:#c9a84f;">&#10022;</span> <strong>Answers treatment questions that convert</strong> &mdash; pricing, downtime, suitability</p><p style="margin:0 0 10px;font-size:14px;color:#1a1a1a;line-height:1.6;"><span style="color:#c9a84c;">&#10022;</span> <strong>Speaks your patients' language</strong> &mdash; English, Mandarin, Malay</p><p style="margin:0 0 10px;font-size:14px;color:#1a1a1a;line-height:1.6;"><span style="color:#c9a84c;">&#10022;</span> <strong>Reduces no-shows with instant confirmations</strong> &mdash; reminders happen automatically</p></td></tr>
+<tr><td align="center" style="background:#1a1a1a;padding:32px 20px 26px;"><img src="data:image/png;base64,${LOGO_BASE64}" alt="Moon Hands" width="56" height="56" style="display:block;margin:0 auto 12px;border:0;"><div style="font-family:Georgia,serif;font-size:26px;color:#c9a84c;letter-spacing:3px;text-transform:uppercase;">Moon Hands</div><div style="font-size:10px;color:#7a7568;letter-spacing:3px;text-transform:uppercase;margin-top:6px;">by Pixel Vault Pte Ltd</div></td></tr>
+<tr><td style="padding:32px 28px 24px;"><p style="margin:0 0 6px;font-family:Georgia,serif;font-size:22px;color:#1a1a1a;">Welcome, ${contactName || 'there'}</p><p style="margin:0 0 22px;font-size:15px;color:#4a4538;line-height:1.7;">${aiName} has officially joined <strong>${clinicName}</strong>. From this moment forward, every patient enquiry, booking request, and after-hours message is handled with care &mdash; around the clock.</p><table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#faf8f4;border-left:3px solid #c9a84c;margin:0 0 22px;"><tr><td style="padding:14px 16px;font-size:14px;color:#4a4538;"><strong>Your Plan:</strong> ${planLabel} &nbsp;&middot;&nbsp; <strong>Investment:</strong> S$${monthlyPrice} per month</td></tr></table><table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 22px;"><tr><td style="border-top:1px solid #e5e1d8;font-size:0;">&nbsp;</td></tr></table><p style="margin:0 0 18px;font-family:Georgia,serif;font-size:20px;color:#1a1a1a;">Getting Started</p><table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:18px;"><tr><td width="40" valign="top" style="font-family:Georgia,serif;font-size:28px;color:#c9a84c;opacity:0.7;">1</td><td valign="top"><p style="margin:0 0 4px;font-size:15px;font-weight:700;color:#1a1a1a;">Enable Booking Alerts</p><p style="margin:0;font-size:14px;color:#4a4538;line-height:1.7;">Download Telegram and search for <strong>@MoonHandsBot</strong>. Send <code style="background:#f2efe8;padding:2px 6px;border-radius:3px;font-size:13px;">/start</code> for instant alerts. You control &mdash; ${aiName} handles conversations, you approve bookings.</p></td></tr></table><table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:18px;"><tr><td width="40" valign="top" style="font-family:Georgia,serif;font-size:28px;color:#c9a84c;opacity:0.7;">2</td><td valign="top"><p style="margin:0 0 4px;font-size:15px;font-weight:700;color:#1a1a1a;">Send a Test Message</p><p style="margin:0;font-size:14px;color:#4a4538;line-height:1.7;">Message your clinic's WhatsApp Business number with &ldquo;Hi&rdquo; and watch ${aiName} respond with your personalised greeting and treatment menu.</p></td></tr></table><table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:22px;"><tr><td width="40" valign="top" style="font-family:Georgia,serif;font-size:28px;color:#c9a84c;opacity:0.7;">3</td><td valign="top"><p style="margin:0 0 4px;font-size:15px;font-weight:700;color:#1a1a1a;">Sync Your Calendar</p><p style="margin:0;font-size:14px;color:#4a4538;line-height:1.7;">Add your booking feed to your calendar app. Your daily closing summary arrives at your clinic's closing time every day.</p></td></tr></table><table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 22px;"><tr><td style="border-top:1px solid #e5e1d8;font-size:0;">&nbsp;</td></tr></table><p style="margin:0 0 16px;font-family:Georgia,serif;font-size:20px;color:#1a1a1a;">How ${aiName} Grows Your Business</p><p style="margin:0 0 10px;font-size:14px;color:#1a1a1a;line-height:1.6;"><span style="color:#c9a84c;">&#10022;</span> <strong>Captures every lead, even at 2 AM</strong> &mdash; no enquiries lost to voicemail</p><p style="margin:0 0 10px;font-size:14px;color:#1a1a1a;line-height:1.6;"><span style="color:#c9a84c;">&#10022;</span> <strong>Books appointments while you treat patients</strong></p><p style="margin:0 0 10px;font-size:14px;color:#1a1a1a;line-height:1.6;"><span style="color:#c9a84c;">&#10022;</span> <strong>Answers treatment questions that convert</strong></p><p style="margin:0 0 10px;font-size:14px;color:#1a1a1a;line-height:1.6;"><span style="color:#c9a84c;">&#10022;</span> <strong>Speaks your patients' language</strong> &mdash; English, Mandarin, Malay</p><p style="margin:0 0 10px;font-size:14px;color:#1a1a1a;line-height:1.6;"><span style="color:#c9a84c;">&#10022;</span> <strong>Reduces no-shows with instant confirmations</strong></p></td></tr>
 <tr><td style="background:#faf8f4;border-top:1px solid #e5e1d8;padding:26px 28px;text-align:center;"><p style="margin:0 0 12px;font-size:14px;color:#4a4538;line-height:1.7;">Should you need anything &mdash; a refinement to ${aiName}&rsquo;s tone, an adjustment to your services, or simply a question &mdash; reply to this email. We are here for you.</p><p style="margin:0;font-family:Georgia,serif;font-size:16px;color:#1a1a1a;">&mdash; The Pixel Vault Team</p></td></tr>
 <tr><td align="center" style="background:#1a1a1a;padding:26px 20px;"><p style="margin:0 0 6px;font-size:11px;color:#7a7568;letter-spacing:0.5px;">Pixel Vault Pte Ltd &middot; Moon Hands by Pixel Vault</p><p style="margin:0;"><a href="https://www.moonhands.space" style="color:#c9a84c;text-decoration:none;font-size:12px;">www.moonhands.space</a> <span style="color:#4a4538;">&middot;</span> <a href="mailto:pixelvaultsg@gmail.com" style="color:#c9a84c;text-decoration:none;font-size:12px;">pixelvaultsg@gmail.com</a></p></td></tr>
 </table></td></tr></table></body></html>`;
 
-  const text = `Welcome to Moon Hands, ${contactName || 'there'}!
+  const text = `Welcome to Moon Hands, ${contactName || 'there'}!\n\n${aiName} has officially joined ${clinicName}. Every patient enquiry, booking request, and after-hours message is now handled with care.\n\nYOUR PLAN: ${planLabel} (S$${monthlyPrice}/mo)\n\nGETTING STARTED:\n1. Enable Booking Alerts — Download Telegram, search @MoonHandsBot, send /start\n2. Send a Test Message — Message your clinic's WhatsApp number with "Hi"\n3. Sync Your Calendar — Your daily closing summary arrives at closing time\n\nReply to this email for any questions.\n\n-- The Pixel Vault Team\nwww.moonhands.space`;
 
-${aiName} has officially joined ${clinicName}. Every patient enquiry, booking request, and after-hours message is now handled with care.
-
-YOUR PLAN: ${planLabel} (S$${monthlyPrice}/mo)
-
-GETTING STARTED:
-1. Enable Booking Alerts — Download Telegram, search @MoonHandsBot, send /start
-2. Send a Test Message — Message your clinic's WhatsApp number with "Hi"
-3. Sync Your Calendar — Your daily closing summary arrives at closing time
-
-HOW ${aiName.toUpperCase()} HELPS:
-* Captures every lead, even at 2 AM
-* Books appointments while you treat patients
-* Answers treatment questions that convert
-* Speaks your patients' language
-* Reduces no-shows with instant confirmations
-
-Reply to this email for any questions.
-
--- The Pixel Vault Team
-www.moonhands.space`;
-
-  await transporter.sendMail({
-    from: `"Moon Hands" <${fromEmail}>`,
-    to,
-    subject,
-    text,
-    html,
-    attachments,
-  });
-
+  await transporter.sendMail({ from: `"Moon Hands" <${fromEmail}>`, to, subject, text, html });
   console.log(`[WELCOME_EMAIL] Sent to ${to} for ${clinicName}`);
   return { success: true, to, clinicName };
 }
