@@ -946,8 +946,8 @@ async function handleRegisterDevice(req, res) {
   const fp = getDeviceFingerprint(req);
   const ip = getClientIP(req);
   
-  // Accept secret from header (x-moonhands-master) or body (secret)
-  const providedSecret = req.headers['x-moonhands-master'] || data.secret || '';
+  // Accept secret from header (x-master-secret or x-moonhands-master) or body (secret)
+  const providedSecret = req.headers['x-master-secret'] || req.headers['x-moonhands-master'] || data.secret || '';
   
   // Must provide master secret to register
   if (providedSecret !== process.env.MASTER_SECRET) {
