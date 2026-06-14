@@ -12,7 +12,27 @@ if (!SUPABASE_URL || !SUPABASE_KEY) {
   throw new Error('Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in environment');
 }
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+// Detect key format: old JWT (eyJ...) vs new Secret API key (sb_secret_...)
+const isNewKeyFormat = SUPABASE_KEY.startsWith('sb_');
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
+  auth: {
+    // New sb_secret_ keys don't use auto-refresh; old JWT keys do
+    autoRefreshToken: !isNewKeyFormat,
+    persistSession: false,
+    detectSessionInUrl: false,
+  },
+  global: {
+    headers: isNewKeyFormat
+      ? { 'Authorization': `Bearer ${SUPABASE_KEY}` }
+      : undefined,
+  },
+  db: {
+    schema: 'public',
+  },
+});
+
+console.log(`[SUPABASE] Initialized with ${isNewKeyFormat ? 'new Secret API key' : 'legacy JWT key'} format (${SUPABASE_KEY.substring(0, 12)}...)`);
 
 // ─── CLIENT OPERATIONS ────────────────────────────────────────────
 
