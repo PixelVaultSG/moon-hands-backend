@@ -11,6 +11,16 @@
  * NEVER compromise on security. $80K lesson.
  */
 
+// Global unhandled rejection protection — prevents server crashes
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[TELEGRAM] Unhandled Rejection at:', promise, 'reason:', reason);
+  // Log but don't crash — the bot keeps running
+});
+process.on('uncaughtException', (err) => {
+  console.error('[TELEGRAM] Uncaught Exception:', err.message);
+  // Don't exit — webhook server must stay alive
+});
+
 require('dotenv').config();
 const { Telegraf } = require('telegraf');
 const commands = require('./commands');
@@ -99,61 +109,80 @@ bot.start((ctx) => {
   );
 });
 
-bot.help((ctx) => { auditCommand(ctx.from.id, '/help', true); commands.handleHelp(ctx); });
-bot.command('clients', (ctx) => { auditCommand(ctx.from.id, '/clients', true); commands.handleClients(ctx); });
-bot.command('viewconfig', (ctx) => { auditCommand(ctx.from.id, '/viewconfig', true); commands.handleViewConfig(ctx); });
-bot.command('addservice', (ctx) => { auditCommand(ctx.from.id, '/addservice', true); commands.handleAddService(ctx); });
-bot.command('updateprice', (ctx) => { auditCommand(ctx.from.id, '/updateprice', true); commands.handleUpdatePrice(ctx); });
-bot.command('removeservice', (ctx) => { auditCommand(ctx.from.id, '/removeservice', true); commands.handleRemoveService(ctx); });
-bot.command('updatehours', (ctx) => { auditCommand(ctx.from.id, '/updatehours', true); commands.handleUpdateHours(ctx); });
-bot.command('addfaq', (ctx) => { auditCommand(ctx.from.id, '/addfaq', true); commands.handleAddFaq(ctx); });
-bot.command('removefaq', (ctx) => { auditCommand(ctx.from.id, '/removefaq', true); commands.handleRemoveFaq(ctx); });
-bot.command('updatevoice', (ctx) => { auditCommand(ctx.from.id, '/updatevoice', true); commands.handleUpdateVoice(ctx); });
-bot.command('pause', (ctx) => { auditCommand(ctx.from.id, '/pause', true); commands.handlePause(ctx); });
-bot.command('resume', (ctx) => { auditCommand(ctx.from.id, '/resume', true); commands.handleResume(ctx); });
-bot.command('usage', (ctx) => { auditCommand(ctx.from.id, '/usage', true); commands.handleUsage(ctx); });
-bot.command('health', (ctx) => { auditCommand(ctx.from.id, '/health', true); commands.handleHealth(ctx); });
-bot.command('security', (ctx) => { auditCommand(ctx.from.id, '/security', true); commands.handleSecurity(ctx); });
-bot.command('threats', (ctx) => { auditCommand(ctx.from.id, '/threats', true); commands.handleThreats(ctx); });
-bot.command('authlog', (ctx) => { auditCommand(ctx.from.id, '/authlog', true); commands.handleAuthLog(ctx); });
+// ─── COMMAND HANDLER WRAPPER ─────────────────────────────────────
+// ALL async command handlers wrapped with try/catch to prevent
+// unhandled promise rejections from crashing the server.
+
+function safeHandler(commandName, handlerFn) {
+  return async (ctx) => {
+    try {
+      auditCommand(ctx.from.id, commandName, true);
+      await handlerFn(ctx);
+    } catch (err) {
+      console.error(`[TELEGRAM] ${commandName} error:`, err.message);
+      auditCommand(ctx.from.id, commandName, false, err.message);
+      ctx.reply('\u26a0\ufe0f Command failed. Try again in a moment.').catch(() => {});
+    }
+  };
+}
+
+bot.help(safeHandler('/help', commands.handleHelp));
+bot.command('clients', safeHandler('/clients', commands.handleClients));
+bot.command('viewconfig', safeHandler('/viewconfig', commands.handleViewConfig));
+bot.command('addservice', safeHandler('/addservice', commands.handleAddService));
+bot.command('updateprice', safeHandler('/updateprice', commands.handleUpdatePrice));
+bot.command('removeservice', safeHandler('/removeservice', commands.handleRemoveService));
+bot.command('updatehours', safeHandler('/updatehours', commands.handleUpdateHours));
+bot.command('addfaq', safeHandler('/addfaq', commands.handleAddFaq));
+bot.command('removefaq', safeHandler('/removefaq', commands.handleRemoveFaq));
+bot.command('updatevoice', safeHandler('/updatevoice', commands.handleUpdateVoice));
+bot.command('pause', safeHandler('/pause', commands.handlePause));
+bot.command('resume', safeHandler('/resume', commands.handleResume));
+bot.command('usage', safeHandler('/usage', commands.handleUsage));
+bot.command('health', safeHandler('/health', commands.handleHealth));
+bot.command('security', safeHandler('/security', commands.handleSecurity));
+bot.command('threats', safeHandler('/threats', commands.handleThreats));
+bot.command('authlog', safeHandler('/authlog', commands.handleAuthLog));
 
 // ─── BOOKING APPROVAL COMMANDS ───────────────────────────────────
 
 const approvals = require('./commands/approvals');
 
-bot.command('pending', (ctx) => { auditCommand(ctx.from.id, '/pending', true); approvals.handlePending(bot, ctx.message); });
-bot.command('approve', (ctx) => {
+bot.command('pending', safeHandler('/pending', (ctx) => approvals.handlePending(bot, ctx.message)));
+bot.command('approve', safeHandler('/approve', (ctx) => {
   const args = ctx.message.text.split(' ').slice(1);
-  auditCommand(ctx.from.id, '/approve', true);
-  approvals.handleApprove(bot, ctx.message, args);
-});
-bot.command('reject', (ctx) => {
+  return approvals.handleApprove(bot, ctx.message, args);
+}));
+bot.command('reject', safeHandler('/reject', (ctx) => {
   const args = ctx.message.text.split(' ').slice(1);
-  auditCommand(ctx.from.id, '/reject', true);
-  approvals.handleReject(bot, ctx.message, args);
-});
+  return approvals.handleReject(bot, ctx.message, args);
+}));
 
 // ─── TEXT MESSAGE HANDLER ────────────────────────────────────────
 
 bot.on('text', async (ctx) => {
-  const text = ctx.message.text.trim();
-  
-  // Quick shortcuts for common actions
-  if (text.toLowerCase() === 'status') {
-    auditCommand(ctx.from.id, 'status-shortcut', true);
-    return commands.handleHealth(ctx);
+  try {
+    const text = ctx.message.text.trim();
+    
+    // Quick shortcuts for common actions
+    if (text.toLowerCase() === 'status') {
+      auditCommand(ctx.from.id, 'status-shortcut', true);
+      return await commands.handleHealth(ctx);
+    }
+    if (text.toLowerCase() === 'clients') {
+      auditCommand(ctx.from.id, 'clients-shortcut', true);
+      return await commands.handleClients(ctx);
+    }
+    
+    // Unknown command
+    auditCommand(ctx.from.id, text, false, 'UNKNOWN_COMMAND');
+    await ctx.reply(
+      `Hmm, I don't recognize that command.\n\n` +
+      `Use /help to see all available commands.`
+    );
+  } catch (err) {
+    console.error('[TELEGRAM] Text handler error:', err.message);
   }
-  if (text.toLowerCase() === 'clients') {
-    auditCommand(ctx.from.id, 'clients-shortcut', true);
-    return commands.handleClients(ctx);
-  }
-  
-  // Unknown command
-  auditCommand(ctx.from.id, text, false, 'UNKNOWN_COMMAND');
-  await ctx.reply(
-    `Hmm, I don't recognize that command.\n\n` +
-    `Use /help to see all available commands.`
-  );
 });
 
 // ─── ERROR HANDLING ──────────────────────────────────────────────
