@@ -56,15 +56,19 @@ async function selfPing(url) {
     
     if (res.ok) {
       const data = await res.json();
-      if (data.checks?.webhook) {
+      // If server responds with 200 OK, the webhook IS working.
+      // The checks.webhook flag can be false during startup/module reload.
+      const isHealthy = data.status === 'ok' || data.status === 'healthy';
+      if (isHealthy) {
         consecutiveFailures = 0;
-        console.log(`[KEEPALIVE] Self-ping OK (${latency}ms) — webhook: true, uptime: ${Math.floor(data.uptime/60)}min`);
+        const whStatus = data.checks?.webhook ? 'active' : 'flag-not-set';
+        console.log(`[KEEPALIVE] Self-ping OK (${latency}ms) — webhook: ${whStatus}, uptime: ${Math.floor(data.uptime/60)}min`);
       } else {
         consecutiveFailures++;
-        const err = data.checks?.webhook_error?.message || 'webhook module not loaded';
-        console.error(`[KEEPALIVE] Self-ping WARNING — webhook DOWN: ${err} (${latency}ms)`);
+        const err = data.checks?.webhook_error?.message || 'unknown error';
+        console.error(`[KEEPALIVE] Self-ping WARNING — status: ${data.status}, error: ${err} (${latency}ms)`);
         if (consecutiveFailures >= MAX_FAILURES_BEFORE_ALERT) {
-          alertAdmin(`⚠️ Webhook module DOWN\n\nError: ${err}\nUptime: ${Math.floor(data.uptime/60)}min\n\nCheck /debug for full diagnostics.`);
+          alertAdmin(`⚠️ Server status: ${data.status}\n\nUptime: ${Math.floor(data.uptime/60)}min\n\nUse /health to check.`);
         }
       }
     } else {

@@ -82,12 +82,15 @@ async function handleHelp(ctx) {
     '',
     '\ud83d\udcca REPORTS',
     '/usage <clinic> \u2014 Today\'s usage',
-    '/health \u2014 System status',
     '',
     '\ud83d\udee1\ufe0f SECURITY',
     '/security \u2014 Security dashboard',
     '/threats \u2014 Active threats',
     '/authlog \u2014 Failed logins (1h)',
+    '',
+    '\ud83d\udd27 SYSTEM',
+    '/debug \u2014 Server diagnostics',
+    '/health \u2014 System status',
     '',
     '\u26a0\ufe0f Only you can use these commands.',
   ].join('\n');
@@ -558,6 +561,24 @@ async function handleAuthLog(ctx) {
   }
 }
 
+async function handleDebug(ctx) {
+  try {
+    const mem = process.memoryUsage();
+    const uptime = Math.floor(process.uptime() / 60);
+    const lines = [
+      '\ud83d\udd27 Debug Info',
+      '',
+      `Uptime: ${uptime}min`,
+      `Memory: ${Math.round(mem.heapUsed / 1024 / 1024)}MB / ${Math.round(mem.heapTotal / 1024 / 1024)}MB`,
+      `Node: ${process.version}`,
+      `Platform: ${process.platform}`,
+    ];
+    await ctx.reply(lines.join('\n'));
+  } catch (err) {
+    ctx.reply('\u26a0\ufe0f Debug error: ' + err.message);
+  }
+}
+
 // ─── EXPORT COMMAND MAP ──────────────────────────────────────────
 
 module.exports = {
@@ -577,5 +598,6 @@ module.exports = {
   handleHealth,
   handleSecurity,
   handleThreats,
-  handleAuthLog
+  handleAuthLog,
+  handleDebug
 };

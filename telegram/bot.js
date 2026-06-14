@@ -143,6 +143,7 @@ bot.command('health', safeHandler('/health', commands.handleHealth));
 bot.command('security', safeHandler('/security', commands.handleSecurity));
 bot.command('threats', safeHandler('/threats', commands.handleThreats));
 bot.command('authlog', safeHandler('/authlog', commands.handleAuthLog));
+bot.command('debug', safeHandler('/debug', commands.handleDebug));
 
 // ─── BOOKING APPROVAL COMMANDS ───────────────────────────────────
 
