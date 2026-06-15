@@ -99,6 +99,7 @@ async function handleHelp(ctx) {
 }
 
 async function handleClients(ctx) {
+  try {
   const clients = await db.getAllClients();
   if (!clients.length) {
     return ctx.reply('\ud83d\udced No clients found.');
@@ -120,7 +121,12 @@ async function handleClients(ctx) {
     ...paused.map(c => `  \u23f8\ufe0f ${escapeMarkdown(c.slug)} \u2013 ${escapeMarkdown(c.name)}`),
   ];
 
-  await ctx.replyWithMarkdownV2(lines.filter(Boolean).join('\n'));
+  // Plain text reply to avoid MarkdownV2 parsing crashes
+  await ctx.reply(lines.filter(Boolean).join('\n'));
+  } catch (err) {
+    console.error('[TELEGRAM /clients] DB Error:', err.message);
+    ctx.reply(`⚠️ Database error: ${err.message}`);
+  }
 }
 
 async function handleViewConfig(ctx) {
