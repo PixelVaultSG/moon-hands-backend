@@ -1,7 +1,7 @@
 # Moon Hands — Clinic Enhancement Request Workflow
 
-**Last updated:** 2026-06-13
-**Status:** Process definition (no automation built yet)
+**Last updated:** 2026-06-14
+**Status:** Active — Telegram bot operational, all commands working
 
 ---
 
@@ -10,6 +10,45 @@
 ```
 Clinic emails you → You tell me → I make the change
 ```
+
+**Your email:** `pixelvaultsg@gmail.com`
+**Communication:** Copy-paste clinic requests into our chat. I confirm, then execute.
+
+---
+
+## What's New (June 2026)
+
+| Feature | Status |
+|---------|--------|
+| 5 essential message templates | ✅ Built (booking confirmation, reminder, follow-up, welcome, cancellation) |
+| Delivery status tracking | ✅ Built (sent → delivered → read → failed alerts) |
+| Tier 1/Tier 2 onboarding | ✅ Built (auto-detection + guided flow) |
+| Tier 2: Kimi initiates support | ✅ Built (Kimi WhatsApps clinic proactively, not reactive) |
+| Pixel Vault Support AI | 🔄 Pending your 360dialog WABA setup |
+| Query param auth | ✅ Deployed (no more WEBHOOK_AUTH_REQUIRED=false) |
+| Security audit (15 findings) | ✅ All fixed |
+| 1002-scenario AI test suite | ✅ Built |
+| 11 staff agents documented | ✅ Complete |
+| `/clients` command | ✅ Fixed (plain text, no more crashes) |
+| `/help` command | ✅ Fixed (plain text, no more silent failures) |
+| Keepalive false alerts | ✅ Fixed (only alerts on actual server failures) |
+| Supabase sb_secret_ key format | ✅ Fixed (supports both old JWT and new Secret API keys) |
+| 360dialog research | ✅ Completed (costs accurate, features identified) |
+
+---
+
+## Cost Accuracy (Verified)
+
+Our projections were validated against actual 360dialog and Meta pricing:
+
+| Cost Item | Our Projection | Actual | Status |
+|-----------|---------------|--------|--------|
+| 360dialog API fee | ~S$72/month (shared) | €49/month (~S$72) | ✅ Accurate |
+| Per-message cost | ~S$10/clinic/month | S$0 (service msgs free) + ~S$5 templates | ✅ Conservative |
+| OpenAI cost | ~S$0.01/message | ~S$0.008/message | ✅ Accurate |
+| Render hosting | S$9.45/month | S$9.45/month Starter | ✅ Exact |
+| **Total per clinic** | **S$150-200/month** | **S$100-150/month actual** | ✅ **Conservative buffer** |
+| **Our charge** | **S$347-547/month** | — | ✅ **50-70% gross margin** |
 
 ### Step 1: Clinic Emails You
 
