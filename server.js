@@ -32,6 +32,20 @@ const server = http.createServer(async (req, res) => {
 
   const url = new URL(req.url, `http://${req.headers.host}`);
   
+  // Secure onboarding submission — before webhook
+  if (url.pathname === '/api/onboarding' && req.method === 'POST') {
+    try {
+      const { handleOnboardingSubmission } = require('./server/onboarding-submission');
+      const handled = await handleOnboardingSubmission(req, res);
+      if (handled) return;
+    } catch (err) {
+      console.error('[SERVER] Onboarding handler error:', err.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'Onboarding handler error' }));
+      return;
+    }
+  }
+
   // Health check — always available
   if (url.pathname === '/health' && req.method === 'GET') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -157,6 +171,7 @@ if (missingCritical.length) {
 function validateAllModules() {
   const filesToCheck = [
     './server/webhook.js',
+    './server/onboarding-submission.js',
     './ai/bot-engine.js',
     './ai/smart-router.js',
     './ai/conversation-state.js',
