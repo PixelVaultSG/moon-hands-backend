@@ -270,10 +270,11 @@ async function validateClinicWebhook(url) {
 
   try {
     const { supabase } = require('../supabase/client');
+    // clinic_id in URL is the slug (e.g., 'pixellvault'), not the UUID
     const { data, error } = await supabase
       .from('clients')
       .select('id, name, webhook_token, status')
-      .eq('id', clinicId)
+      .eq('slug', clinicId)
       .single();
 
     if (error || !data) {
