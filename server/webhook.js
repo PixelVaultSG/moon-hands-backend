@@ -1018,7 +1018,17 @@ async function requestHandler(req, res) {
     const url = new URL(req.url, `http://${req.headers.host}`);
     
     // Route handlers
-    if (url.pathname === '/webhook/whatsapp' && req.method === 'POST') {
+    if (url.pathname === '/webhook/diag' && req.method === 'POST') {
+      // Diagnostic endpoint — logs raw body for debugging
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      const raw = Buffer.concat(chunks).toString('utf8');
+      console.log('[DIAG] Raw webhook body:', raw.substring(0, 2000));
+      try { console.log('[DIAG] Parsed:', JSON.stringify(JSON.parse(raw), null, 2).substring(0, 2000)); } catch {}
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ received: true, length: raw.length }));
+      return;
+    } else if (url.pathname === '/webhook/whatsapp' && req.method === 'POST') {
       await handleWebhook(req, res, 'whatsapp', url);
     } else if (url.pathname === '/webhook/voice' && req.method === 'POST') {
       await handleWebhook(req, res, 'voice', url);
