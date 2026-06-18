@@ -140,8 +140,8 @@ async function handleClients(ctx) {
 
 async function handleViewConfig(ctx) {
   // Parse slug from message text: "/viewconfig pixellvault" → "pixellvault"
-  const text = ctx.message?.text || '';
-  const parts = text.split(/\s+/);
+  const msgText = ctx.message?.text || '';
+  const parts = msgText.split(/\s+/);
   const slug = parts.length >= 2 ? parts[1].trim() : '';
   if (!slug) {
     return ctx.reply('⚠️ Usage: /viewconfig <slug>\n\nExample: /viewconfig pixellvault\n\nUse /clients to see all slugs.');
@@ -149,7 +149,7 @@ async function handleViewConfig(ctx) {
 
   const client = await db.getClientBySlug(slug);
   if (!client) {
-    return ctx.reply(`\\u274c Client "${escapeMarkdown(slug)}" not found. Use /clients to see all.`, { parse_mode: 'MarkdownV2' });
+    return ctx.reply(`❌ Client "${slug}" not found. Use /clients to see all.`);
   }
 
   const config = await db.getClientConfig(client.id);
