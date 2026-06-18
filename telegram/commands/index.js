@@ -434,34 +434,32 @@ async function handleResume(ctx) {
 }
 
 async function handleUsage(ctx) {
-  const slug = ctx.match?.[1]?.trim();
-  if (!slug) return ctx.reply('\u26a0\ufe0f Usage: `/usage <client-id>`');
+  const text = ctx.message?.text || '';
+  const parts = text.split(/\s+/);
+  const slug = parts.length >= 2 ? parts[1].trim() : '';
+  if (!slug) return ctx.reply('⚠️ Usage: /usage <slug>\n\nExample: /usage pixellvault\n\nUse /clients to see all slugs.');
 
   const client = await db.getClientBySlug(slug);
-  if (!client) return ctx.reply(`\\u274c Client "${escapeMarkdown(slug)}" not found.`, { parse_mode: 'MarkdownV2' });
+  if (!client) return ctx.reply(`❌ Client "${slug}" not found. Use /clients to see available slugs.`);
 
   const today = new Date().toISOString().split('T')[0];
   const usage = await db.getDailyUsage(today);
   const clientUsage = usage.find(u => u.client_id === client.id);
 
   if (!clientUsage) {
-    return ctx.reply(`\ud83d\udcca No usage recorded for ${client.name} today.`);
+    return ctx.reply(`📊 No usage recorded for ${client.name} today.\n\nThis is normal — usage data appears after the first patient message.`);
   }
 
-  const voiceLimit = client.plan === 'professional' ? 2000 : 500;
   const waLimit = client.plan === 'professional' ? 5000 : 1000;
-  const voicePct = Math.round((clientUsage.voice_minutes / voiceLimit) * 100);
   const waPct = Math.round((clientUsage.whatsapp_messages / waLimit) * 100);
+  const status = (pct) => pct > 100 ? '🔴' : pct > 80 ? '🟡' : '🟢';
 
-  const status = (pct) => pct > 100 ? '\ud83d\udd34' : pct > 80 ? '\ud83d\udfe1' : '\ud83d\udfe2';
-
-  await ctx.replyWithMarkdownV2(
-    `\ud83d\udcca *Usage: ${escapeMarkdown(client.name)}*\n` +
+  await ctx.reply(
+    `📊 Usage: ${client.name}\n` +
     `Date: ${today}\n\n` +
-    `\ud83d\udcde Voice: ${clientUsage.voice_minutes} / ${voiceLimit} min \(${voicePct}%\) ${status(voicePct)}\n` +
-    `\ud83d\udcac WhatsApp: ${clientUsage.whatsapp_messages} / ${waLimit} msgs \(${waPct}%\) ${status(waPct)}\n` +
-    `\ud83d\udcb0 Cost: $${clientUsage.cost?.toFixed(2) || '0.00'}\n` +
-    `\ud83d\udcc8 Bookings: ${clientUsage.bookings || 0}`
+    `💬 WhatsApp: ${clientUsage.whatsapp_messages} / ${waLimit} msgs (${waPct}%) ${status(waPct)}\n` +
+    `💰 Cost: $${clientUsage.cost?.toFixed(2) || '0.00'}\n` +
+    `📅 Bookings: ${clientUsage.bookings || 0}`
   );
 }
 

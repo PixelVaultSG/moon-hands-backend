@@ -359,6 +359,12 @@ async function handleWebhook(req, res, channel, url) {
   const ip = getClientIP(req);
   const startTime = Date.now();
 
+  // DIAGNOSTIC: Log every incoming webhook request
+  console.log(`[WEBHOOK] ====== REQUEST ${req.method} ${url.pathname} ======`);
+  console.log(`[WEBHOOK] clinic_id: ${url.searchParams.get('clinic_id')}`);
+  console.log(`[WEBHOOK] token: ${(url.searchParams.get('token') || '').substring(0, 8)}...`);
+  console.log(`[WEBHOOK] IP: ${ip}`);
+
   try {
     // Layer 1: DDoS check
     const ddos = checkDDoS(ip);
@@ -388,11 +394,13 @@ async function handleWebhook(req, res, channel, url) {
           details: { ip, error: auth.error, path: url.pathname },
           source_ip: ip,
         });
+        console.log(`[WEBHOOK] Auth FAILED: ${auth.error}`);
         return sendSecurityResponse(res, 401, 'Unauthorized', { reason: auth.error });
       }
       preResolvedClientId = auth.clientId;
       preResolvedClinicName = auth.clinicName;
       addTrace(null, 'AUTH', 'CLINIC_TOKEN_VALID', `${auth.clinicName} (${auth.clientId.slice(0, 8)})`);
+      console.log(`[WEBHOOK] Auth OK: ${auth.clinicName} (${auth.clientId})`);
     } else {
       // Voice channel: still uses header auth (x-api-key)
       if (!checkAuth(req)) {
