@@ -110,15 +110,24 @@ async function handleClients(ctx) {
   const setup = clients.filter(c => c.status === 'setup');
 
   const lines = [
-    `\ud83d\udcc4 *All Clients (${clients.length} total)*\n`,
-    active.length ? `*Active (${active.length}):*` : '',
-    ...active.map(c => `  \ud83d\udd12 ${escapeMarkdown(c.slug)} \u2013 ${escapeMarkdown(c.name)}`),
+    `📋 All Clients (${clients.length} total)\n`,
+    active.length ? `Active (${active.length}):` : '',
+    ...active.map(c => {
+      const tokenPreview = c.webhook_token ? c.webhook_token.substring(0, 8) + '...' : 'N/A';
+      return `🔒 ${c.slug}
+   Name: ${c.name}
+   Phone: ${c.whatsapp_number || 'N/A'}
+   Token: ${tokenPreview}`;
+    }),
     '',
-    setup.length ? `*In Setup (${setup.length}):*` : '',
-    ...setup.map(c => `  \u26a1 ${escapeMarkdown(c.slug)} \u2013 ${escapeMarkdown(c.name)}`),
+    setup.length ? `In Setup (${setup.length}):` : '',
+    ...setup.map(c => `⚡ ${c.slug} — ${c.name}`),
     '',
-    paused.length ? `*Paused (${paused.length}):*` : '',
-    ...paused.map(c => `  \u23f8\ufe0f ${escapeMarkdown(c.slug)} \u2013 ${escapeMarkdown(c.name)}`),
+    paused.length ? `Paused (${paused.length}):` : '',
+    ...paused.map(c => `⏸️ ${c.slug} — ${c.name}`),
+    '',
+    `Use /viewconfig <slug> for full details`,
+    `Example: /viewconfig pixellvault`,
   ];
 
   // Plain text reply to avoid MarkdownV2 parsing crashes
@@ -130,9 +139,12 @@ async function handleClients(ctx) {
 }
 
 async function handleViewConfig(ctx) {
-  const slug = ctx.match?.[1]?.trim();
+  // Parse slug from message text: "/viewconfig pixellvault" → "pixellvault"
+  const text = ctx.message?.text || '';
+  const parts = text.split(/\s+/);
+  const slug = parts.length >= 2 ? parts[1].trim() : '';
   if (!slug) {
-    return ctx.reply('\u26a0\ufe0f Usage: `/viewconfig <client-id>`\n\nExample: `/viewconfig glow-beauty`');
+    return ctx.reply('⚠️ Usage: /viewconfig <slug>\n\nExample: /viewconfig pixellvault\n\nUse /clients to see all slugs.');
   }
 
   const client = await db.getClientBySlug(slug);
