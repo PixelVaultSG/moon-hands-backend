@@ -127,7 +127,7 @@ server.listen(PORT, () => {
 
 const ENV_CHECKS = [
   { key: 'SUPABASE_URL',              critical: true,  pattern: /^https:\/\/.+\.supabase\.co$/ },
-  { key: 'SUPABASE_SERVICE_ROLE_KEY', critical: true,  pattern: /^eyJ/ },
+  { key: 'SUPABASE_SERVICE_ROLE_KEY', critical: true,  pattern: /^(eyJ|sb_secret_)/ },
   { key: 'TELEGRAM_BOT_TOKEN',        critical: true,  pattern: /^\d+:[A-Za-z0-9_-]+$/ },
   { key: 'TELEGRAM_ADMIN_CHAT_ID',    critical: true,  pattern: /^-?\d+$/ },
   { key: 'OPENAI_API_KEY',            critical: true,  pattern: /^sk-(proj-)?[A-Za-z0-9_-]+$/ },
