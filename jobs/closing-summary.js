@@ -35,7 +35,7 @@ async function checkAndSendClosingSummaries() {
     // Get all active clinics with their operating hours
     const { data: clinics, error } = await supabase
       .from('clients')
-      .select('id, clinic_name, telegram_chat_id, status, operating_hours, appointment_duration_minutes')
+      .select('id, name, telegram_chat_id, status, operating_hours, appointment_duration_minutes')
       .eq('status', 'active');
     
     if (error) {
@@ -76,7 +76,7 @@ async function checkAndSendClosingSummaries() {
         // Send summary within 15 minutes after closing
         // (cron runs every 15 min, so we catch closing time + up to 15 min after)
         if (currentMinutes >= closeMinutes && currentMinutes < closeMinutes + 15) {
-          console.log(`[CLOSING_SUMMARY] ${clinic.clinic_name} closed at ${closingTime}. Sending summary...`);
+          console.log(`[CLOSING_SUMMARY] ${clinic.name} closed at ${closingTime}. Sending summary...`);
           await sendDailyClosingSummary(clinic, supabase);
           ALREADY_SENT_TODAY.add(clinic.id);
         }

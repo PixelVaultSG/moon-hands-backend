@@ -396,8 +396,10 @@ async function handleUpdateVoice(ctx) {
 }
 
 async function handlePause(ctx) {
-  const slug = ctx.match?.[1]?.trim();
-  if (!slug) return ctx.reply('\u26a0\ufe0f Usage: `/pause <client-id>`');
+  const msgText = ctx.message?.text || '';
+  const parts = msgText.split(/\s+/);
+  const slug = parts.length >= 2 ? parts[1].trim() : '';
+  if (!slug) return ctx.reply('\u26a0\ufe0f Usage: `/pause <slug>`\n\nExample: /pause pixellvault\n\nUse /clients to see all slugs.');
 
   const client = await db.getClientBySlug(slug);
   if (!client) return ctx.reply(`\\u274c Client "${escapeMarkdown(slug)}" not found.`, { parse_mode: 'MarkdownV2' });
@@ -415,8 +417,10 @@ async function handlePause(ctx) {
 }
 
 async function handleResume(ctx) {
-  const slug = ctx.match?.[1]?.trim();
-  if (!slug) return ctx.reply('\u26a0\ufe0f Usage: `/resume <client-id>`');
+  const msgText = ctx.message?.text || '';
+  const parts = msgText.split(/\s+/);
+  const slug = parts.length >= 2 ? parts[1].trim() : '';
+  if (!slug) return ctx.reply('\u26a0\ufe0f Usage: `/resume <slug>`\n\nExample: /resume pixellvault\n\nUse /clients to see all slugs.');
 
   const client = await db.getClientBySlug(slug);
   if (!client) return ctx.reply(`\\u274c Client "${escapeMarkdown(slug)}" not found.`, { parse_mode: 'MarkdownV2' });

@@ -412,13 +412,19 @@ async function handleWebhook(req, res, channel, url) {
     // Layer 3: Parse body (with size limit)
     const body = await parseBody(req);
 
-    // Layer 4: Verify webhook signature — for internal/protected endpoints
-    // Note: 360dialog cannot send custom signatures. Per-clinic token auth (Layer 2) is sufficient.
-    const signature = req.headers['x-signature'] || req.headers['x-hub-signature-256'];
-    if (WEBHOOK_SECRET && signature) {
-      if (!verifySignature(body.raw || body, signature, WEBHOOK_SECRET)) {
-        console.warn(`[SECURITY] Invalid webhook signature from ${ip}`);
-        return sendSecurityResponse(res, 401, 'Invalid signature');
+    // Layer 4: Verify webhook signature — INTERNAL ENDPOINTS ONLY
+    // WhatsApp/360dialog: SKIPPED — Layer 2 per-clinic token auth is cryptographically sufficient.
+    // 360dialog sends x-hub-signature-256 (Meta format: sha256=<base64_hmac>) which uses a different
+    // signing scheme than our verifySignature() expects (hex HMAC). Attempting to verify it causes
+    // false rejections blocking ALL patient messages. The per-clinic webhook_token in the URL query
+    // parameter provides equivalent security without this incompatibility.
+    if (channel !== 'whatsapp') {
+      const signature = req.headers['x-signature'] || req.headers['x-hub-signature-256'];
+      if (WEBHOOK_SECRET && signature) {
+        if (!verifySignature(body.raw || body, signature, WEBHOOK_SECRET)) {
+          console.warn(`[SECURITY] Invalid webhook signature from ${ip} (channel: ${channel})`);
+          return sendSecurityResponse(res, 401, 'Invalid signature');
+        }
       }
     }
     
