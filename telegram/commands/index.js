@@ -149,7 +149,7 @@ async function handleViewConfig(ctx) {
 
   const client = await db.getClientBySlug(slug);
   if (!client) {
-    return ctx.reply(`\\u274c Client "${escapeMarkdown(slug)}" not found. Use /clients to see all.`, { parse_mode: 'MarkdownV2' });
+    return ctx.reply(`❌ Client "${slug}" not found. Use /clients to see all.`);
   }
 
   const config = await db.getClientConfig(client.id);
@@ -396,8 +396,10 @@ async function handleUpdateVoice(ctx) {
 }
 
 async function handlePause(ctx) {
-  const slug = ctx.match?.[1]?.trim();
-  if (!slug) return ctx.reply('\u26a0\ufe0f Usage: `/pause <client-id>`');
+  const msgText = ctx.message?.text || '';
+  const parts = msgText.split(/\s+/);
+  const slug = parts.length >= 2 ? parts[1].trim() : '';
+  if (!slug) return ctx.reply('\u26a0\ufe0f Usage: `/pause <slug>`\n\nExample: /pause pixellvault\n\nUse /clients to see all slugs.');
 
   const client = await db.getClientBySlug(slug);
   if (!client) return ctx.reply(`\\u274c Client "${escapeMarkdown(slug)}" not found.`, { parse_mode: 'MarkdownV2' });
@@ -415,8 +417,10 @@ async function handlePause(ctx) {
 }
 
 async function handleResume(ctx) {
-  const slug = ctx.match?.[1]?.trim();
-  if (!slug) return ctx.reply('\u26a0\ufe0f Usage: `/resume <client-id>`');
+  const msgText = ctx.message?.text || '';
+  const parts = msgText.split(/\s+/);
+  const slug = parts.length >= 2 ? parts[1].trim() : '';
+  if (!slug) return ctx.reply('\u26a0\ufe0f Usage: `/resume <slug>`\n\nExample: /resume pixellvault\n\nUse /clients to see all slugs.');
 
   const client = await db.getClientBySlug(slug);
   if (!client) return ctx.reply(`\\u274c Client "${escapeMarkdown(slug)}" not found.`, { parse_mode: 'MarkdownV2' });
@@ -434,8 +438,8 @@ async function handleResume(ctx) {
 }
 
 async function handleUsage(ctx) {
-  const msgText = ctx.message?.text || '';
-  const parts = msgText.split(/\s+/);
+  const text = ctx.message?.text || '';
+  const parts = text.split(/\s+/);
   const slug = parts.length >= 2 ? parts[1].trim() : '';
   if (!slug) return ctx.reply('⚠️ Usage: /usage <slug>\n\nExample: /usage pixellvault\n\nUse /clients to see all slugs.');
 
@@ -617,4 +621,3 @@ module.exports = {
   handleAuthLog,
   handleDebug
 };
-
