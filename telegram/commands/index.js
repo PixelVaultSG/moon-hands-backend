@@ -140,8 +140,8 @@ async function handleClients(ctx) {
 
 async function handleViewConfig(ctx) {
   // Parse slug from message text: "/viewconfig pixellvault" → "pixellvault"
-  const text = ctx.message?.text || '';
-  const parts = text.split(/\s+/);
+  const msgText = ctx.message?.text || '';
+  const parts = msgText.split(/\s+/);
   const slug = parts.length >= 2 ? parts[1].trim() : '';
   if (!slug) {
     return ctx.reply('⚠️ Usage: /viewconfig <slug>\n\nExample: /viewconfig pixellvault\n\nUse /clients to see all slugs.');
@@ -434,8 +434,8 @@ async function handleResume(ctx) {
 }
 
 async function handleUsage(ctx) {
-  const text = ctx.message?.text || '';
-  const parts = text.split(/\s+/);
+  const msgText = ctx.message?.text || '';
+  const parts = msgText.split(/\s+/);
   const slug = parts.length >= 2 ? parts[1].trim() : '';
   if (!slug) return ctx.reply('⚠️ Usage: /usage <slug>\n\nExample: /usage pixellvault\n\nUse /clients to see all slugs.');
 
@@ -617,3 +617,4 @@ module.exports = {
   handleAuthLog,
   handleDebug
 };
+
