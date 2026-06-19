@@ -12,18 +12,18 @@ function escapeMarkdown(text) {
 }
 
 function formatConfig(config, client) {
-  if (!config || !client) return '\\u274c Client not found.';
+  if (!config || !client) return '\u274c Client not found.';
 
   const services = (config.services || [])
-    .map(s => `  \u2022 ${s.name} \u2013 ${s.price} \(${s.duration}min\)`)
+    .map(s => `  \u2022 ${escapeMarkdown(s.name)} \u2013 ${escapeMarkdown(s.price)} \(${s.duration}min\)`)
     .join('\n') || '  None';
 
   const hours = (config.operating_hours || [])
-    .map(h => `  \u2022 ${h.day}: ${h.open_time}\u2013${h.close_time}`)
+    .map(h => `  \u2022 ${escapeMarkdown(h.day)}: ${escapeMarkdown(h.open_time)}\u2013${escapeMarkdown(h.close_time)}`)
     .join('\n') || '  Not set';
 
   const faqs = (config.faqs || [])
-    .map((f, i) => `  ${i + 1}. ${f.question}`)
+    .map((f, i) => `  ${i + 1}. ${escapeMarkdown(f.question)}`)
     .join('\n') || '  None';
 
   return [
@@ -45,6 +45,17 @@ function formatConfig(config, client) {
     faqs,
     config.special_notes ? `\n\ud83d\udcdd Notes: _${escapeMarkdown(config.special_notes)}_` : ''
   ].join('\n');
+}
+
+// ─── ROBUST REPLY HELPER ─────────────────────────────────────────
+// replyWithMarkdownV2 throws if text has unescaped chars. This helper
+// catches and falls back to plain reply with markdown stripped.
+async function safeReplyMD(ctx, text) {
+  try {
+    await ctx.replyWithMarkdownV2(text);
+  } catch {
+    await ctx.reply(text.replace(/[*_]/g, ''));
+  }
 }
 
 // ─── COMMAND HANDLERS ────────────────────────────────────────────
@@ -156,10 +167,12 @@ async function handleViewConfig(ctx) {
   const text = formatConfig(config, client);
 
   // Split if too long for Telegram
-  if (text.length > 4000) {
-    await ctx.replyWithMarkdownV2(text.substring(0, 4000) + '\n\n... (truncated)');
-  } else {
-    await ctx.replyWithMarkdownV2(text);
+  const replyText = text.length > 4000 ? text.substring(0, 4000) + '\n\n... (truncated)' : text;
+  try {
+    await ctx.replyWithMarkdownV2(replyText);
+  } catch {
+    // Fallback: strip markdown and send plain text
+    await ctx.reply(replyText.replace(/[*_]/g, ''));
   }
 }
 
@@ -175,7 +188,7 @@ async function handleAddService(ctx) {
 
   const slug = args[1];
   const client = await db.getClientBySlug(slug);
-  if (!client) return ctx.reply(`\\u274c Client "${escapeMarkdown(slug)}" not found.`, { parse_mode: 'MarkdownV2' });
+  if (!client) return ctx.reply(`\u274c Client "${slug}" not found. Use /clients to see all slugs.`);
 
   // Parse quoted service name + price + duration
   const raw = ctx.message.text.replace(`/addservice ${slug} `, '');
@@ -194,7 +207,7 @@ async function handleAddService(ctx) {
   });
 
   if (result.success) {
-    await ctx.replyWithMarkdownV2(
+    await safeReplyMD(ctx,
       `\u2705 *Change Request Received*\n\n` +
       `Client: ${escapeMarkdown(client.name)}\n` +
       `Action: Add Service\n` +
@@ -224,7 +237,7 @@ async function handleUpdatePrice(ctx) {
 
   const slug = args[1];
   const client = await db.getClientBySlug(slug);
-  if (!client) return ctx.reply(`\\u274c Client "${escapeMarkdown(slug)}" not found.`, { parse_mode: 'MarkdownV2' });
+  if (!client) return ctx.reply(`\u274c Client "${slug}" not found. Use /clients to see all slugs.`);
 
   const raw = ctx.message.text.replace(`/updateprice ${slug} `, '');
   const match = raw.match(/"([^"]+)"\s+(\S+)/);
@@ -237,7 +250,7 @@ async function handleUpdatePrice(ctx) {
   const result = await db.updateServicePrice(client.id, serviceName, newPrice);
 
   if (result.success) {
-    await ctx.replyWithMarkdownV2(
+    await safeReplyMD(ctx,
       `\u2705 *Change Request Received*\n\n` +
       `Client: ${escapeMarkdown(client.name)}\n` +
       `Action: Update Price\n` +
@@ -265,7 +278,7 @@ async function handleRemoveService(ctx) {
 
   const slug = args[1];
   const client = await db.getClientBySlug(slug);
-  if (!client) return ctx.reply(`\\u274c Client "${escapeMarkdown(slug)}" not found.`, { parse_mode: 'MarkdownV2' });
+  if (!client) return ctx.reply(`\u274c Client "${slug}" not found. Use /clients to see all slugs.`);
 
   const raw = ctx.message.text.replace(`/removeservice ${slug} `, '');
   const match = raw.match(/"([^"]+)"/);
@@ -277,7 +290,7 @@ async function handleRemoveService(ctx) {
   const result = await db.removeService(client.id, serviceName);
 
   if (result.success) {
-    await ctx.replyWithMarkdownV2(
+    await safeReplyMD(ctx,
       `\u2705 *Service Removed*\n\n` +
       `Client: ${escapeMarkdown(client.name)}\n` +
       `Removed: ${escapeMarkdown(serviceName)}`
@@ -295,12 +308,12 @@ async function handleUpdateHours(ctx) {
 
   const [_, slug, day, openTime, closeTime] = args;
   const client = await db.getClientBySlug(slug);
-  if (!client) return ctx.reply(`\\u274c Client "${escapeMarkdown(slug)}" not found.`, { parse_mode: 'MarkdownV2' });
+  if (!client) return ctx.reply(`\u274c Client "${slug}" not found. Use /clients to see all slugs.`);
 
   const result = await db.updateOperatingHours(client.id, day, openTime, closeTime);
 
   if (result.success) {
-    await ctx.replyWithMarkdownV2(
+    await safeReplyMD(ctx,
       `\u2705 *Hours Updated*\n\n` +
       `Client: ${escapeMarkdown(client.name)}\n` +
       `Day: ${escapeMarkdown(day)}\n` +
@@ -319,7 +332,7 @@ async function handleAddFaq(ctx) {
 
   const slug = args[1];
   const client = await db.getClientBySlug(slug);
-  if (!client) return ctx.reply(`\\u274c Client "${escapeMarkdown(slug)}" not found.`, { parse_mode: 'MarkdownV2' });
+  if (!client) return ctx.reply(`\u274c Client "${slug}" not found. Use /clients to see all slugs.`);
 
   const raw = ctx.message.text.replace(`/addfaq ${slug} `, '');
   const parts = raw.split(/\s*\|\s*/, 2);
@@ -333,7 +346,7 @@ async function handleAddFaq(ctx) {
   const result = await db.addFaq(client.id, question, answer);
 
   if (result.success) {
-    await ctx.replyWithMarkdownV2(
+    await safeReplyMD(ctx,
       `\u2705 *FAQ Added*\n\n` +
       `Client: ${escapeMarkdown(client.name)}\n` +
       `Q: ${escapeMarkdown(question)}\n` +
@@ -353,7 +366,7 @@ async function handleRemoveFaq(ctx) {
   const [_, slug, numStr] = args;
   const index = parseInt(numStr) - 1;
   const client = await db.getClientBySlug(slug);
-  if (!client) return ctx.reply(`\\u274c Client "${escapeMarkdown(slug)}" not found.`, { parse_mode: 'MarkdownV2' });
+  if (!client) return ctx.reply(`\u274c Client "${slug}" not found. Use /clients to see all slugs.`);
 
   const result = await db.removeFaq(client.id, index);
 
@@ -379,12 +392,12 @@ async function handleUpdateVoice(ctx) {
   const value = args.slice(3).join(' ').replace(/^"|"$/g, '');
 
   const client = await db.getClientBySlug(slug);
-  if (!client) return ctx.reply(`\\u274c Client "${escapeMarkdown(slug)}" not found.`, { parse_mode: 'MarkdownV2' });
+  if (!client) return ctx.reply(`\u274c Client "${slug}" not found. Use /clients to see all slugs.`);
 
   const result = await db.updateBrandVoice(client.id, field, value);
 
   if (result.success) {
-    await ctx.replyWithMarkdownV2(
+    await safeReplyMD(ctx,
       `\u2705 *Voice Updated*\n\n` +
       `Client: ${escapeMarkdown(client.name)}\n` +
       `Field: ${escapeMarkdown(field)}\n` +
@@ -402,15 +415,16 @@ async function handlePause(ctx) {
   if (!slug) return ctx.reply('\u26a0\ufe0f Usage: `/pause <slug>`\n\nExample: /pause pixellvault\n\nUse /clients to see all slugs.');
 
   const client = await db.getClientBySlug(slug);
-  if (!client) return ctx.reply(`\\u274c Client "${escapeMarkdown(slug)}" not found.`, { parse_mode: 'MarkdownV2' });
+  if (!client) return ctx.reply(`\u274c Client "${slug}" not found. Use /clients to see all slugs.`);
 
   const result = await db.pauseClient(client.id);
   if (result.success) {
-    await ctx.replyWithMarkdownV2(
-      `\u23f8\ufe0f *AI Agent Paused*\n\nClient: ${escapeMarkdown(client.name)}\n` +
-      `Status: \u23f8\ufe0f PAUSED\n` +
-      `The AI will no longer respond to calls or messages.`
-    );
+    const msg = `\u23f8\ufe0f *AI Agent Paused*\n\nClient: ${escapeMarkdown(client.name)}\nStatus: \u23f8\ufe0f PAUSED\nThe AI will no longer respond to calls or messages.`;
+    try {
+      await ctx.replyWithMarkdownV2(msg);
+    } catch {
+      await ctx.reply(msg.replace(/[*_]/g, ''));
+    }
   } else {
     await ctx.reply(`\u274c Error: ${result.error}`);
   }
@@ -423,15 +437,16 @@ async function handleResume(ctx) {
   if (!slug) return ctx.reply('\u26a0\ufe0f Usage: `/resume <slug>`\n\nExample: /resume pixellvault\n\nUse /clients to see all slugs.');
 
   const client = await db.getClientBySlug(slug);
-  if (!client) return ctx.reply(`\\u274c Client "${escapeMarkdown(slug)}" not found.`, { parse_mode: 'MarkdownV2' });
+  if (!client) return ctx.reply(`\u274c Client "${slug}" not found. Use /clients to see all slugs.`);
 
   const result = await db.resumeClient(client.id);
   if (result.success) {
-    await ctx.replyWithMarkdownV2(
-      `\u25b6\ufe0f *AI Agent Resumed*\n\nClient: ${escapeMarkdown(client.name)}\n` +
-      `Status: \ud83d\udd12 ACTIVE\n` +
-      `The AI is now live and responding.`
-    );
+    const msg = `\u25b6\ufe0f *AI Agent Resumed*\n\nClient: ${escapeMarkdown(client.name)}\nStatus: \ud83d\udd12 ACTIVE\nThe AI is now live and responding.`;
+    try {
+      await ctx.replyWithMarkdownV2(msg);
+    } catch {
+      await ctx.reply(msg.replace(/[*_]/g, ''));
+    }
   } else {
     await ctx.reply(`\u274c Error: ${result.error}`);
   }
@@ -489,7 +504,7 @@ async function handleHealth(ctx) {
   const issues = checks.filter(c => c.status !== 'healthy').length;
   lines.push(`\nTotal issues: ${issues}`);
 
-  await ctx.replyWithMarkdownV2(lines.join('\n'));
+  await safeReplyMD(ctx, lines.join('\n'));
 }
 
 // ─── SECURITY COMMANDS ───────────────────────────────────────────
@@ -520,7 +535,7 @@ async function handleSecurity(ctx) {
         : '\u2705 All clear'
     ];
 
-    await ctx.replyWithMarkdownV2(lines.join('\n'));
+    await safeReplyMD(ctx, lines.join('\n'));
   } catch (err) {
     ctx.reply('\ud83d\udee1\ufe0f Security monitoring active. Baselines building...');
   }
@@ -548,7 +563,7 @@ async function handleThreats(ctx) {
       lines.push('');
     });
 
-    await ctx.replyWithMarkdownV2(lines.join('\n'));
+    await safeReplyMD(ctx, lines.join('\n'));
   } catch (err) {
     ctx.reply('\u26a0\ufe0f Could not fetch threats: ' + err.message);
   }
@@ -575,7 +590,7 @@ async function handleAuthLog(ctx) {
       lines.push(`  IP: ${escapeMarkdown(a.source_ip || 'N/A')} \u2013 ${a.failure_reason}`);
     });
 
-    await ctx.replyWithMarkdownV2(lines.join('\n'));
+    await safeReplyMD(ctx, lines.join('\n'));
   } catch (err) {
     ctx.reply('\u26a0\ufe0f Could not fetch auth log: ' + err.message);
   }
