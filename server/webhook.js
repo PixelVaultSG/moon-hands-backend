@@ -924,6 +924,13 @@ async function sendWhatsAppReply(toPhone, text, replyToMessageId = null) {
       console.error(`[360DIALOG:${TRACE_ID}] ❌ Attempt ${i + 1} failed: HTTP ${result.status}`);
       console.error(`[360DIALOG:${TRACE_ID}] Response: ${errorText.substring(0, 500)}`);
       
+      // Check for WABA pending (404 = number not found = WABA not verified)
+      if (result.status === 404 && errorText.includes('Not Found')) {
+        console.error(`[360DIALOG:${TRACE_ID}] ⚠️  WABA appears to be in 'Pending' state.`);
+        console.error(`[360DIALOG:${TRACE_ID}]     Meta has not yet verified your WhatsApp Business Account.`);
+        console.error(`[360DIALOG:${TRACE_ID}]     Fix: 360dialog Dashboard → Complete Meta Verification`);
+      }
+      
       // Only continue to next endpoint on 401 (wrong endpoint)
       if (result.status !== 401 && i < ENDPOINTS.length - 1) {
         console.log(`[360DIALOG:${TRACE_ID}] Stopping — error ${result.status} won't be fixed by changing endpoint`);
