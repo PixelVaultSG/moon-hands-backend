@@ -825,8 +825,10 @@ function getRateLimitResponse(reason) {
 async function sendWhatsAppReply(toPhone, text, replyToMessageId = null) {
   const d360Key = process.env.D360_API_KEY;
   
+  console.log(`[360DIALOG] sendWhatsAppReply called: to=${toPhone?.slice(-4)}, text_len=${text?.length}`);
+  
   if (!d360Key) {
-    console.warn('[360DIALOG] D360_API_KEY not set — cannot send WhatsApp reply. Set it in Render environment variables.');
+    console.error('[360DIALOG] D360_API_KEY not set — cannot send WhatsApp reply. Set it in Render environment variables.');
     return false;
   }
   
@@ -835,35 +837,33 @@ async function sendWhatsAppReply(toPhone, text, replyToMessageId = null) {
     return false;
   }
   
-  // 360dialog API endpoint — auto-detect sandbox vs production
-  // Sandbox API key format: J6BC2J3LY2XWMKRG6ZP2S4FIA6Y2FF6C (uppercase alnum, ~30 chars)
-  // Sandbox endpoint: waba-sandbox.360dialog.io
-  // Production endpoint: waba.360dialog.io
-  const isSandbox = d360Key.length >= 25 && d360Key === d360Key.toUpperCase();
-  const D360_API_URL = process.env.D360_API_URL || 
+  // 360dialog API endpoint — prioritize explicit env var, then auto-detect
+  // Sandbox keys: exactly 32 chars, all uppercase A-Z0-9 (e.g., J6BC2J3LY2XWMKRG6ZP2S4FIA6Y2FF6C)
+  // Production keys: any other format
+  const explicitUrl = process.env.D360_API_URL;
+  const isSandbox = !explicitUrl && d360Key.length === 32 && /^[A-Z0-9]+$/.test(d360Key);
+  const D360_API_URL = explicitUrl || 
     (isSandbox ? 'https://waba-sandbox.360dialog.io/v1/messages' : 'https://waba.360dialog.io/v1/messages');
   
-  if (isSandbox) {
-    console.log('[360DIALOG] Using SANDBOX endpoint');
-  } else {
-    console.log('[360DIALOG] Using PRODUCTION endpoint');
-  }
+  console.log(`[360DIALOG] Endpoint: ${D360_API_URL.replace(/\/v1\/messages$/, '/...')} (explicit=${!!explicitUrl}, sandbox=${isSandbox})`);
+  console.log(`[360DIALOG] API key preview: ${d360Key.substring(0, 4)}...${d360Key.substring(d360Key.length - 4)} (len=${d360Key.length})`);
   
   const payload = {
     messaging_product: 'whatsapp',
     recipient_type: 'individual',
     to: toPhone,
     type: 'text',
-    text: { body: text.substring(0, 4096) } // WhatsApp max message length
+    text: { body: text.substring(0, 4096) }
   };
   
-  // Add reply context if we have the original message ID
   if (replyToMessageId) {
     payload.context = { message_id: replyToMessageId };
   }
   
+  // Try primary endpoint
+  let result;
   try {
-    const result = await fetch(D360_API_URL, {
+    result = await fetch(D360_API_URL, {
       method: 'POST',
       headers: {
         'D360-API-KEY': d360Key,
@@ -871,30 +871,54 @@ async function sendWhatsAppReply(toPhone, text, replyToMessageId = null) {
       },
       body: JSON.stringify(payload)
     });
-    
-    if (result.ok) {
-      const data = await result.json();
-      console.log(`[360DIALOG] Reply sent to ${toPhone.slice(-4)} | messageId: ${data.messages?.[0]?.id || 'unknown'}`);
-      return true;
-    }
-    
-    // Handle errors
-    const errorText = await result.text();
-    console.error(`[360DIALOG] Send failed (${result.status}): ${errorText}`);
-    
-    if (result.status === 401) {
-      console.error('[360DIALOG] Authentication failed — check your D360_API_KEY. Get it from 360dialog Dashboard → API Keys.');
-    } else if (result.status === 404) {
-      console.error(`[360DIALOG] Phone number ${toPhone.slice(-4)} not found — user may not have WhatsApp or number is invalid.`);
-    } else if (result.status === 429) {
-      console.error('[360DIALOG] Rate limited by 360dialog — wait a moment before retrying.');
-    }
-    
-    return false;
-  } catch (err) {
-    console.error(`[360DIALOG] Network error sending to ${toPhone.slice(-4)}: ${err.message}`);
+  } catch (networkErr) {
+    console.error(`[360DIALOG] Network error (primary): ${networkErr.message}`);
     return false;
   }
+  
+  // If 401 on primary, try alternative endpoint automatically
+  if (result.status === 401 && !explicitUrl) {
+    const altUrl = isSandbox 
+      ? 'https://waba.360dialog.io/v1/messages' 
+      : 'https://waba-sandbox.360dialog.io/v1/messages';
+    console.log(`[360DIALOG] 401 on primary — trying alternative endpoint: ${altUrl.replace(/\/v1\/messages$/, '/...')}`);
+    
+    try {
+      result = await fetch(altUrl, {
+        method: 'POST',
+        headers: {
+          'D360-API-KEY': d360Key,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(payload)
+      });
+      console.log(`[360DIALOG] Alternative endpoint returned ${result.status}`);
+    } catch (altErr) {
+      console.error(`[360DIALOG] Network error (alternative): ${altErr.message}`);
+      return false;
+    }
+  }
+  
+  if (result.ok) {
+    const data = await result.json();
+    console.log(`[360DIALOG] ✅ Reply sent to ${toPhone.slice(-4)} | messageId: ${data.messages?.[0]?.id || 'unknown'}`);
+    return true;
+  }
+  
+  // Log full error details
+  const errorText = await result.text();
+  console.error(`[360DIALOG] ❌ Send failed (${result.status}): ${errorText}`);
+  
+  if (result.status === 401) {
+    console.error('[360DIALOG] Authentication failed on BOTH endpoints. Your D360_API_KEY may be invalid or expired.');
+    console.error('[360DIALOG] Fix: 360dialog Dashboard → API Keys → copy the correct key. Set it as D360_API_KEY in Render.');
+  } else if (result.status === 404) {
+    console.error(`[360DIALOG] Phone number ${toPhone.slice(-4)} not found — user may not have WhatsApp.`);
+  } else if (result.status === 429) {
+    console.error('[360DIALOG] Rate limited by 360dialog.');
+  }
+  
+  return false;
 }
 
 // ─── SECURITY EVENT LOGGING ──────────────────────────────────────
