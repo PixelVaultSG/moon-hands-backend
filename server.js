@@ -61,8 +61,17 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // Debug endpoint
+  // Debug endpoint — requires API key authentication
+  // Prevents information leakage about system configuration
   if (url.pathname === '/debug' && req.method === 'GET') {
+    const apiKey = req.headers['x-api-key'];
+    const expectedKey = process.env.API_KEY || process.env.WEBHOOK_SECRET;
+    if (!expectedKey || apiKey !== expectedKey) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Unauthorized — valid x-api-key required' }));
+      console.warn(`[SECURITY] Unauthorized /debug access from ${req.headers['x-forwarded-for'] || 'unknown'}`);
+      return;
+    }
     const metrics = (() => { try { return require('./monitoring/uptime-metrics').getMetrics(); } catch(e) { return { error: e.message }; } })();
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
