@@ -291,6 +291,87 @@ bot.command('threats', safeHandler('/threats', commands.handleThreats));
 bot.command('authlog', safeHandler('/authlog', commands.handleAuthLog));
 bot.command('debug', safeHandler('/debug', commands.handleDebug));
 
+
+// ─── CLINIC SELECTION CALLBACKS ──────────────────────────────────
+// When user taps a clinic name from /clients, show the clinic action menu
+
+bot.action(/^clinic_menu:(.+)$/, safeHandler('clinic_menu', async (ctx) => {
+  const slug = ctx.match[1];
+  await ctx.answerCbQuery(`Loading ${slug}...`);
+  await commands.showClinicMenu(ctx, slug);
+}));
+
+// Clinic action callbacks — execute directly (one-tap)
+bot.action(/^clinic_viewconfig:(.+)$/, safeHandler('clinic_viewconfig', async (ctx) => {
+  const slug = ctx.match[1];
+  await ctx.answerCbQuery(`Loading config...`);
+  await commands.handleViewConfig(ctx, slug);
+}));
+
+bot.action(/^clinic_usage:(.+)$/, safeHandler('clinic_usage', async (ctx) => {
+  const slug = ctx.match[1];
+  await ctx.answerCbQuery(`Loading usage...`);
+  await commands.handleUsage(ctx, slug);
+}));
+
+bot.action(/^clinic_pause:(.+)$/, safeHandler('clinic_pause', async (ctx) => {
+  const slug = ctx.match[1];
+  await ctx.answerCbQuery(`Pausing ${slug}...`);
+  await commands.handlePause(ctx, slug);
+}));
+
+bot.action(/^clinic_resume:(.+)$/, safeHandler('clinic_resume', async (ctx) => {
+  const slug = ctx.match[1];
+  await ctx.answerCbQuery(`Resuming ${slug}...`);
+  await commands.handleResume(ctx, slug);
+}));
+
+// Clinic action callbacks — show typed command with pre-filled slug
+bot.action(/^clinic_addservice:(.+)$/, safeHandler('clinic_addservice', async (ctx) => {
+  const slug = ctx.match[1];
+  await ctx.answerCbQuery();
+  await ctx.reply(
+    `➕ Add Service to *${slug}*\n\nType:\n/addservice ${slug} "Service Name" $price durationMin\n\nExample:\n/addservice ${slug} "HIFU Treatment" $350 60`,
+    BACK_TO_MENU
+  );
+}));
+
+bot.action(/^clinic_updateprice:(.+)$/, safeHandler('clinic_updateprice', async (ctx) => {
+  const slug = ctx.match[1];
+  await ctx.answerCbQuery();
+  await ctx.reply(
+    `💰 Update Price for *${slug}*\n\nType:\n/updateprice ${slug} "Service Name" $newPrice\n\nExample:\n/updateprice ${slug} "HIFU Treatment" $299`,
+    BACK_TO_MENU
+  );
+}));
+
+bot.action(/^clinic_hours:(.+)$/, safeHandler('clinic_hours', async (ctx) => {
+  const slug = ctx.match[1];
+  await ctx.answerCbQuery();
+  await ctx.reply(
+    `🕐 Update Hours for *${slug}*\n\nType:\n/updatehours ${slug} <day> HH:MM HH:MM\n\nExample:\n/updatehours ${slug} Saturday 09:00 17:00`,
+    BACK_TO_MENU
+  );
+}));
+
+bot.action(/^clinic_faq:(.+)$/, safeHandler('clinic_faq', async (ctx) => {
+  const slug = ctx.match[1];
+  await ctx.answerCbQuery();
+  await ctx.reply(
+    `❓ Add FAQ for *${slug}*\n\nType:\n/addfaq ${slug} "Question?" | "Answer"\n\nExample:\n/addfaq ${slug} "Parking available?" | "Free parking at rear"`,
+    BACK_TO_MENU
+  );
+}));
+
+bot.action(/^clinic_voice:(.+)$/, safeHandler('clinic_voice', async (ctx) => {
+  const slug = ctx.match[1];
+  await ctx.answerCbQuery();
+  await ctx.reply(
+    `🎤 Update Brand Voice for *${slug}*\n\nType:\n/updatevoice ${slug} <field> <value>\n\nFields: name, greeting, tone, enthusiasm, notes\n\nExample:\n/updatevoice ${slug} greeting "Welcome to Glow!"`,
+    BACK_TO_MENU
+  );
+}));
+
 // ─── BOOKING APPROVAL COMMANDS ───────────────────────────────────
 
 const approvals = require('./commands/approvals');
