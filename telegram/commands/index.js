@@ -235,11 +235,13 @@ async function handleViewConfig(ctx, providedSlug = null) {
 
 async function handleAddService(ctx) {
   // Parse: /addservice <slug> "Service Name" $price duration
+  // Supports both straight quotes ("") and curly/smart quotes (" " " " )
   const args = ctx.message.text.split(/\s+/);
   if (args.length < 5) {
     return ctx.reply(
-      '\u26a0\ufe0f Usage: `/addservice <client-id> "Service Name" <price> <duration-min>`\n\n' +
-      'Example: `/addservice glow-beauty "Bridal Package" $500 180`'
+      '\u26a0\ufe0f Usage: /addservice <slug> "Service Name" <price> <duration>\n\n' +
+      'Example: /addservice pixellvault "HIFU Treatment" $350 60\n\n' +
+      'Note: Price can be with or without $ sign. Duration is in minutes.'
     );
   }
 
@@ -248,10 +250,19 @@ async function handleAddService(ctx) {
   if (!client) return ctx.reply(`\u274c Client "${slug}" not found. Use /clients to see all slugs.`);
 
   // Parse quoted service name + price + duration
+  // Regex supports both straight quotes (") and curly/smart quotes (") + optional $ before price
   const raw = ctx.message.text.replace(`/addservice ${slug} `, '');
-  const match = raw.match(/"([^"]+)"\s+(\S+)\s+(\d+)/);
+  const match = raw.match(/[\u201C"]([^\u201D"]+)[\u201D"]\s+\$?(\S+)\s+(\d+)/);
   if (!match) {
-    return ctx.reply('\u26a0\ufe0f Format: `/addservice clinic "Service Name" $100 60`');
+    return ctx.reply(
+      '\u26a0\ufe0f Format: /addservice <slug> "Service Name" <price> <duration>\n\n' +
+      `Your input: ${raw.substring(0, 60)}\n\n` +
+      'Tips:\n' +
+      '1. Use straight quotes: "Service Name" (not curly quotes)\n' +
+      '2. Price can be: $350 or just 350\n' +
+      '3. Duration is in minutes: 60\n\n' +
+      'Example: /addservice pixellvault "HIFU Treatment" $350 60'
+    );
   }
 
   const [, name, price, duration] = match;
@@ -297,9 +308,14 @@ async function handleUpdatePrice(ctx) {
   if (!client) return ctx.reply(`\u274c Client "${slug}" not found. Use /clients to see all slugs.`);
 
   const raw = ctx.message.text.replace(`/updateprice ${slug} `, '');
-  const match = raw.match(/"([^"]+)"\s+(\S+)/);
+  // Support both straight quotes (") and curly/smart quotes (")
+  const match = raw.match(/[\u201C"]([^\u201D"]+)[\u201D"]\s+\$?(\S+)/);
   if (!match) {
-    return ctx.reply('\u26a0\ufe0f Format: `/updateprice clinic "Service" $100`');
+    return ctx.reply(
+      '\u26a0\ufe0f Format: /updateprice <slug> "Service" <price>\n\n' +
+      'Example: /updateprice pixellvault "HIFU Treatment" $299\n\n' +
+      `Your input: ${raw.substring(0, 60)}`
+    );
   }
 
   const [, serviceName, newPrice] = match;
@@ -338,9 +354,14 @@ async function handleRemoveService(ctx) {
   if (!client) return ctx.reply(`\u274c Client "${slug}" not found. Use /clients to see all slugs.`);
 
   const raw = ctx.message.text.replace(`/removeservice ${slug} `, '');
-  const match = raw.match(/"([^"]+)"/);
+  // Support both straight quotes (") and curly/smart quotes (")
+  const match = raw.match(/[\u201C"]([^\u201D"]+)[\u201D"]/);
   if (!match) {
-    return ctx.reply('\u26a0\ufe0f Format: `/removeservice clinic "Service Name"`');
+    return ctx.reply(
+      '\u26a0\ufe0f Format: /removeservice <slug> "Service Name"\n\n' +
+      'Example: /removeservice pixellvault "HIFU Treatment"\n\n' +
+      `Your input: ${raw.substring(0, 60)}`
+    );
   }
 
   const serviceName = match[1];
@@ -397,7 +418,8 @@ async function handleAddFaq(ctx) {
     return ctx.reply('\u26a0\ufe0f Use `|` to separate question and answer.\nExample: `/addfaq clinic "Hours?" | Mon-Fri 9-6`');
   }
 
-  const question = parts[0].replace(/^"|"$/g, '').trim();
+  // Strip both straight quotes (") and curly/smart quotes (") from question
+  const question = parts[0].replace(/^[\u201C"]/, '').replace(/[\u201D"]$/g, '').trim();
   const answer = parts[1].trim();
 
   const result = await db.addFaq(client.id, question, answer);
@@ -446,7 +468,8 @@ async function handleUpdateVoice(ctx) {
 
   const slug = args[1];
   const field = args[2].toLowerCase();
-  const value = args.slice(3).join(' ').replace(/^"|"$/g, '');
+  // Strip both straight quotes (") and curly/smart quotes (") from value
+  const value = args.slice(3).join(' ').replace(/^[\u201C"]/, '').replace(/[\u201D"]$/g, '');
 
   const client = await db.getClientBySlug(slug);
   if (!client) return ctx.reply(`\u274c Client "${slug}" not found. Use /clients to see all slugs.`);
