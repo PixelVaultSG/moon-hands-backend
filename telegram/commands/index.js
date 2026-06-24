@@ -149,11 +149,13 @@ async function handleClients(ctx) {
   }
 }
 
-async function handleViewConfig(ctx) {
-  // Parse slug from message text: "/viewconfig pixellvault" → "pixellvault"
-  const msgText = ctx.message?.text || '';
-  const parts = msgText.split(/\s+/);
-  const slug = parts.length >= 2 ? parts[1].trim() : '';
+async function handleViewConfig(ctx, providedSlug = null) {
+  // Parse slug from message text or use provided slug from menu callback
+  const slug = providedSlug || (() => {
+    const msgText = ctx.message?.text || '';
+    const parts = msgText.split(/\s+/);
+    return parts.length >= 2 ? parts[1].trim() : '';
+  })();
   if (!slug) {
     return ctx.reply('⚠️ Usage: /viewconfig <slug>\n\nExample: /viewconfig pixellvault\n\nUse /clients to see all slugs.');
   }
@@ -408,10 +410,12 @@ async function handleUpdateVoice(ctx) {
   }
 }
 
-async function handlePause(ctx) {
-  const msgText = ctx.message?.text || '';
-  const parts = msgText.split(/\s+/);
-  const slug = parts.length >= 2 ? parts[1].trim() : '';
+async function handlePause(ctx, providedSlug = null) {
+  const slug = providedSlug || (() => {
+    const msgText = ctx.message?.text || '';
+    const parts = msgText.split(/\s+/);
+    return parts.length >= 2 ? parts[1].trim() : '';
+  })();
   if (!slug) return ctx.reply('\u26a0\ufe0f Usage: `/pause <slug>`\n\nExample: /pause pixellvault\n\nUse /clients to see all slugs.');
 
   const client = await db.getClientBySlug(slug);
@@ -430,10 +434,12 @@ async function handlePause(ctx) {
   }
 }
 
-async function handleResume(ctx) {
-  const msgText = ctx.message?.text || '';
-  const parts = msgText.split(/\s+/);
-  const slug = parts.length >= 2 ? parts[1].trim() : '';
+async function handleResume(ctx, providedSlug = null) {
+  const slug = providedSlug || (() => {
+    const msgText = ctx.message?.text || '';
+    const parts = msgText.split(/\s+/);
+    return parts.length >= 2 ? parts[1].trim() : '';
+  })();
   if (!slug) return ctx.reply('\u26a0\ufe0f Usage: `/resume <slug>`\n\nExample: /resume pixellvault\n\nUse /clients to see all slugs.');
 
   const client = await db.getClientBySlug(slug);
@@ -452,10 +458,12 @@ async function handleResume(ctx) {
   }
 }
 
-async function handleUsage(ctx) {
-  const text = ctx.message?.text || '';
-  const parts = text.split(/\s+/);
-  const slug = parts.length >= 2 ? parts[1].trim() : '';
+async function handleUsage(ctx, providedSlug = null) {
+  const slug = providedSlug || (() => {
+    const text = ctx.message?.text || '';
+    const parts = text.split(/\s+/);
+    return parts.length >= 2 ? parts[1].trim() : '';
+  })();
   if (!slug) return ctx.reply('⚠️ Usage: /usage <slug>\n\nExample: /usage pixellvault\n\nUse /clients to see all slugs.');
 
   const client = await db.getClientBySlug(slug);
