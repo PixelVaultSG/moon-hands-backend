@@ -111,43 +111,98 @@ async function handleHelp(ctx) {
 
 async function handleClients(ctx) {
   try {
-  const clients = await db.getAllClients();
-  if (!clients.length) {
-    return ctx.reply('\ud83d\udced No clients found.');
-  }
+    const { data: clients, error } = await db.supabase
+      .from('clients')
+      .select('id, slug, name, status, whatsapp_number')
+      .order('created_at', { ascending: true });
 
-  const active = clients.filter(c => c.status === 'active');
-  const paused = clients.filter(c => c.status === 'paused');
-  const setup = clients.filter(c => c.status === 'setup');
+    if (error) {
+      console.error('[TELEGRAM /clients] DB Error:', error.message);
+      return ctx.reply(`⚠️ Database error: ${error.message}`);
+    }
 
-  const lines = [
-    `📋 All Clients (${clients.length} total)\n`,
-    active.length ? `Active (${active.length}):` : '',
-    ...active.map(c => {
-      const tokenPreview = c.webhook_token ? c.webhook_token.substring(0, 8) + '...' : 'N/A';
-      return `🔒 ${c.slug}
-   Name: ${c.name}
-   Phone: ${c.whatsapp_number || 'N/A'}
-   Token: ${tokenPreview}`;
-    }),
-    '',
-    setup.length ? `In Setup (${setup.length}):` : '',
-    ...setup.map(c => `⚡ ${c.slug} — ${c.name}`),
-    '',
-    paused.length ? `Paused (${paused.length}):` : '',
-    ...paused.map(c => `⏸️ ${c.slug} — ${c.name}`),
-    '',
-    `Use /viewconfig <slug> for full details`,
-    `Example: /viewconfig pixellvault`,
-  ];
+    if (!clients || clients.length === 0) {
+      return ctx.reply('No clients found.');
+    }
 
-  // Plain text reply to avoid MarkdownV2 parsing crashes
-  await ctx.reply(lines.filter(Boolean).join('\n'));
+    // Build inline keyboard with clinic buttons (2 per row)
+    const { Markup } = require('telegraf');
+    const buttons = [];
+    for (let i = 0; i < clients.length; i += 2) {
+      const row = [];
+      const c1 = clients[i];
+      const status1 = c1.status === 'active' ? '✅' : c1.status === 'paused' ? '⏸' : '⚡';
+      row.push(Markup.button.callback(`${status1} ${c1.name}`, `clinic_menu:${c1.slug}`));
+      if (clients[i + 1]) {
+        const c2 = clients[i + 1];
+        const status2 = c2.status === 'active' ? '✅' : c2.status === 'paused' ? '⏸' : '⚡';
+        row.push(Markup.button.callback(`${status2} ${c2.name}`, `clinic_menu:${c2.slug}`));
+      }
+      buttons.push(row);
+    }
+
+    await ctx.reply(
+      `📋 Select a clinic to manage:
+
+${clients.length} clinic(s) total`,
+      Markup.inlineKeyboard(buttons)
+    );
   } catch (err) {
     console.error('[TELEGRAM /clients] DB Error:', err.message);
     ctx.reply(`⚠️ Database error: ${err.message}`);
   }
 }
+
+// ─── CLINIC ACTION MENU ──────────────────────────────────────────
+// Shows per-clinic action buttons when a clinic is selected
+
+async function showClinicMenu(ctx, slug) {
+  const { Markup } = require('telegraf');
+  const client = await db.getClientBySlug(slug);
+  if (!client) {
+    return ctx.reply(`❌ Clinic "${slug}" not found.`, Markup.inlineKeyboard([
+      [Markup.button.callback('🔙 Back to Clinics', 'menu_clients')]
+    ]));
+  }
+
+  const statusEmoji = client.status === 'active' ? '✅' : client.status === 'paused' ? '⏸' : '⚡';
+
+  const keyboard = Markup.inlineKeyboard([
+    [
+      Markup.button.callback('⚙️ View Config', `clinic_viewconfig:${slug}`),
+      Markup.button.callback('📈 Usage', `clinic_usage:${slug}`),
+    ],
+    [
+      Markup.button.callback('➕ Add Service', `clinic_addservice:${slug}`),
+      Markup.button.callback('💰 Update Price', `clinic_updateprice:${slug}`),
+    ],
+    [
+      Markup.button.callback('⏸ Pause', `clinic_pause:${slug}`),
+      Markup.button.callback('▶️ Resume', `clinic_resume:${slug}`),
+    ],
+    [
+      Markup.button.callback('🕐 Hours', `clinic_hours:${slug}`),
+      Markup.button.callback('❓ FAQ', `clinic_faq:${slug}`),
+      Markup.button.callback('🎤 Voice', `clinic_voice:${slug}`),
+    ],
+    [
+      Markup.button.callback('🔙 Back to Clinics', 'menu_clients'),
+    ],
+  ]);
+
+  await ctx.editMessageText(
+    `${statusEmoji} *${client.name}* (${slug})
+` +
+    `Status: ${client.status}
+` +
+    `Phone: ${client.whatsapp_number || 'N/A'}
+
+` +
+    `Select an action:`,
+    { parse_mode: 'Markdown', ...keyboard }
+  );
+}
+
 
 async function handleViewConfig(ctx, providedSlug = null) {
   // Parse slug from message text or use provided slug from menu callback
@@ -627,6 +682,7 @@ async function handleDebug(ctx) {
 module.exports = {
   handleHelp,
   handleClients,
+  showClinicMenu,
   handleViewConfig,
   handleAddService,
   handleUpdatePrice,
