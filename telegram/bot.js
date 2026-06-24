@@ -97,17 +97,163 @@ bot.use(async (ctx, next) => {
   return next();
 });
 
-// ─── COMMANDS ────────────────────────────────────────────────────
+// ─── INLINE KEYBOARD MENU ────────────────────────────────────────
+
+const { Markup } = require('telegraf');
+
+// Main menu layout — organized by function
+const MENU_KEYBOARD = Markup.inlineKeyboard([
+  // Row 1: Dashboard
+  [
+    Markup.button.callback('📊 Status', 'menu_health'),
+    Markup.button.callback('🏥 Clinics', 'menu_clients'),
+    Markup.button.callback('📈 Usage', 'menu_usage'),
+  ],
+  // Row 2: Clinic Management
+  [
+    Markup.button.callback('⚙️ View Config', 'menu_viewconfig'),
+    Markup.button.callback('➕ Add Service', 'menu_addservice'),
+    Markup.button.callback('💰 Update Price', 'menu_updateprice'),
+  ],
+  // Row 3: Operations
+  [
+    Markup.button.callback('⏸ Pause AI', 'menu_pause'),
+    Markup.button.callback('▶️ Resume AI', 'menu_resume'),
+    Markup.button.callback('🛡 Security', 'menu_security'),
+  ],
+  // Row 4: Settings
+  [
+    Markup.button.callback('🕐 Update Hours', 'menu_updatehours'),
+    Markup.button.callback('❓ Add FAQ', 'menu_addfaq'),
+    Markup.button.callback('🎤 Voice', 'menu_voice'),
+  ],
+  // Row 5: Help
+  [
+    Markup.button.callback('❓ Full Command List', 'menu_help'),
+  ],
+]);
+
+// Back button for sub-menus
+const BACK_TO_MENU = Markup.inlineKeyboard([
+  [Markup.button.callback('🔙 Back to Menu', 'menu_main')],
+]);
 
 bot.start((ctx) => {
   auditCommand(ctx.from.id, '/start', true);
   ctx.reply(
     `Moon Hands Admin Bot\n\n` +
     `Welcome back, boss.\n\n` +
-    `Use /help to see all commands.\n\n` +
-    `Remember: only you can use this bot.`
+    `Use /menu for the quick-action dashboard, or /help for full commands.`,
+    MENU_KEYBOARD
   );
 });
+
+bot.command('menu', safeHandler('/menu', async (ctx) => {
+  await ctx.reply(
+    `📱 Moon Hands Quick Menu\n\n` +
+    `Tap any button to manage your clinics.`,
+    MENU_KEYBOARD
+  );
+}));
+
+// ─── CALLBACK HANDLERS ───────────────────────────────────────────
+
+// Helper: extract slug from the last message or prompt user
+async function getSlug(ctx) {
+  // Try to get slug from user's last /clients view or prompt
+  // For now, show a message asking them to type the clinic slug
+  return null;
+}
+
+// Dashboard callbacks
+bot.action('menu_main', safeHandler('menu_main', async (ctx) => {
+  await ctx.editMessageText(
+    `📱 Moon Hands Quick Menu\n\nTap any button to manage your clinics.`,
+    MENU_KEYBOARD
+  );
+}));
+
+bot.action('menu_health', safeHandler('menu_health', async (ctx) => {
+  await ctx.answerCbQuery('Checking status...');
+  await commands.handleHealth(ctx);
+}));
+
+bot.action('menu_clients', safeHandler('menu_clients', async (ctx) => {
+  await ctx.answerCbQuery('Loading clinics...');
+  await commands.handleClients(ctx);
+}));
+
+bot.action('menu_usage', safeHandler('menu_usage', async (ctx) => {
+  await ctx.answerCbQuery('Loading usage...');
+  // Get the first clinic's slug or use 'pixellvault' as default
+  await commands.handleUsage(ctx, 'pixellvault');
+}));
+
+bot.action('menu_viewconfig', safeHandler('menu_viewconfig', async (ctx) => {
+  await ctx.answerCbQuery('Loading config...');
+  await commands.handleViewConfig(ctx, 'pixellvault');
+}));
+
+bot.action('menu_security', safeHandler('menu_security', async (ctx) => {
+  await ctx.answerCbQuery('Checking security...');
+  await commands.handleSecurity(ctx);
+}));
+
+bot.action('menu_help', safeHandler('menu_help', async (ctx) => {
+  await ctx.answerCbQuery('Loading help...');
+  await commands.handleHelp(ctx);
+}));
+
+// Service management callbacks — these need slug + params, so show instruction
+bot.action('menu_addservice', safeHandler('menu_addservice', async (ctx) => {
+  await ctx.answerCbQuery();
+  await ctx.reply(
+    `➕ Add Service\n\nType:\n/addservice <slug> "Service Name" $price durationMin\n\nExample:\n/addservice pixellvault "HIFU Treatment" $350 60`,
+    BACK_TO_MENU
+  );
+}));
+
+bot.action('menu_updateprice', safeHandler('menu_updateprice', async (ctx) => {
+  await ctx.answerCbQuery();
+  await ctx.reply(
+    `💰 Update Price\n\nType:\n/updateprice <slug> "Service Name" $newPrice\n\nExample:\n/updateprice pixellvault "HIFU Treatment" $299`,
+    BACK_TO_MENU
+  );
+}));
+
+bot.action('menu_updatehours', safeHandler('menu_updatehours', async (ctx) => {
+  await ctx.answerCbQuery();
+  await ctx.reply(
+    `🕐 Update Hours\n\nType:\n/updatehours <slug> <day> HH:MM HH:MM\n\nExample:\n/updatehours pixellvault Saturday 09:00 17:00`,
+    BACK_TO_MENU
+  );
+}));
+
+bot.action('menu_addfaq', safeHandler('menu_addfaq', async (ctx) => {
+  await ctx.answerCbQuery();
+  await ctx.reply(
+    `❓ Add FAQ\n\nType:\n/addfaq <slug> "Question?" | "Answer"\n\nExample:\n/addfaq pixellvault "Parking available?" | "Free parking at rear"`,
+    BACK_TO_MENU
+  );
+}));
+
+bot.action('menu_voice', safeHandler('menu_voice', async (ctx) => {
+  await ctx.answerCbQuery();
+  await ctx.reply(
+    `🎤 Update Brand Voice\n\nType:\n/updatevoice <slug> <field> <value>\n\nFields: name, greeting, tone, enthusiasm, notes\n\nExample:\n/updatevoice pixellvault greeting "Welcome to Glow!"`,
+    BACK_TO_MENU
+  );
+}));
+
+bot.action('menu_pause', safeHandler('menu_pause', async (ctx) => {
+  await ctx.answerCbQuery('Pausing AI...');
+  await commands.handlePause(ctx, 'pixellvault');
+}));
+
+bot.action('menu_resume', safeHandler('menu_resume', async (ctx) => {
+  await ctx.answerCbQuery('Resuming AI...');
+  await commands.handleResume(ctx, 'pixellvault');
+}));
 
 // ─── COMMAND HANDLER WRAPPER ─────────────────────────────────────
 // ALL async command handlers wrapped with try/catch to prevent
