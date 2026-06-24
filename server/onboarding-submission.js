@@ -18,6 +18,12 @@ const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const ADMIN_CHAT_ID = process.env.TELEGRAM_ADMIN_CHAT_ID;
 const ONBOARDING_API_KEY = process.env.ONBOARDING_API_KEY || process.env.WEBHOOK_SECRET;
 
+// Security: API key MUST be configured for onboarding endpoint
+if (!ONBOARDING_API_KEY) {
+  console.error('[ONBOARDING] CRITICAL: ONBOARDING_API_KEY or WEBHOOK_SECRET must be set in environment');
+  console.error('[ONBOARDING] The onboarding endpoint will reject all requests until configured');
+}
+
 // Rate limiter: simple in-memory map (resets on server restart)
 const rateLimiter = new Map();
 const RATE_LIMIT_WINDOW_MS = 60 * 1000; // 60 seconds
@@ -183,11 +189,12 @@ async function handleOnboardingSubmission(req, res) {
   console.log(`[ONBOARDING] ${req.method} ${url.pathname} from ${req.headers['x-forwarded-for'] || 'unknown'}`);
 
   try {
-    // 1. API Key validation (optional but recommended)
+    // 1. API Key validation (MANDATORY — no key = reject all)
     const apiKey = req.headers['x-api-key'];
-    if (ONBOARDING_API_KEY && apiKey !== ONBOARDING_API_KEY) {
+    if (!ONBOARDING_API_KEY || apiKey !== ONBOARDING_API_KEY) {
       res.writeHead(401, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ success: false, error: 'Invalid API key' }));
+      res.end(JSON.stringify({ success: false, error: 'Unauthorized — valid x-api-key required' }));
+      console.warn(`[ONBOARDING] Rejected request from ${clientIp} — missing/invalid API key`);
       return true;
     }
 
@@ -272,7 +279,13 @@ async function handleOnboardingSubmission(req, res) {
 function readBody(req) {
   return new Promise((resolve, reject) => {
     let body = '';
-    req.on('data', chunk => { body += chunk; if (body.length > 1e6) reject(new Error('Payload too large')); });
+    const MAX_BODY_SIZE = 100 * 1024; // 100KB max — prevents DoS via huge payloads
+    req.on('data', chunk => {
+      body += chunk;
+      if (body.length > MAX_BODY_SIZE) {
+        reject(new Error('Payload too large'));
+      }
+    });
     req.on('end', () => resolve(body));
     req.on('error', reject);
   });
