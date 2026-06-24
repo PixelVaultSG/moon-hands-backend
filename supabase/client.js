@@ -32,7 +32,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
   },
 });
 
-console.log(`[SUPABASE] Initialized with ${isNewKeyFormat ? 'new Secret API key' : 'legacy JWT key'} format (${SUPABASE_KEY.substring(0, 12)}...)`);
+console.log(`[SUPABASE] Initialized with ${isNewKeyFormat ? 'new Secret API key' : 'legacy JWT key'} format`);
 
 // ─── CLIENT OPERATIONS ────────────────────────────────────────────
 
