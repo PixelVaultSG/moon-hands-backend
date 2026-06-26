@@ -193,6 +193,7 @@ function validateAllModules() {
     './telegram/booking-notifications.js',
     './utils/ical-generator.js',
     './supabase/client.js',
+    './jobs/weekly-optimization-loop.js',
   ];
   
   let allOk = true;
@@ -322,6 +323,20 @@ setTimeout(() => {
     console.error('  ❌ Daily report scheduler failed:', err.message);
   }
 }, 400);
+
+// ─── WEEKLY OPTIMIZATION LOOP (Premium Tier) ─────────────────────
+// AI-powered weekly analysis: FAQ gaps, no-show patterns, conversion leaks
+// Runs every Sunday at 2 AM SGT. Cost-controlled: ~S$0.03/clinic/week.
+
+setTimeout(() => {
+  try {
+    const { startWeeklyLoopScheduler } = require('./jobs/weekly-optimization-loop');
+    startWeeklyLoopScheduler();
+    console.log('  ✅ Weekly optimization loop scheduler started (Sundays 2 AM SGT)');
+  } catch (err) {
+    console.error('  ❌ Weekly loop scheduler failed:', err.message);
+  }
+}, 500);
 
 // ─── FINAL STATUS ────────────────────────────────────────────────
 
