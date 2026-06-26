@@ -194,6 +194,8 @@ function validateAllModules() {
     './utils/ical-generator.js',
     './supabase/client.js',
     './jobs/weekly-optimization-loop.js',
+    './jobs/waitlist-reengagement.js',
+    './jobs/daily-booking-summary.js',
   ];
   
   let allOk = true;
@@ -337,6 +339,34 @@ setTimeout(() => {
     console.error('  ❌ Weekly loop scheduler failed:', err.message);
   }
 }, 500);
+
+// ─── WAITLIST RE-ENGAGEMENT ENGINE ───────────────────────────────
+// Monitors cancelled appointments every 15 min, proactively notifies
+// waitlisted patients via WhatsApp when slots open up.
+
+setTimeout(() => {
+  try {
+    const { startWaitlistScheduler } = require('./jobs/waitlist-reengagement');
+    startWaitlistScheduler();
+    console.log('  ✅ Waitlist re-engagement scheduler started (every 15 min)');
+  } catch (err) {
+    console.error('  ❌ Waitlist scheduler failed:', err.message);
+  }
+}, 600);
+
+// ─── DAILY BOOKING SUMMARY ───────────────────────────────────────
+// Morning summary at 8:30 AM SGT with YES/NO attendance buttons.
+// Post-appointment follow-ups every 15 minutes.
+
+setTimeout(() => {
+  try {
+    const { startDailySummaryScheduler } = require('./jobs/daily-booking-summary');
+    startDailySummaryScheduler();
+    console.log('  ✅ Daily booking summary scheduler started (8:30 AM SGT)');
+  } catch (err) {
+    console.error('  ❌ Daily summary scheduler failed:', err.message);
+  }
+}, 700);
 
 // ─── FINAL STATUS ────────────────────────────────────────────────
 
