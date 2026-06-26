@@ -291,6 +291,40 @@ bot.command('threats', safeHandler('/threats', commands.handleThreats));
 bot.command('authlog', safeHandler('/authlog', commands.handleAuthLog));
 bot.command('debug', safeHandler('/debug', commands.handleDebug));
 
+// ─── APPOINTMENT ATTENDANCE CALLBACKS ────────────────────────────
+// YES/NO buttons from daily booking summary
+
+bot.action(/^appt_yes:(.+):(.+)$/, safeHandler('appt_yes', async (ctx) => {
+  const slug = ctx.match[1];
+  const apptId = ctx.match[2];
+  const { markAppointmentAttendance } = require('../jobs/daily-booking-summary');
+
+  await ctx.answerCbQuery('Marking as showed up...');
+  const result = await markAppointmentAttendance(apptId, true, ctx.from.id);
+
+  if (result.success) {
+    await ctx.editMessageReplyMarkup({ inline_keyboard: [] }); // Remove buttons
+    await ctx.reply(`✅ ${result.appointment?.customer_name || 'Patient'} marked as *showed up*.\\n\\n_Updated in weekly optimization data._`, { parse_mode: 'Markdown' });
+  } else {
+    await ctx.answerCbQuery('Error marking attendance');
+  }
+}));
+
+bot.action(/^appt_no:(.+):(.+)$/, safeHandler('appt_no', async (ctx) => {
+  const slug = ctx.match[1];
+  const apptId = ctx.match[2];
+  const { markAppointmentAttendance } = require('../jobs/daily-booking-summary');
+
+  await ctx.answerCbQuery('Marking as no-show...');
+  const result = await markAppointmentAttendance(apptId, false, ctx.from.id);
+
+  if (result.success) {
+    await ctx.editMessageReplyMarkup({ inline_keyboard: [] }); // Remove buttons
+    await ctx.reply(`❌ ${result.appointment?.customer_name || 'Patient'} marked as *no-show*.\\n\\n_This will be analyzed in the weekly optimization loop._`, { parse_mode: 'Markdown' });
+  } else {
+    await ctx.answerCbQuery('Error marking attendance');
+  }
+}));
 
 // ─── CLINIC SELECTION CALLBACKS ──────────────────────────────────
 // When user taps a clinic name from /clients, show the clinic action menu
