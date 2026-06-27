@@ -24,10 +24,10 @@ SELECT id FROM clients WHERE slug = 'pixellvault';
 
 -- Glow Aesthetics — full config
 INSERT INTO client_configs (
-  client_id, agent_name, greeting, tone, enthusiasm, 
-  services, faqs, operating_hours, special_notes, created_at, updated_at
+  client_id, agent_name, greeting, tone, enthusiasm,
+  services, faqs, operating_hours, special_notes
 )
-SELECT 
+SELECT
   id,
   'Glow',
   'Hello and welcome to Glow Aesthetics! I am Glow, your AI assistant. How can I help you look and feel your best today?',
@@ -63,18 +63,16 @@ SELECT
     {"day": "Saturday", "open_time": "10:00", "close_time": "18:00", "isOpen": true},
     {"day": "Sunday", "open_time": "", "close_time": "", "isOpen": false}
   ]'::jsonb,
-  'Doctor is Dr. Rachel Lim (MBBS, Dip Dermatology). Clinic established 2019. Located at 123 Orchard Road, #05-01 Singapore 238863. Emergency contact: +65 8123 4567.',
-  NOW(),
-  NOW()
+  'Doctor is Dr. Rachel Lim (MBBS, Dip Dermatology). Clinic established 2019. Located at 123 Orchard Road, #05-01 Singapore 238863. Emergency contact: +65 8123 4567.'
 FROM clients WHERE slug = 'glow-aesthetics'
 ON CONFLICT (client_id) DO NOTHING;
 
 -- Update pixellvault config if not exists
 INSERT INTO client_configs (
   client_id, agent_name, greeting, tone, enthusiasm,
-  services, faqs, operating_hours, special_notes, created_at, updated_at
+  services, faqs, operating_hours, special_notes
 )
-SELECT 
+SELECT
   id,
   'Pixel',
   'Welcome to Pixel Vault! I am Pixel, your AI assistant. How may I help you today?',
@@ -101,9 +99,7 @@ SELECT
     {"day": "Saturday", "open_time": "10:30", "close_time": "17:00", "isOpen": true},
     {"day": "Sunday", "open_time": "", "close_time": "", "isOpen": false}
   ]'::jsonb,
-  'Located at Novena Medical Centre #08-12. Doctor: Dr. Kenneth Thean. Contact: +65 8139 8272.',
-  NOW(),
-  NOW()
+  'Located at Novena Medical Centre #08-12. Doctor: Dr. Kenneth Thean. Contact: +65 8139 8272.'
 FROM clients WHERE slug = 'pixellvault'
 ON CONFLICT (client_id) DO NOTHING;
 
