@@ -128,7 +128,7 @@ async function storeInSupabase(data) {
     business_registration_number: data.businessRegNo,
     contact_name: data.contactName,
     contact_role: data.contactRole,
-    selected_plan: data.selectedPlan === 'premium' ? 'professional' : 'starter',
+    selected_plan: data.selectedPlan === 'premium' ? 'premium' : 'basic',
     whatsapp_number: data.whatsapp,
     languages: data.languages || ['en'],
     treatment_menu: JSON.stringify(data.treatments || []),
