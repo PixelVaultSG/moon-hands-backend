@@ -111,7 +111,7 @@ AND NOT EXISTS (SELECT 1 FROM client_configs cc WHERE cc.client_id = c.id);
 
 INSERT INTO conversations (client_id, channel, customer_phone, customer_name, message, ai_response, intent, created_at)
 SELECT c.id, 'whatsapp', msg.p, msg.n, msg.m, msg.r, msg.i,
-  NOW() - ((msg.d || ' days')::int || ' days')::interval - ((msg.h || ' hours')::int || ' hours')::interval
+  NOW() - make_interval(days => msg.d::int, hours => msg.h::int)
 FROM clients c,
 (VALUES
   ('+6591230001', 'Sarah', 'Hi, what is HIFU?', 'Hello! HIFU stands for High-Intensity Focused Ultrasound. It is a non-surgical face lift treatment that uses ultrasound energy to lift and tighten skin. We offer HIFU Face Lift at $580 (90 mins) and HIFU Double Chin at $350 (60 mins). Would you like to book a consultation?', 'service_inquiry', '2', '10'),
@@ -129,13 +129,12 @@ FROM clients c,
   ('+6591230011', 'Sharon', 'Can I cancel my Saturday appointment?', 'I can help you cancel. To confirm, you want to cancel your Saturday appointment. Once cancelled, the slot will be released. Would you like me to proceed?', 'cancel', '1', '9'),
   ('+6591230012', 'Emily', 'Are you open on Sunday?', 'We are closed on Sundays. Our hours are Monday to Friday 10 AM to 8 PM, Saturday 10 AM to 6 PM. Would you like to book for Saturday or next week?', 'hours', '0', '19')
 ) AS msg(p, n, m, r, i, d, h)
-WHERE c.slug = 'glow-aesthetics'
-ON CONFLICT DO NOTHING;
+WHERE c.slug = 'glow-aesthetics';
 
 -- Pixel Vault conversations
 INSERT INTO conversations (client_id, channel, customer_phone, customer_name, message, ai_response, intent, created_at)
 SELECT c.id, 'whatsapp', msg.p, msg.n, msg.m, msg.r, msg.i,
-  NOW() - ((msg.d || ' days')::int || ' days')::interval - ((msg.h || ' hours')::int || ' hours')::interval
+  NOW() - make_interval(days => msg.d::int, hours => msg.h::int)
 FROM clients c,
 (VALUES
   ('+6598120001', 'Benjamin', 'Hi, what services do you offer?', 'Welcome to Pixel Vault! We offer HIFU, Laser Toning, BB Glow Facial, and Skin Booster Injections. Our most popular is HIFU Full Face at $550. Would you like details on any specific treatment?', 'service_inquiry', '1', '11'),
@@ -147,8 +146,7 @@ FROM clients c,
   ('+6598120007', 'Hannah', 'Do you have any promotions?', 'We currently have a first-timer promotion: 20% off your first HIFU treatment. That brings it down from $550 to $440. Limited time only! Would you like to book?', 'pricing', '1', '19'),
   ('+6598120008', 'Ian', 'What are your opening hours?', 'We are open Monday to Saturday, 10:30 AM to 7 PM. Closed on Sundays. Our last appointment is at 5:30 PM.', 'hours', '0', '8')
 ) AS msg(p, n, m, r, i, d, h)
-WHERE c.slug = 'pixellvault'
-ON CONFLICT DO NOTHING;
+WHERE c.slug = 'pixellvault';
 
 -- ============================================================
 -- PART 4: APPOINTMENTS
