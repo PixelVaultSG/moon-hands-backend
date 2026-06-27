@@ -15,11 +15,13 @@
  * Never crash or return HTTP errors to 360dialog (they retry).
  */
 
-// ─── IN-MEMORY STORE (per-phone tracking) ─────────────────────────
-// In production, this would be Redis. For now, in-memory with TTL cleanup.
+// ─── HYBRID STORE: In-memory L1 cache + Supabase L2 persistence ──
+// In-memory for speed, Supabase for durability across restarts.
+// TODO: Migrate to Redis after 5+ clinics for better performance.
 
 const phoneStore = new Map(); // phone -> { messages: [], repeatCount, blockedUntil, sessionBudget }
 const STORE_TTL_MS = 60 * 60 * 1000; // Keep records for 1 hour
+const PERSIST_INTERVAL_MS = 5 * 60 * 1000; // Save to Supabase every 5 minutes
 
 function getRecord(phone) {
   const key = normalizePhone(phone);
@@ -30,6 +32,68 @@ function setRecord(phone, record) {
   const key = normalizePhone(phone);
   phoneStore.set(key, record);
 }
+
+// ─── SUPABASE PERSISTENCE ────────────────────────────────────────
+
+let supabaseClient = null;
+try {
+  supabaseClient = require('../supabase/client').supabase;
+} catch (e) {
+  // Supabase not available — fall back to pure in-memory (acceptable for single-instance)
+}
+
+const PERSIST_KEY = 'rate_limiter_state';
+
+async function persistToSupabase() {
+  if (!supabaseClient) return;
+  try {
+    const payload = {
+      key: PERSIST_KEY,
+      data: Array.from(phoneStore.entries()),
+      ai_calls: dailyAICalls,
+      updated_at: new Date().toISOString(),
+    };
+    const { error } = await supabaseClient
+      .from('kv_store')
+      .upsert(payload, { onConflict: 'key' });
+    if (error) console.error('[RATE_LIMITER] Persist failed:', error.message);
+  } catch (err) {
+    console.error('[RATE_LIMITER] Persist error:', err.message);
+  }
+}
+
+async function restoreFromSupabase() {
+  if (!supabaseClient) return;
+  try {
+    const { data, error } = await supabaseClient
+      .from('kv_store')
+      .select('data, ai_calls')
+      .eq('key', PERSIST_KEY)
+      .single();
+    if (error || !data) return;
+    
+    // Restore phone records (only if not expired)
+    const now = Date.now();
+    for (const [key, record] of data.data || []) {
+      if (record.lastActivity && now - record.lastActivity < STORE_TTL_MS) {
+        phoneStore.set(key, record);
+      }
+    }
+    // Restore AI call count
+    if (typeof data.ai_calls === 'number') {
+      dailyAICalls = data.ai_calls;
+    }
+    console.log(`[RATE_LIMITER] Restored ${phoneStore.size} records from Supabase`);
+  } catch (err) {
+    console.error('[RATE_LIMITER] Restore error:', err.message);
+  }
+}
+
+// Persist every 5 minutes
+setInterval(persistToSupabase, PERSIST_INTERVAL_MS);
+
+// Restore on startup (delay to allow Supabase client to initialize)
+setTimeout(restoreFromSupabase, 5000);
 
 function normalizePhone(phone) {
   return (phone || '').replace(/\D/g, ''); // Full normalized phone — no truncation (prevents collision attacks)

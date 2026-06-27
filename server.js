@@ -21,13 +21,59 @@ logDeployment().catch(() => {}); // fire-and-forget
 // This ensures Render always sees an open port, even if modules fail
 
 const server = http.createServer(async (req, res) => {
-  // CORS
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  // SECURITY HEADERS (applied to all responses)
+  res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains; preload');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src 'self' https://*.supabase.co https://api.telegram.org https://api.openai.com https://waba.360dialog.io https://waba-sandbox.360dialog.io; img-src 'self' data: https:;");
+
+  // CORS — restricted to known Moon Hands origins only
+  const ALLOWED_ORIGINS = [
+    'https://wzejxaudglkym.kimi.page',
+    'https://moonhands.sg',
+    'https://www.moonhands.sg',
+    'http://localhost:3000',
+    'http://localhost:5173',
+  ];
+  const origin = req.headers.origin || '';
+  if (ALLOWED_ORIGINS.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+  }
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-API-Key, X-Moonhands-Master, X-Moonhands-Agent');
+  res.setHeader('Vary', 'Origin');
   
   if (req.method === 'OPTIONS') {
     res.writeHead(204); res.end(); return;
+  }
+
+  // ─── IP-BASED RATE LIMITING (per-endpoint) ──────────────────────
+  // Simple in-memory rate limiter for non-webhook endpoints.
+  // Webhook endpoints have their own per-clinic rate limiting.
+  const clientIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.connection?.remoteAddress || 'unknown';
+  const rateLimitStore = (global._rateLimitStore = global._rateLimitStore || new Map());
+  function isRateLimited(endpointKey, maxRequests = 10, windowMs = 60 * 1000) {
+    const key = `${clientIp}:${endpointKey}`;
+    const now = Date.now();
+    const record = rateLimitStore.get(key) || { count: 0, resetAt: 0 };
+    if (now > record.resetAt) {
+      record.count = 0;
+      record.resetAt = now + windowMs;
+    }
+    record.count++;
+    rateLimitStore.set(key, record);
+    return record.count > maxRequests;
+  }
+  // Cleanup old entries every 10 minutes
+  if (!global._rateLimitCleanup) {
+    global._rateLimitCleanup = setInterval(() => {
+      const now = Date.now();
+      for (const [key, record] of rateLimitStore.entries()) {
+        if (now > record.resetAt) rateLimitStore.delete(key);
+      }
+    }, 10 * 60 * 1000);
   }
 
   const url = new URL(req.url, `http://${req.headers.host}`);
@@ -46,8 +92,13 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // Google Calendar connection verification
+  // Google Calendar connection verification (rate-limited: 5 req/min per IP)
   if (url.pathname === '/api/calendar/verify' && req.method === 'GET') {
+    if (isRateLimited('calendar_verify', 5, 60 * 1000)) {
+      res.writeHead(429, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, message: 'Too many requests. Please wait a minute and try again.' }));
+      return;
+    }
     try {
       const { testConnection } = require('./server/calendar-service');
       const calendarId = url.searchParams.get('calendarId');
