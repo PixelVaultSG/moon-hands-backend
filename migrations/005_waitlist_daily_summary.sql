@@ -1,5 +1,4 @@
 -- Migration 005: Waitlist Re-engagement + Daily Booking Summary
--- 
 -- Run this in Supabase SQL Editor after deploying the new jobs.
 
 -- 1. Add fields to waitlist table for re-engagement tracking
@@ -25,11 +24,4 @@ CREATE INDEX IF NOT EXISTS idx_appointments_attendance_check
   ON appointments(client_id, appointment_date, status, attendance_checked_at)
   WHERE status IN ('confirmed', 'pending');
 
--- 3. Ensure 'completed' and 'no_show' are valid status values
--- (If your appointments.status is an enum, you may need to alter the enum type)
--- If using text/varchar, the application handles validation
-
 COMMENT ON TABLE waitlist IS 'Patient waitlist entries with re-engagement tracking';
-
--- RLS: These tables should already have RLS enabled from migration 001.
--- No additional policies needed — all access via Service Role Key.
