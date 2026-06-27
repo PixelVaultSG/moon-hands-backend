@@ -175,12 +175,13 @@ const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
 const API_KEY = process.env.API_KEY;
 const MAX_BODY_SIZE = 10 * 1024; // 10KB max request body
 
-// Use provided API_KEY or generate a secure random one as fallback
-// (fallback allows the server to start; set API_KEY properly for production security)
-const effectiveApiKey = API_KEY || crypto.randomBytes(32).toString('hex');
+// API_KEY is MANDATORY — server will fail-safe if not set
 if (!API_KEY) {
-  console.warn('[SECURITY] API_KEY not set — using auto-generated key. Set API_KEY in Render for production.');
+  console.error('[SECURITY] CRITICAL: API_KEY environment variable is not set.');
+  console.error('           Set API_KEY in Render Dashboard → Environment before deploying.');
+  console.error('           Server will respond with 503 to all webhook requests.');
 }
+const effectiveApiKey = API_KEY; // No fallback — hard fail if missing
 
 console.log(`[SECURITY] Webhook server configured`);
 
