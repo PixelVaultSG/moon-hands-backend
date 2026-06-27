@@ -46,14 +46,36 @@ const FIELD_VALIDATORS = {
 function sanitize(str) {
   if (!str || typeof str !== 'string') return '';
   return str
-    .replace(/[<>]/g, '') // Remove HTML tags
+    // Remove null bytes and control characters
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')
+    // Remove HTML tags
+    .replace(/<[^>]*>/g, '')
+    // Remove event handler attributes (onclick, onerror, etc.)
+    .replace(/\bon\w+\s*=\s*["']?[^"'>]*["']?/gi, '')
+    // Remove javascript: protocol
+    .replace(/javascript\s*:/gi, '')
+    // Remove data: URI scheme
+    .replace(/data\s*:[^;]*;base64/gi, '')
+    // Escape HTML entities that could be used for XSS
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#x27;')
+    // Restore safe ampersands for legitimate use
+    .replace(/&amp;amp;/g, '&amp;')
     .trim()
     .substring(0, 2000); // Max length
 }
 
 function sanitizeEmail(str) {
-  if (!str) return '';
-  return str.toLowerCase().trim().replace(/[<>]/g, '');
+  if (!str || typeof str !== 'string') return '';
+  return str
+    .toLowerCase()
+    .trim()
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')
+    .replace(/[<>]/g, '')
+    .replace(/\bon\w+\s*=/gi, '')
+    .replace(/javascript\s*:/gi, '')
+    .substring(0, 320); // RFC 5321 max email length
 }
 
 // ─── RATE LIMITING ───────────────────────────────────────────────
