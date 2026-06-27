@@ -153,7 +153,7 @@ WHERE c.slug = 'pixellvault';
 -- ============================================================
 
 INSERT INTO appointments (client_id, customer_name, customer_phone, service, appointment_date, appointment_time, status, notes, created_at)
-SELECT c.id, a.n, a.p, a.s, a.d::date, a.t, a.st, a.note, NOW() - INTERVAL '1 day'
+SELECT c.id, a.n, a.p, a.s, a.d::date, a.t::time, a.st, a.note, NOW() - INTERVAL '1 day'
 FROM clients c,
 (VALUES
   ('Sarah Tan', '+6591230001', 'HIFU Face Lift', (NOW() + INTERVAL '1 day')::date::text, '14:00', 'confirmed', ''),
@@ -165,12 +165,11 @@ FROM clients c,
   ('Stephanie Goh', '+6591230009', 'HIFU Face Lift', (NOW() - INTERVAL '1 day')::date::text, '13:00', 'cancelled', 'Patient rescheduled'),
   ('Nicole Tan', '+6591230007', 'HIFU Double Chin', (NOW() - INTERVAL '6 day')::date::text, '14:30', 'completed', '')
 ) AS a(n, p, s, d, t, st, note)
-WHERE c.slug = 'glow-aesthetics'
-ON CONFLICT DO NOTHING;
+WHERE c.slug = 'glow-aesthetics';
 
 -- Pixel Vault appointments
 INSERT INTO appointments (client_id, customer_name, customer_phone, service, appointment_date, appointment_time, status, notes, created_at)
-SELECT c.id, a.n, a.p, a.s, a.d::date, a.t, a.st, a.note, NOW() - INTERVAL '1 day'
+SELECT c.id, a.n, a.p, a.s, a.d::date, a.t::time, a.st, a.note, NOW() - INTERVAL '1 day'
 FROM clients c,
 (VALUES
   ('Benjamin Koh', '+6598120001', 'HIFU Full Face', (NOW() + INTERVAL '1 day')::date::text, '11:00', 'confirmed', ''),
@@ -178,8 +177,7 @@ FROM clients c,
   ('Daniel Tan', '+6598120004', 'HIFU Full Face', (NOW() - INTERVAL '4 day')::date::text, '10:30', 'no_show', 'Ghosted'),
   ('Emily Lim', '+6598120005', 'BB Glow Facial', (NOW() + INTERVAL '2 day')::date::text, '15:00', 'confirmed', '')
 ) AS a(n, p, s, d, t, st, note)
-WHERE c.slug = 'pixellvault'
-ON CONFLICT DO NOTHING;
+WHERE c.slug = 'pixellvault';
 
 -- ============================================================
 -- PART 5: WAITLIST
