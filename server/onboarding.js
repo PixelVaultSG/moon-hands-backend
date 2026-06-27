@@ -43,7 +43,7 @@ const REQUIRED_FIELDS = [
   'selected_plan'
 ];
 
-const VALID_PLANS = ['starter', 'professional'];
+const VALID_PLANS = ['basic', 'premium'];
 const VALID_TONES = ['friendly', 'professional', 'casual', 'luxury'];
 const VALID_LANGUAGES = ['en', 'zh', 'ms', 'ta', 'ja', 'ko'];
 
@@ -254,8 +254,8 @@ async function sendTelegramAlert(submission) {
       return;
     }
     
-    const planEmoji = submission.selected_plan === 'professional' ? '⭐' : '🌟';
-    const planName = submission.selected_plan === 'professional' ? 'Professional (S$547)' : 'Starter (S$347)';
+    const planEmoji = submission.selected_plan === 'premium' ? '⭐' : '🌟';
+    const planName = submission.selected_plan === 'premium' ? 'Premium (S$547)' : 'Basic (S$347)';
     
     const treatments = submission.treatment_menu 
       ? (typeof submission.treatment_menu === 'string' ? JSON.parse(submission.treatment_menu) : submission.treatment_menu)
@@ -399,7 +399,7 @@ async function handleOnboarding(req, res) {
     await sendTelegramAlert(submission);
     
     // Step 7: Return success with payment instructions
-    const planPrice = sanitized.plan === 'professional' ? 547 : 347;
+    const planPrice = sanitized.selected_plan === 'premium' ? 547 : 347;
     return res.writeHead(201, { 'Content-Type': 'application/json' }).end(JSON.stringify({
       status: 'success',
       message: 'Onboarding submitted! Please complete payment to activate your AI receptionist.',
@@ -520,7 +520,7 @@ async function activateClinic(req, res) {
       email: submission.clinic_email,
       phone: submission.clinic_phone,
       status: 'active',
-      plan: submission.selected_plan || 'starter',
+      plan: submission.selected_plan || 'basic',
       ical_token: require('crypto').randomUUID(),
       webhook_token: webhookToken,
     });
@@ -555,7 +555,7 @@ async function activateClinic(req, res) {
     let emailResult = null;
     try {
       const { sendWelcomeEmail } = require('../utils/welcome-email');
-      const planPrice = submission.selected_plan === 'professional' ? 547 : 347;
+      const planPrice = submission.selected_plan === 'premium' ? 547 : 347;
       const { data: clientRecord } = await db.supabase
         .from('clients')
         .select('ical_token')
@@ -566,7 +566,7 @@ async function activateClinic(req, res) {
         to: submission.clinic_email,
         clinicName: submission.clinic_name,
         contactName: submission.contact_name,
-        plan: submission.selected_plan === 'professional' ? 'Premium' : 'Basic',
+        plan: submission.selected_plan === 'premium' ? 'Premium' : 'Basic',
         monthlyPrice: planPrice,
         iCalUrl: `https://moon-hands-backend.onrender.com/ical/${clientRecord?.ical_token}.ics`,
         agentName: submission.agent_name || null,
