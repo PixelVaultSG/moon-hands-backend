@@ -32,13 +32,81 @@ const ANOMALY_THRESHOLD = 3;   // Flag if >3x average
 const KILL_THRESHOLD = 5;      // Kill if >5x in 1 hour
 const COOLDOWN_MINUTES = 30;   // Auto-recovery after 30 min
 
-// ─── IN-MEMORY COUNTERS ──────────────────────────────────────────
+// ─── HYBRID STORE: In-memory L1 cache + Supabase L2 persistence ──
 
 const counters = new Map();    // clinicId -> { calls, spend, msgs, bookings, lastReset }
 const anomalies = new Map();   // clinicId -> { spikeCount, lastSpike }
 let globalKillSwitch = false;
 let killReason = '';
 let killTime = 0;
+
+let supabaseClient = null;
+try {
+  supabaseClient = require('../supabase/client').supabase;
+} catch (e) {
+  // Supabase not available — fall back to pure in-memory
+}
+
+const PERSIST_KEY = 'cost_protection_state';
+const PERSIST_INTERVAL_MS = 5 * 60 * 1000; // Save every 5 minutes
+
+async function persistToSupabase() {
+  if (!supabaseClient) return;
+  try {
+    const payload = {
+      key: PERSIST_KEY,
+      counters: Array.from(counters.entries()),
+      anomalies: Array.from(anomalies.entries()),
+      kill_switch: { active: globalKillSwitch, reason: killReason, time: killTime },
+      updated_at: new Date().toISOString(),
+    };
+    const { error } = await supabaseClient
+      .from('kv_store')
+      .upsert(payload, { onConflict: 'key' });
+    if (error) console.error('[COST_PROTECTION] Persist failed:', error.message);
+  } catch (err) {
+    console.error('[COST_PROTECTION] Persist error:', err.message);
+  }
+}
+
+async function restoreFromSupabase() {
+  if (!supabaseClient) return;
+  try {
+    const { data, error } = await supabaseClient
+      .from('kv_store')
+      .select('counters, anomalies, kill_switch')
+      .eq('key', PERSIST_KEY)
+      .single();
+    if (error || !data) return;
+    
+    const now = Date.now();
+    // Restore counters (only if within 24h)
+    for (const [clinicId, counter] of data.counters || []) {
+      if (now - (counter.lastReset || 0) < 86400000) {
+        counters.set(clinicId, counter);
+      }
+    }
+    // Restore anomalies
+    for (const [clinicId, anomaly] of data.anomalies || []) {
+      anomalies.set(clinicId, anomaly);
+    }
+    // Restore kill switch
+    if (data.kill_switch?.active) {
+      globalKillSwitch = true;
+      killReason = data.kill_switch.reason;
+      killTime = data.kill_switch.time;
+    }
+    console.log(`[COST_PROTECTION] Restored ${counters.size} clinic counters from Supabase`);
+  } catch (err) {
+    console.error('[COST_PROTECTION] Restore error:', err.message);
+  }
+}
+
+// Persist every 5 minutes
+setInterval(persistToSupabase, PERSIST_INTERVAL_MS);
+
+// Restore on startup (delay to allow Supabase client to initialize)
+setTimeout(restoreFromSupabase, 5000);
 
 function getCounter(clinicId) {
   const now = Date.now();
