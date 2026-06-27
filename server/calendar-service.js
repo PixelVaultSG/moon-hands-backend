@@ -9,7 +9,19 @@
 // 5. Store key content as GOOGLE_CALENDAR_KEY env var on Render
 // 6. Share clinic calendar with: calendar@<project>.iam.gserviceaccount.com
 
+/**
+ * SECURITY NOTE: The service account uses the 'calendar' scope which grants
+ * read+write access. This is REQUIRED for creating booking events.
+ * 
+ * Risk Mitigation:
+ * - Each clinic must EXPLICITLY share their calendar with our service account
+ * - Clinic can revoke access at any time via Google Calendar settings
+ * - Service account is isolated to Moon Hands only (not shared with other apps)
+ * - All calendar operations are audited (see monitoring/calendar-audit.js)
+ * - Date validation prevents past-date bookings
+ */
 const { google } = require('googleapis');
+const { logCalendarEvent } = require('../monitoring/calendar-audit');
 
 let auth = null;
 let calendar = null;
@@ -88,6 +100,7 @@ async function testConnection(calendarId) {
 
     try {
         const { data } = await calendar.calendars.get({ calendarId });
+        await logCalendarEvent({ action: 'verify', calendarId, treatment: data.summary });
         return {
             success: true,
             message: `Connected to "${data.summary}" (${data.timeZone})`,
@@ -95,13 +108,13 @@ async function testConnection(calendarId) {
             timeZone: data.timeZone,
         };
     } catch (err) {
-        if (err.code === 404) {
-            return { success: false, message: 'Calendar not found. Please check the Calendar ID.' };
-        }
-        if (err.code === 403) {
-            return { success: false, message: 'Access denied. Please share your calendar with moon-hands-calendar@moon-hands.iam.gserviceaccount.com' };
-        }
-        return { success: false, message: `Connection error: ${err.message}` };
+        const errMsg = err.code === 404
+            ? 'Calendar not found. Please check the Calendar ID.'
+            : err.code === 403
+                ? 'Access denied. Please share your calendar with moon-hands-calendar@moon-hands.iam.gserviceaccount.com'
+                : `Connection error: ${err.message}`;
+        await logCalendarEvent({ action: 'verify', calendarId, error: errMsg });
+        return { success: false, message: errMsg };
     }
 }
 
@@ -195,10 +208,12 @@ async function createBookingEvent(calendarId, booking) {
 
     // Validate date is not in the past
     const datePart = booking.startISO ? booking.startISO.split('T')[0] : null;
+    const timePart = booking.startISO ? booking.startISO.split('T')[1]?.slice(0, 5) : null;
     if (datePart) {
         const validation = validateAppointmentDate(datePart);
         if (!validation.valid) {
             console.error('[Calendar] Date validation failed:', validation.error);
+            await logCalendarEvent({ action: 'create', calendarId, treatment: booking.summary, date: datePart, error: validation.error });
             return { error: validation.error };
         }
     }
@@ -228,9 +243,11 @@ async function createBookingEvent(calendarId, booking) {
         });
 
         console.log('[Calendar] Event created:', data.htmlLink);
+        await logCalendarEvent({ action: 'create', calendarId, eventId: data.id, patientPhone: booking.patientPhone, treatment: booking.summary, date: datePart, time: timePart });
         return data;
     } catch (err) {
         console.error('[Calendar] createBookingEvent error:', err.message);
+        await logCalendarEvent({ action: 'create', calendarId, patientPhone: booking.patientPhone, treatment: booking.summary, date: datePart, error: err.message });
         return null;
     }
 }
@@ -247,9 +264,11 @@ async function deleteBookingEvent(calendarId, eventId) {
     try {
         await calendar.events.delete({ calendarId, eventId });
         console.log('[Calendar] Event deleted:', eventId);
+        await logCalendarEvent({ action: 'delete', calendarId, eventId });
         return true;
     } catch (err) {
         console.error('[Calendar] deleteBookingEvent error:', err.message);
+        await logCalendarEvent({ action: 'delete', calendarId, eventId, error: err.message });
         return false;
     }
 }
@@ -346,9 +365,11 @@ async function updateBookingEvent(calendarId, eventId, updates) {
         });
 
         console.log('[Calendar] Event updated:', eventId);
+        await logCalendarEvent({ action: 'update', calendarId, eventId, treatment: updates.summary });
         return data;
     } catch (err) {
         console.error('[Calendar] updateBookingEvent error:', err.message);
+        await logCalendarEvent({ action: 'update', calendarId, eventId, error: err.message });
         return null;
     }
 }
