@@ -64,8 +64,9 @@ SELECT
     {"day": "Sunday", "open_time": "", "close_time": "", "isOpen": false}
   ]'::jsonb,
   'Doctor is Dr. Rachel Lim (MBBS, Dip Dermatology). Clinic established 2019. Located at 123 Orchard Road, #05-01 Singapore 238863. Emergency contact: +65 8123 4567.'
-FROM clients WHERE slug = 'glow-aesthetics'
-ON CONFLICT (client_id) DO NOTHING;
+FROM clients c
+WHERE c.slug = 'glow-aesthetics'
+AND NOT EXISTS (SELECT 1 FROM client_configs cc WHERE cc.client_id = c.id);
 
 -- Update pixellvault config if not exists
 INSERT INTO client_configs (
@@ -100,8 +101,9 @@ SELECT
     {"day": "Sunday", "open_time": "", "close_time": "", "isOpen": false}
   ]'::jsonb,
   'Located at Novena Medical Centre #08-12. Doctor: Dr. Kenneth Thean. Contact: +65 8139 8272.'
-FROM clients WHERE slug = 'pixellvault'
-ON CONFLICT (client_id) DO NOTHING;
+FROM clients c
+WHERE c.slug = 'pixellvault'
+AND NOT EXISTS (SELECT 1 FROM client_configs cc WHERE cc.client_id = c.id);
 
 -- ============================================================
 -- PART 3: CONVERSATIONS
