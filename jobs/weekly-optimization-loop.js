@@ -71,7 +71,7 @@ async function runWeeklyOptimizationLoop() {
       .from('clients')
       .select('id, slug, name, plan, telegram_chat_id, operating_hours, status')
       .eq('status', 'active')
-      .in('plan', ['premium', 'professional']);
+      .eq('plan', 'premium');
     
     if (error) {
       console.error('[WEEKLY_LOOP] Failed to fetch clinics:', error.message);
