@@ -41,7 +41,7 @@ Step 9: Clinic receives WhatsApp confirmation from you
 - Treatments they offer (select from 8 options with pricing)
 - Operating hours (toggle each day, set open/close times)
 - Their contact details (name, email)
-- Selected plan (Starter S$347/mo or Professional S$547/mo)
+- Selected plan (Basic S$347/mo or Premium S$547/mo)
 
 **What happens automatically:**
 - ✅ Form data saved to Supabase `onboarding_submissions` table
@@ -62,7 +62,7 @@ Glow Aesthetic Clinic
 📱 +65 9123 4567
 👤 Dr. Sarah Chen
 
-Plan: Starter (S$347/mo)
+Plan: Basic (S$347/mo)
 Treatments: 5 selected
 Submitted: 2026-05-14 10:30 AM
 
@@ -86,7 +86,7 @@ INSERT INTO clients (
   email,       -- e.g., 'sarah@glowclinic.sg'
   phone,       -- e.g., '+65 6123 4567'
   status,      -- 'pending' (change to 'active' after testing)
-  plan,        -- 'starter' or 'professional'
+  plan,        -- 'basic' or 'premium'
   google_calendar_id,  -- NULL for now (configured later if needed)
   created_at,
   updated_at
@@ -97,7 +97,7 @@ INSERT INTO clients (
   'sarah@glowclinic.sg',
   '+65 6123 4567',
   'pending',
-  'starter',
+  'basic',
   NULL,
   NOW(),
   NOW()

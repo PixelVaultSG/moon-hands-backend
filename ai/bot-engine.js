@@ -310,11 +310,33 @@ async function handleCheckAvailability(args, clientConfig) {
   const result = await calculateAvailability(clientConfig, date, treatment);
   
   if (!result.available) {
+    // Before offering waitlist, suggest 2 alternative slots
+    const { findAlternativeSlots } = require('../jobs/waitlist-reengagement');
+    const alternatives = await findAlternativeSlots(
+      clientConfig.id, date, time, treatment, clientConfig.config
+    );
+
+    let altMessage = '';
+    if (alternatives.slots.length >= 2) {
+      const isSameDay = alternatives.date === date;
+      const dateLabel = isSameDay ? 'that day' : formatDateNice(alternatives.date);
+      altMessage = `However, I found availability on ${dateLabel}:\n` +
+        alternatives.slots.map((s, i) => `${i + 1}. ${formatTime12h(s)}`).join('\n') +
+        `\n\nWould any of these work? Just reply with the number (1 or 2), or I can add you to the waitlist for your preferred time.`;
+    } else if (alternatives.slots.length === 1) {
+      altMessage = `I found one alternative slot on ${formatDateNice(alternatives.date)} at ${formatTime12h(alternatives.slots[0])}.\n\nDoes that work? Reply YES to book it, or I can add you to the waitlist.`;
+    }
+
     if (clientConfig.config.booking_waitlist_enabled) {
+      const waitlistMsg = 'Would you like me to add you to our waitlist? I will notify you as soon as a slot opens up.';
+      const fullMsg = result.reason || 'No slots available for that date.';
+      const messageBody = altMessage ? (fullMsg + '\n\n' + altMessage) : (fullMsg + '\n\n' + waitlistMsg);
       return {
         available: false,
-        message: `${result.reason || "No slots available for that date."}\n\nWould you like me to add you to our waitlist? I'll notify you as soon as a slot opens up.`,
-        suggest_waitlist: true
+        message: messageBody,
+        suggest_waitlist: !altMessage,
+        alternative_slots: alternatives.slots,
+        alternative_date: alternatives.date,
       };
     }
     return { available: false, message: result.reason || "No slots available." };
@@ -899,6 +921,27 @@ function sanitizeSpecialNotes(notes) {
   }
   if (sanitized.length > 2000) sanitized = sanitized.substring(0, 2000) + '... [truncated]';
   return sanitized;
+}
+
+// ─── FORMATTING HELPERS ──────────────────────────────────────────
+
+function formatTime12h(timeStr) {
+  const [h, m] = (timeStr || '00:00').split(':').map(Number);
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  const h12 = h % 12 || 12;
+  return `${h12}:${String(m).padStart(2, '0')} ${ampm}`;
+}
+
+function formatDateNice(dateStr) {
+  const d = new Date(dateStr + 'T00:00:00+08:00');
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const tomorrow = new Date(today);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+
+  if (d.toDateString() === today.toDateString()) return 'today';
+  if (d.toDateString() === tomorrow.toDateString()) return 'tomorrow';
+  return d.toLocaleDateString('en-SG', { weekday: 'long', month: 'short', day: 'numeric' });
 }
 
 // ─── EXPORTS ──────────────────────────────────────────────────────

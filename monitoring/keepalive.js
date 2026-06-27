@@ -102,7 +102,29 @@ async function verifyWebhook() {
   if (!url) return;
   
   try {
-    const res = await fetch(`${url}/debug`, { signal: AbortSignal.timeout(15000) });
+    // Try /debug with API key first (since it's now auth-protected)
+    const apiKey = process.env.API_KEY || process.env.WEBHOOK_SECRET;
+    const headers = apiKey ? { 'x-api-key': apiKey } : {};
+    const res = await fetch(`${url}/debug`, { 
+      headers,
+      signal: AbortSignal.timeout(15000) 
+    });
+    
+    // 401 on /debug is expected if API key is set but we forgot to include it,
+    // or if API key mismatch. Log to console only — don't spam Telegram.
+    if (res.status === 401) {
+      console.log(`[KEEPALIVE] /debug returned 401 (expected — auth protected). Checking /health instead...`);
+      // Fallback: check /health which is public
+      const healthRes = await fetch(`${url}/health`, { signal: AbortSignal.timeout(15000) });
+      if (healthRes.ok) {
+        console.log(`[KEEPALIVE] Webhook verify: /health OK — webhook is operational`);
+      } else {
+        console.error(`[KEEPALIVE] Webhook verify: /health returned HTTP ${healthRes.status}`);
+        alertAdmin(`⚠️ Health endpoint returning HTTP ${healthRes.status}\nWebhook may not be processing messages.`);
+      }
+      return;
+    }
+    
     if (!res.ok) {
       console.error(`[KEEPALIVE] Webhook verify: /debug returned HTTP ${res.status}`);
       alertAdmin(`⚠️ /debug endpoint returning HTTP ${res.status}\nWebhook may not be processing messages.`);

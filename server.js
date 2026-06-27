@@ -61,8 +61,17 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // Debug endpoint
+  // Debug endpoint — requires API key authentication
+  // Prevents information leakage about system configuration
   if (url.pathname === '/debug' && req.method === 'GET') {
+    const apiKey = req.headers['x-api-key'];
+    const expectedKey = process.env.API_KEY || process.env.WEBHOOK_SECRET;
+    if (!expectedKey || apiKey !== expectedKey) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Unauthorized — valid x-api-key required' }));
+      console.warn(`[SECURITY] Unauthorized /debug access from ${req.headers['x-forwarded-for'] || 'unknown'}`);
+      return;
+    }
     const metrics = (() => { try { return require('./monitoring/uptime-metrics').getMetrics(); } catch(e) { return { error: e.message }; } })();
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
@@ -127,7 +136,7 @@ server.listen(PORT, () => {
 
 const ENV_CHECKS = [
   { key: 'SUPABASE_URL',              critical: true,  pattern: /^https:\/\/.+\.supabase\.co$/ },
-  { key: 'SUPABASE_SERVICE_ROLE_KEY', critical: true,  pattern: /^eyJ/ },
+  { key: 'SUPABASE_SERVICE_ROLE_KEY', critical: true,  pattern: /^(eyJ|sb_secret_)/ },
   { key: 'TELEGRAM_BOT_TOKEN',        critical: true,  pattern: /^\d+:[A-Za-z0-9_-]+$/ },
   { key: 'TELEGRAM_ADMIN_CHAT_ID',    critical: true,  pattern: /^-?\d+$/ },
   { key: 'OPENAI_API_KEY',            critical: true,  pattern: /^sk-(proj-)?[A-Za-z0-9_-]+$/ },
@@ -184,6 +193,9 @@ function validateAllModules() {
     './telegram/booking-notifications.js',
     './utils/ical-generator.js',
     './supabase/client.js',
+    './jobs/weekly-optimization-loop.js',
+    './jobs/waitlist-reengagement.js',
+    './jobs/daily-booking-summary.js',
   ];
   
   let allOk = true;
@@ -313,6 +325,48 @@ setTimeout(() => {
     console.error('  ❌ Daily report scheduler failed:', err.message);
   }
 }, 400);
+
+// ─── WEEKLY OPTIMIZATION LOOP (Premium Tier) ─────────────────────
+// AI-powered weekly analysis: FAQ gaps, no-show patterns, conversion leaks
+// Runs every Sunday at 2 AM SGT. Cost-controlled: ~S$0.03/clinic/week.
+
+setTimeout(() => {
+  try {
+    const { startWeeklyLoopScheduler } = require('./jobs/weekly-optimization-loop');
+    startWeeklyLoopScheduler();
+    console.log('  ✅ Weekly optimization loop scheduler started (Sundays 2 AM SGT)');
+  } catch (err) {
+    console.error('  ❌ Weekly loop scheduler failed:', err.message);
+  }
+}, 500);
+
+// ─── WAITLIST RE-ENGAGEMENT ENGINE ───────────────────────────────
+// Monitors cancelled appointments every 15 min, proactively notifies
+// waitlisted patients via WhatsApp when slots open up.
+
+setTimeout(() => {
+  try {
+    const { startWaitlistScheduler } = require('./jobs/waitlist-reengagement');
+    startWaitlistScheduler();
+    console.log('  ✅ Waitlist re-engagement scheduler started (every 15 min)');
+  } catch (err) {
+    console.error('  ❌ Waitlist scheduler failed:', err.message);
+  }
+}, 600);
+
+// ─── DAILY BOOKING SUMMARY ───────────────────────────────────────
+// Morning summary at 8:30 AM SGT with YES/NO attendance buttons.
+// Post-appointment follow-ups every 15 minutes.
+
+setTimeout(() => {
+  try {
+    const { startDailySummaryScheduler } = require('./jobs/daily-booking-summary');
+    startDailySummaryScheduler();
+    console.log('  ✅ Daily booking summary scheduler started (8:30 AM SGT)');
+  } catch (err) {
+    console.error('  ❌ Daily summary scheduler failed:', err.message);
+  }
+}, 700);
 
 // ─── FINAL STATUS ────────────────────────────────────────────────
 

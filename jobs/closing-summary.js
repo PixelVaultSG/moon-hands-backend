@@ -32,10 +32,10 @@ async function checkAndSendClosingSummaries() {
   }
   
   try {
-    // Get all active clinics with their operating hours
+    // Get all active clinics — only select columns that exist in the table
     const { data: clinics, error } = await supabase
       .from('clients')
-      .select('id, name, telegram_chat_id, status, operating_hours, appointment_duration_minutes')
+      .select('id, name, status, operating_hours')
       .eq('status', 'active');
     
     if (error) {
