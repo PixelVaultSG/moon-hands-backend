@@ -250,6 +250,81 @@ async function isSlotAvailable(calendarId, date, time, durationMinutes = 60) {
     return !isBusy;
 }
 
+/**
+ * Update (reschedule) an existing booking event
+ * @param {string} calendarId — Google Calendar ID
+ * @param {string} eventId — Google Calendar event ID
+ * @param {Object} updates — { summary?, startISO?, endISO?, description? }
+ * @returns {Promise<Object|null>} — updated event or null
+ */
+async function updateBookingEvent(calendarId, eventId, updates) {
+    if (!isCalendarEnabled(calendarId)) return null;
+
+    try {
+        const patch = {};
+        if (updates.summary) patch.summary = `📋 ${updates.summary}`;
+        if (updates.description) patch.description = updates.description;
+        if (updates.startISO) {
+            patch.start = { dateTime: updates.startISO, timeZone: 'Asia/Singapore' };
+        }
+        if (updates.endISO) {
+            patch.end = { dateTime: updates.endISO, timeZone: 'Asia/Singapore' };
+        }
+
+        const { data } = await calendar.events.patch({
+            calendarId,
+            eventId,
+            requestBody: patch,
+        });
+
+        console.log('[Calendar] Event updated:', eventId);
+        return data;
+    } catch (err) {
+        console.error('[Calendar] updateBookingEvent error:', err.message);
+        return null;
+    }
+}
+
+/**
+ * Find an event by patient phone number (for rescheduling/cancellation)
+ * @param {string} calendarId — Google Calendar ID
+ * @param {string} patientPhone — phone number to search for
+ * @param {string} date — YYYY-MM-DD optional filter
+ * @returns {Promise<Array>} — matching events
+ */
+async function findEventsByPatient(calendarId, patientPhone, date) {
+    if (!isCalendarEnabled(calendarId)) return [];
+
+    try {
+        const timeMin = date ? `${date}T00:00:00+08:00` : new Date().toISOString();
+        const timeMax = date
+            ? `${date}T23:59:59+08:00`
+            : new Date(Date.now() + 30 * 86400000).toISOString();
+
+        const { data } = await calendar.events.list({
+            calendarId,
+            timeMin,
+            timeMax,
+            singleEvents: true,
+            orderBy: 'startTime',
+            q: patientPhone,
+            maxResults: 20,
+        });
+
+        return (data.items || []).map(e => ({
+            id: e.id,
+            summary: e.summary,
+            start: e.start?.dateTime,
+            end: e.end?.dateTime,
+            description: e.description,
+            status: e.status,
+        }));
+    } catch (err) {
+        console.error('[Calendar] findEventsByPatient error:', err.message);
+        return [];
+    }
+}
+
 module.exports = {
     getAuth,
     isCalendarEnabled,
@@ -257,6 +332,8 @@ module.exports = {
     getAvailableSlots,
     createBookingEvent,
     deleteBookingEvent,
+    updateBookingEvent,
+    findEventsByPatient,
     getUpcomingAvailability,
     isSlotAvailable,
 };
