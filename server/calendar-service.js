@@ -48,6 +48,64 @@ function isCalendarEnabled(calendarId) {
 }
 
 /**
+ * Validate appointment date — must be today or in the future
+ * @param {string} date — ISO date string (YYYY-MM-DD) or Date object
+ * @param {number} maxAdvanceDays — maximum days in advance (default 90)
+ * @returns {{valid:boolean, error?:string}}
+ */
+function validateAppointmentDate(date, maxAdvanceDays = 90) {
+    const inputDate = typeof date === 'string' ? new Date(date + 'T00:00:00+08:00') : date;
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const maxDate = new Date(today);
+    maxDate.setDate(maxDate.getDate() + maxAdvanceDays);
+
+    // Check if date is in the past
+    if (inputDate < today) {
+        return { valid: false, error: 'Appointment date cannot be in the past. Please select today or a future date.' };
+    }
+
+    // Check if date is too far in the future
+    if (inputDate > maxDate) {
+        return { valid: false, error: `Appointments can only be booked up to ${maxAdvanceDays} days in advance. Please select a closer date.` };
+    }
+
+    return { valid: true };
+}
+
+/**
+ * Test the calendar connection for a clinic
+ * @param {string} calendarId — Google Calendar ID to test
+ * @returns {Promise<{success:boolean, message:string}>}
+ */
+async function testConnection(calendarId) {
+    if (!getAuth()) {
+        return { success: false, message: 'GOOGLE_CALENDAR_KEY not configured on server' };
+    }
+    if (!calendarId || !calendarId.trim()) {
+        return { success: false, message: 'No calendar ID provided' };
+    }
+
+    try {
+        const { data } = await calendar.calendars.get({ calendarId });
+        return {
+            success: true,
+            message: `Connected to "${data.summary}" (${data.timeZone})`,
+            calendarName: data.summary,
+            timeZone: data.timeZone,
+        };
+    } catch (err) {
+        if (err.code === 404) {
+            return { success: false, message: 'Calendar not found. Please check the Calendar ID.' };
+        }
+        if (err.code === 403) {
+            return { success: false, message: 'Access denied. Please share your calendar with moon-hands-calendar@moon-hands.iam.gserviceaccount.com' };
+        }
+        return { success: false, message: `Connection error: ${err.message}` };
+    }
+}
+
+/**
  * Get busy times for a specific date from a clinic's calendar
  * @param {string} calendarId — Google Calendar ID
  * @param {string} date — ISO date string (YYYY-MM-DD)
@@ -134,6 +192,16 @@ async function getAvailableSlots(calendarId, date, hours, slotDuration = 30, buf
  */
 async function createBookingEvent(calendarId, booking) {
     if (!isCalendarEnabled(calendarId)) return null;
+
+    // Validate date is not in the past
+    const datePart = booking.startISO ? booking.startISO.split('T')[0] : null;
+    if (datePart) {
+        const validation = validateAppointmentDate(datePart);
+        if (!validation.valid) {
+            console.error('[Calendar] Date validation failed:', validation.error);
+            return { error: validation.error };
+        }
+    }
 
     try {
         const { data } = await calendar.events.insert({
@@ -328,6 +396,8 @@ async function findEventsByPatient(calendarId, patientPhone, date) {
 module.exports = {
     getAuth,
     isCalendarEnabled,
+    validateAppointmentDate,
+    testConnection,
     getBusyTimes,
     getAvailableSlots,
     createBookingEvent,
