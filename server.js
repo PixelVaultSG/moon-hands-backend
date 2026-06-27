@@ -46,6 +46,23 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  // Google Calendar connection verification
+  if (url.pathname === '/api/calendar/verify' && req.method === 'GET') {
+    try {
+      const { testConnection } = require('./server/calendar-service');
+      const calendarId = url.searchParams.get('calendarId');
+      const result = await testConnection(calendarId);
+      res.writeHead(result.success ? 200 : 400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(result));
+      return;
+    } catch (err) {
+      console.error('[SERVER] Calendar verify error:', err.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, message: 'Server error: ' + err.message }));
+      return;
+    }
+  }
+
   // Health check — always available
   if (url.pathname === '/health' && req.method === 'GET') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
