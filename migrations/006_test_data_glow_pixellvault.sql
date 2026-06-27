@@ -1,22 +1,28 @@
 -- Migration 006: End-to-End Test Data for Glow Aesthetics & Pixel Vault Pte Ltd
 -- Run AFTER migration 005 in Supabase SQL Editor
--- This creates two fully populated demo clinics with realistic data
 
 -- ============================================================
--- PART 1: CLIENTS (Clinic Profiles)
+-- PART 1: CLIENTS (Correct columns per actual schema)
 -- ============================================================
 
-INSERT INTO clients (slug, name, whatsapp_number, telegram_chat_id, status, plan, created_at, updated_at)
+INSERT INTO clients (
+  slug, name, contact_name, contact_email, contact_phone,
+  whatsapp_number, plan, status, industry, webhook_token, created_at, updated_at
+)
 VALUES 
-  ('glow-aesthetics', 'Glow Aesthetics Clinic', '+6581234567', '123456789', 'active', 'premium', NOW() - INTERVAL '30 days', NOW()),
-  ('pixellvault', 'Pixel Vault Pte Ltd', '+6581398272', '123456789', 'active', 'basic', NOW() - INTERVAL '45 days', NOW())
+  ('glow-aesthetics', 'Glow Aesthetics Clinic', 'Dr. Rachel Lim', 'hello@glowclinic.sg', '+6581234567', '+6581234567', 'professional', 'active', 'aesthetic', 'glow_test_token_123', NOW() - INTERVAL '30 days', NOW()),
+  ('glow-demo', 'Glow Aesthetics Clinic', 'Dr. Rachel Lim', 'hello@glowclinic.sg', '+6581234567', '+6581234567', 'professional', 'active', 'aesthetic', 'glow_test_token_456', NOW() - INTERVAL '30 days', NOW())
 ON CONFLICT (slug) DO NOTHING;
+
+-- Note: pixellvault already exists from setup-pixellvault.sql
+-- Just ensure it exists
+SELECT id FROM clients WHERE slug = 'pixellvault';
 
 -- ============================================================
 -- PART 2: CLIENT CONFIGS (Services, FAQs, Hours, Brand Voice)
 -- ============================================================
 
--- Glow Aesthetics — Premium tier, full config
+-- Glow Aesthetics — full config
 INSERT INTO client_configs (
   client_id, agent_name, greeting, tone, enthusiasm, 
   services, faqs, operating_hours, special_notes, created_at, updated_at
@@ -30,11 +36,11 @@ SELECT
   '[
     {"name": "HIFU Face Lift", "price": "$580", "duration": 90, "description": "Non-surgical face lift using High-Intensity Focused Ultrasound"},
     {"name": "HIFU Double Chin", "price": "$350", "duration": 60, "description": "Targeted HIFU for double chin reduction"},
-    {"name": " PicoSure Laser", "price": "$450", "duration": 60, "description": "Pico-second laser for pigmentation and tattoo removal"},
+    {"name": "PicoSure Laser", "price": "$450", "duration": 60, "description": "Pico-second laser for pigmentation and tattoo removal"},
     {"name": "Chemical Peel (Light)", "price": "$180", "duration": 45, "description": "Gentle exfoliation for brighter skin"},
     {"name": "Chemical Peel (Deep)", "price": "$350", "duration": 60, "description": "Intensive peel for acne scars and deep pigmentation"},
     {"name": "HydraFacial", "price": "$250", "duration": 60, "description": "Deep cleansing, exfoliation and hydration"},
-    {"name": "Botox (3 areas)", "price": "$680", "duration": 30, "description": "Forehead, frown lines and crow''s feet"},
+    {"name": "Botox (3 areas)", "price": "$680", "duration": 30, "description": "Forehead, frown lines and crow feet"},
     {"name": "Dermal Fillers (1ml)", "price": "$850", "duration": 45, "description": "Juvederm or Restylane for lips, cheeks or nasolabial folds"},
     {"name": "Thermage FLX", "price": "$2,800", "duration": 120, "description": "Radiofrequency skin tightening for face and neck"},
     {"name": "Acne Scar Subcision", "price": "$350", "duration": 60, "description": "Needle technique to release tethered scars"}
@@ -63,7 +69,7 @@ SELECT
 FROM clients WHERE slug = 'glow-aesthetics'
 ON CONFLICT (client_id) DO NOTHING;
 
--- Pixel Vault Pte Ltd — Basic tier
+-- Update pixellvault config if not exists
 INSERT INTO client_configs (
   client_id, agent_name, greeting, tone, enthusiasm,
   services, faqs, operating_hours, special_notes, created_at, updated_at
@@ -102,134 +108,114 @@ FROM clients WHERE slug = 'pixellvault'
 ON CONFLICT (client_id) DO NOTHING;
 
 -- ============================================================
--- PART 3: CONVERSATIONS (Realistic Patient Chats)
+-- PART 3: CONVERSATIONS
 -- ============================================================
 
 INSERT INTO conversations (client_id, patient_phone, message, response, intent, created_at)
-SELECT 
-  c.id,
-  msg->>'phone',
-  msg->>'message',
-  msg->>'response',
-  msg->>'intent',
-  NOW() - ((msg->>'days_ago')::int || ' days')::interval - ((msg->>'hour')::int || ' hours')::interval
+SELECT c.id, msg.p, msg.m, msg.r, msg.i,
+  NOW() - ((msg.d || ' days')::int || ' days')::interval - ((msg.h || ' hours')::int || ' hours')::interval
 FROM clients c,
-jsonb_array_elements('[
-  {"phone": "+6591230001", "message": "Hi, what is HIFU?", "response": "Hello! HIFU stands for High-Intensity Focused Ultrasound. It is a non-surgical face lift treatment that uses ultrasound energy to lift and tighten skin. We offer HIFU Face Lift at $580 (90 mins) and HIFU Double Chin at $350 (60 mins). Would you like to book a consultation?", "intent": "service_inquiry", "days_ago": 2, "hour": 10},
-  {"phone": "+6591230001", "message": "Does it hurt?", "response": "Most patients describe HIFU as a warm, tingling sensation with mild discomfort. We apply numbing cream beforehand to keep you comfortable. There is no downtime, so you can return to normal activities immediately. Would you like to book?", "intent": "service_inquiry", "days_ago": 2, "hour": 10},
-  {"phone": "+6591230001", "message": "Okay book me for Saturday 2pm", "response": "I have booked your HIFU Face Lift consultation for Saturday at 2:00 PM. You will receive a confirmation message shortly. Please arrive 10 minutes early.", "intent": "book_appointment", "days_ago": 2, "hour": 10},
-  {"phone": "+6591230002", "message": "How much is Botox?", "response": "Our Botox treatment covers 3 areas (forehead, frown lines, crow''s feet) at $680. The procedure takes about 30 minutes and results last 4-6 months. Would you like to know more or book a consultation?", "intent": "pricing", "days_ago": 3, "hour": 14},
-  {"phone": "+6591230003", "message": "What time do you close today?", "response": "We are open until 8:00 PM today. Our last appointment slot is at 6:30 PM. Would you like to check availability?", "intent": "hours", "days_ago": 1, "hour": 16},
-  {"phone": "+6591230004", "message": "I want to do something for my acne scars", "response": "For acne scars, we recommend our Acne Scar Subcision at $350 (60 mins) or Chemical Peel (Deep) at $350 (60 mins). The best option depends on your scar type. Would you like to book a complimentary consultation with Dr. Rachel?", "intent": "service_inquiry", "days_ago": 1, "hour": 11},
-  {"phone": "+6591230004", "message": "What is the difference between subcision and peel?", "response": "Subcision uses a needle to release tethered scars from underneath, best for deep rolling scars. Chemical peel resurfaces the top layer, better for superficial scars and pigmentation. Many patients do both for best results. Dr. Rachel can advise during your consultation.", "intent": "service_inquiry", "days_ago": 1, "hour": 11},
-  {"phone": "+6591230005", "message": "Do you have parking?", "response": "Yes, we have complimentary parking at the rear of the building. Just drive to the back and look for Glow Aesthetics reserved lots.", "intent": "faq", "days_ago": 4, "hour": 9},
-  {"phone": "+6591230006", "message": "Is HIFU safe for pregnant women?", "response": "HIFU is not recommended during pregnancy or breastfeeding as a precaution. We would be happy to schedule your treatment for after your pregnancy. Is there anything else I can help with?", "intent": "service_inquiry", "days_ago": 5, "hour": 13},
-  {"phone": "+6591230007", "message": "Book HydraFacial tomorrow 3pm", "response": "I have checked our availability and we have a slot for HydraFacial tomorrow at 3:00 PM. May I have your name to confirm the booking?", "intent": "book_appointment", "days_ago": 0, "hour": 18},
-  {"phone": "+6591230008", "message": "How long does Thermage last?", "response": "Thermage FLX results typically last 1-2 years as it stimulates collagen production. The treatment is $2,800 for 120 minutes. Many patients pair it with annual maintenance HIFU sessions. Would you like to discuss a treatment plan?", "intent": "service_inquiry", "days_ago": 2, "hour": 15},
-  {"phone": "+6591230009", "message": "Do you offer packages?", "response": "Yes! Our Glow package includes 3 HIFU sessions at $1,500 (save $240). Our Bright Skin package includes 6 HydraFacials at $1,200 (save $300). We also offer custom packages. Which treatments are you interested in?", "intent": "pricing", "days_ago": 3, "hour": 12},
-  {"phone": "+6591230010", "message": "What are the side effects of chemical peel?", "response": "Light peel: mild redness and peeling for 2-3 days. Deep peel: more noticeable peeling for 5-7 days. You must avoid sun exposure and use SPF 50+ after treatment. We will give you a full aftercare guide.", "intent": "service_inquiry", "days_ago": 6, "hour": 20},
-  {"phone": "+6591230011", "message": "Can I cancel my Saturday appointment?", "response": "I can help you cancel. To confirm, you want to cancel your Saturday appointment. Once cancelled, the slot will be released. Would you like me to proceed?", "intent": "cancel", "days_ago": 1, "hour": 9},
-  {"phone": "+6591230012", "message": "Are you open on Sunday?", "response": "We are closed on Sundays. Our hours are Monday to Friday 10 AM to 8 PM, Saturday 10 AM to 6 PM. Would you like to book for Saturday or next week?", "intent": "hours", "days_ago": 0, "hour": 19},
-  {"phone": "+6591230001", "message": "Thanks for the reminder, see you Saturday", "response": "You are welcome! We look forward to seeing you on Saturday at 2:00 PM for your HIFU consultation. Please arrive 10 minutes early with a clean face. Have a wonderful day!", "intent": "greeting", "days_ago": 0, "hour": 8}
-]'::jsonb) AS msg
-WHERE c.slug = 'glow-aesthetics';
+(VALUES
+  ('+6591230001', 'Hi, what is HIFU?', 'Hello! HIFU stands for High-Intensity Focused Ultrasound. It is a non-surgical face lift treatment that uses ultrasound energy to lift and tighten skin. We offer HIFU Face Lift at $580 (90 mins) and HIFU Double Chin at $350 (60 mins). Would you like to book a consultation?', 'service_inquiry', '2', '10'),
+  ('+6591230001', 'Does it hurt?', 'Most patients describe HIFU as a warm, tingling sensation with mild discomfort. We apply numbing cream beforehand to keep you comfortable. There is no downtime, so you can return to normal activities immediately. Would you like to book?', 'service_inquiry', '2', '10'),
+  ('+6591230001', 'Okay book me for Saturday 2pm', 'I have booked your HIFU Face Lift consultation for Saturday at 2:00 PM. You will receive a confirmation message shortly. Please arrive 10 minutes early.', 'book_appointment', '2', '10'),
+  ('+6591230002', 'How much is Botox?', 'Our Botox treatment covers 3 areas (forehead, frown lines, crow feet) at $680. The procedure takes about 30 minutes and results last 4-6 months. Would you like to know more or book a consultation?', 'pricing', '3', '14'),
+  ('+6591230003', 'What time do you close today?', 'We are open until 8:00 PM today. Our last appointment slot is at 6:30 PM. Would you like to check availability?', 'hours', '1', '16'),
+  ('+6591230004', 'I want to do something for my acne scars', 'For acne scars, we recommend our Acne Scar Subcision at $350 (60 mins) or Chemical Peel (Deep) at $350 (60 mins). The best option depends on your scar type. Would you like to book a complimentary consultation with Dr. Rachel?', 'service_inquiry', '1', '11'),
+  ('+6591230005', 'Do you have parking?', 'Yes, we have complimentary parking at the rear of the building. Just drive to the back and look for Glow Aesthetics reserved lots.', 'faq', '4', '9'),
+  ('+6591230006', 'Is HIFU safe for pregnant women?', 'HIFU is not recommended during pregnancy or breastfeeding as a precaution. We would be happy to schedule your treatment for after your pregnancy. Is there anything else I can help with?', 'service_inquiry', '5', '13'),
+  ('+6591230007', 'Book HydraFacial tomorrow 3pm', 'I have checked our availability and we have a slot for HydraFacial tomorrow at 3:00 PM. May I have your name to confirm the booking?', 'book_appointment', '0', '18'),
+  ('+6591230008', 'How long does Thermage last?', 'Thermage FLX results typically last 1-2 years as it stimulates collagen production. The treatment is $2,800 for 120 minutes. Many patients pair it with annual maintenance HIFU sessions. Would you like to discuss a treatment plan?', 'service_inquiry', '2', '15'),
+  ('+6591230009', 'Do you offer packages?', 'Yes! Our Glow package includes 3 HIFU sessions at $1,500 (save $240). Our Bright Skin package includes 6 HydraFacials at $1,200 (save $300). We also offer custom packages. Which treatments are you interested in?', 'pricing', '3', '12'),
+  ('+6591230010', 'What are the side effects of chemical peel?', 'Light peel: mild redness and peeling for 2-3 days. Deep peel: more noticeable peeling for 5-7 days. You must avoid sun exposure and use SPF 50+ after treatment. We will give you a full aftercare guide.', 'service_inquiry', '6', '20'),
+  ('+6591230011', 'Can I cancel my Saturday appointment?', 'I can help you cancel. To confirm, you want to cancel your Saturday appointment. Once cancelled, the slot will be released. Would you like me to proceed?', 'cancel', '1', '9'),
+  ('+6591230012', 'Are you open on Sunday?', 'We are closed on Sundays. Our hours are Monday to Friday 10 AM to 8 PM, Saturday 10 AM to 6 PM. Would you like to book for Saturday or next week?', 'hours', '0', '19')
+) AS msg(p, m, r, i, d, h)
+WHERE c.slug = 'glow-aesthetics'
+ON CONFLICT DO NOTHING;
 
 -- Pixel Vault conversations
 INSERT INTO conversations (client_id, patient_phone, message, response, intent, created_at)
-SELECT 
-  c.id,
-  msg->>'phone',
-  msg->>'message',
-  msg->>'response',
-  msg->>'intent',
-  NOW() - ((msg->>'days_ago')::int || ' days')::interval - ((msg->>'hour')::int || ' hours')::interval
+SELECT c.id, msg.p, msg.m, msg.r, msg.i,
+  NOW() - ((msg.d || ' days')::int || ' days')::interval - ((msg.h || ' hours')::int || ' hours')::interval
 FROM clients c,
-jsonb_array_elements('[
-  {"phone": "+6598120001", "message": "Hi, what services do you offer?", "response": "Welcome to Pixel Vault! We offer HIFU, Laser Toning, BB Glow Facial, and Skin Booster Injections. Our most popular is HIFU Full Face at $550. Would you like details on any specific treatment?", "intent": "service_inquiry", "days_ago": 1, "hour": 11},
-  {"phone": "+6598120002", "message": "How much is laser toning?", "response": "Laser Toning is $280 for a 45-minute session. It is excellent for brightening and pigmentation. Most patients see results after 3-5 sessions. Would you like to book?", "intent": "pricing", "days_ago": 2, "hour": 14},
-  {"phone": "+6598120003", "message": "Where is your clinic?", "response": "We are at Novena Medical Centre, #08-12, 38 Irrawaddy Road, Singapore 329563. Nearest MRT: Novena (NS20). We are on the 8th floor.", "intent": "faq", "days_ago": 3, "hour": 9},
-  {"phone": "+6598120004", "message": "Book HIFU for next Tuesday 11am", "response": "I have checked and Tuesday 11:00 AM is available for HIFU. May I have your name to confirm the booking?", "intent": "book_appointment", "days_ago": 0, "hour": 16},
-  {"phone": "+6598120005", "message": "What is BB Glow?", "response": "BB Glow is a semi-permanent BB cream infusion treatment at $200 (60 mins). It gives you a natural, glowing complexion that lasts 3-6 months. Great for uneven skin tone. Would you like to try it?", "intent": "service_inquiry", "days_ago": 4, "hour": 13},
-  {"phone": "+6598120006", "message": "Is the doctor experienced?", "response": "Yes, Dr. Kenneth Thean is our lead physician. He has over 15 years of experience in aesthetic medicine and is a certified trainer for HIFU and laser treatments.", "intent": "service_inquiry", "days_ago": 5, "hour": 10},
-  {"phone": "+6598120007", "message": "Do you have any promotions?", "response": "We currently have a first-timer promotion: 20% off your first HIFU treatment. That brings it down from $550 to $440. Limited time only! Would you like to book?", "intent": "pricing", "days_ago": 1, "hour": 19},
-  {"phone": "+6598120008", "message": "What are your opening hours?", "response": "We are open Monday to Saturday, 10:30 AM to 7 PM. Closed on Sundays. Our last appointment is at 5:30 PM.", "intent": "hours", "days_ago": 0, "hour": 8}
-]'::jsonb) AS msg
-WHERE c.slug = 'pixellvault';
+(VALUES
+  ('+6598120001', 'Hi, what services do you offer?', 'Welcome to Pixel Vault! We offer HIFU, Laser Toning, BB Glow Facial, and Skin Booster Injections. Our most popular is HIFU Full Face at $550. Would you like details on any specific treatment?', 'service_inquiry', '1', '11'),
+  ('+6598120002', 'How much is laser toning?', 'Laser Toning is $280 for a 45-minute session. It is excellent for brightening and pigmentation. Most patients see results after 3-5 sessions. Would you like to book?', 'pricing', '2', '14'),
+  ('+6598120003', 'Where is your clinic?', 'We are at Novena Medical Centre, #08-12, 38 Irrawaddy Road, Singapore 329563. Nearest MRT: Novena (NS20). We are on the 8th floor.', 'faq', '3', '9'),
+  ('+6598120004', 'Book HIFU for next Tuesday 11am', 'I have checked and Tuesday 11:00 AM is available for HIFU. May I have your name to confirm the booking?', 'book_appointment', '0', '16'),
+  ('+6598120005', 'What is BB Glow?', 'BB Glow is a semi-permanent BB cream infusion treatment at $200 (60 mins). It gives you a natural, glowing complexion that lasts 3-6 months. Great for uneven skin tone. Would you like to try it?', 'service_inquiry', '4', '13'),
+  ('+6598120006', 'Is the doctor experienced?', 'Yes, Dr. Kenneth Thean is our lead physician. He has over 15 years of experience in aesthetic medicine and is a certified trainer for HIFU and laser treatments.', 'service_inquiry', '5', '10'),
+  ('+6598120007', 'Do you have any promotions?', 'We currently have a first-timer promotion: 20% off your first HIFU treatment. That brings it down from $550 to $440. Limited time only! Would you like to book?', 'pricing', '1', '19'),
+  ('+6598120008', 'What are your opening hours?', 'We are open Monday to Saturday, 10:30 AM to 7 PM. Closed on Sundays. Our last appointment is at 5:30 PM.', 'hours', '0', '8')
+) AS msg(p, m, r, i, d, h)
+WHERE c.slug = 'pixellvault'
+ON CONFLICT DO NOTHING;
 
 -- ============================================================
--- PART 4: APPOINTMENTS (Mix of statuses for no-show tracking)
+-- PART 4: APPOINTMENTS
 -- ============================================================
 
 INSERT INTO appointments (client_id, customer_name, customer_phone, service, appointment_date, appointment_time, status, notes, created_at)
-SELECT c.id, a.name, a.phone, a.service, a.date, a.time, a.status, a.notes, NOW() - INTERVAL '1 day'
+SELECT c.id, a.n, a.p, a.s, a.d::date, a.t, a.st, a.note, NOW() - INTERVAL '1 day'
 FROM clients c,
-jsonb_to_recordset('[
-  {"name": "Sarah Tan", "phone": "+6591230001", "service": "HIFU Face Lift", "date": "' || (NOW() + INTERVAL '1 day')::date || '", "time": "14:00", "status": "confirmed", "notes": ""},
-  {"name": "Jessica Lim", "phone": "+6591230002", "service": "Botox Consultation", "date": "' || (NOW() + INTERVAL '1 day')::date || '", "time": "10:30", "status": "confirmed", "notes": ""},
-  {"name": "Michelle Wong", "phone": "+6591230004", "service": "Acne Scar Consultation", "date": "' || (NOW() + INTERVAL '1 day')::date || '", "time": "16:00", "status": "confirmed", "notes": ""},
-  {"name": "Amanda Lee", "phone": "+6591230010", "service": "Chemical Peel (Deep)", "date": "' || (NOW() - INTERVAL '2 day')::date || '", "time": "11:00", "status": "completed", "notes": "Patient satisfied"},
-  {"name": "Karen Ho", "phone": "+6591230005", "service": "HydraFacial", "date": "' || (NOW() - INTERVAL '3 day')::date || '", "time": "15:30", "status": "no_show", "notes": "Did not arrive, no message"},
-  {"name": "Rachel Chua", "phone": "+6591230008", "service": "Thermage FLX", "date": "' || (NOW() - INTERVAL '5 day')::date || '", "time": "10:00", "status": "completed", "notes": "Excellent results"},
-  {"name": "Stephanie Goh", "phone": "+6591230009", "service": "HIFU Face Lift", "date": "' || (NOW() - INTERVAL '1 day')::date || '", "time": "13:00", "status": "cancelled", "notes": "Patient rescheduled"},
-  {"name": "Nicole Tan", "phone": "+6591230007", "service": "HIFU Double Chin", "date": "' || (NOW() - INTERVAL '6 day')::date || '", "time": "14:30", "status": "completed", "notes": ""}
-]'::jsonb) AS a(name text, phone text, service text, date date, time text, status text, notes text)
+(VALUES
+  ('Sarah Tan', '+6591230001', 'HIFU Face Lift', (NOW() + INTERVAL '1 day')::date::text, '14:00', 'confirmed', ''),
+  ('Jessica Lim', '+6591230002', 'Botox Consultation', (NOW() + INTERVAL '1 day')::date::text, '10:30', 'confirmed', ''),
+  ('Michelle Wong', '+6591230004', 'Acne Scar Consultation', (NOW() + INTERVAL '1 day')::date::text, '16:00', 'confirmed', ''),
+  ('Amanda Lee', '+6591230010', 'Chemical Peel (Deep)', (NOW() - INTERVAL '2 day')::date::text, '11:00', 'completed', 'Patient satisfied'),
+  ('Karen Ho', '+6591230005', 'HydraFacial', (NOW() - INTERVAL '3 day')::date::text, '15:30', 'no_show', 'Did not arrive, no message'),
+  ('Rachel Chua', '+6591230008', 'Thermage FLX', (NOW() - INTERVAL '5 day')::date::text, '10:00', 'completed', 'Excellent results'),
+  ('Stephanie Goh', '+6591230009', 'HIFU Face Lift', (NOW() - INTERVAL '1 day')::date::text, '13:00', 'cancelled', 'Patient rescheduled'),
+  ('Nicole Tan', '+6591230007', 'HIFU Double Chin', (NOW() - INTERVAL '6 day')::date::text, '14:30', 'completed', '')
+) AS a(n, p, s, d, t, st, note)
 WHERE c.slug = 'glow-aesthetics'
 ON CONFLICT DO NOTHING;
 
 -- Pixel Vault appointments
 INSERT INTO appointments (client_id, customer_name, customer_phone, service, appointment_date, appointment_time, status, notes, created_at)
-SELECT c.id, a.name, a.phone, a.service, a.date, a.time, a.status, a.notes, NOW() - INTERVAL '1 day'
+SELECT c.id, a.n, a.p, a.s, a.d::date, a.t, a.st, a.note, NOW() - INTERVAL '1 day'
 FROM clients c,
-jsonb_to_recordset('[
-  {"name": "Benjamin Koh", "phone": "+6598120001", "service": "HIFU Full Face", "date": "' || (NOW() + INTERVAL '1 day')::date || '", "time": "11:00", "status": "confirmed", "notes": ""},
-  {"name": "Catherine Ong", "phone": "+6598120002", "service": "Laser Toning", "date": "' || (NOW() - INTERVAL '1 day')::date || '", "time": "14:00", "status": "completed", "notes": ""},
-  {"name": "Daniel Tan", "phone": "+6598120004", "service": "HIFU Full Face", "date": "' || (NOW() - INTERVAL '4 day')::date || '", "time": "10:30", "status": "no_show", "notes": "Ghosted"},
-  {"name": "Emily Lim", "phone": "+6598120005", "service": "BB Glow Facial", "date": "' || (NOW() + INTERVAL '2 day')::date || '", "time": "15:00", "status": "confirmed", "notes": ""}
-]'::jsonb) AS a(name text, phone text, service text, date date, time text, status text, notes text)
+(VALUES
+  ('Benjamin Koh', '+6598120001', 'HIFU Full Face', (NOW() + INTERVAL '1 day')::date::text, '11:00', 'confirmed', ''),
+  ('Catherine Ong', '+6598120002', 'Laser Toning', (NOW() - INTERVAL '1 day')::date::text, '14:00', 'completed', ''),
+  ('Daniel Tan', '+6598120004', 'HIFU Full Face', (NOW() - INTERVAL '4 day')::date::text, '10:30', 'no_show', 'Ghosted'),
+  ('Emily Lim', '+6598120005', 'BB Glow Facial', (NOW() + INTERVAL '2 day')::date::text, '15:00', 'confirmed', '')
+) AS a(n, p, s, d, t, st, note)
 WHERE c.slug = 'pixellvault'
 ON CONFLICT DO NOTHING;
 
 -- ============================================================
--- PART 5: WAITLIST (Active entries for re-engagement testing)
+-- PART 5: WAITLIST
 -- ============================================================
 
 INSERT INTO waitlist (client_id, customer_name, customer_phone, preferred_service, preferred_date, preferred_time_range, status, notes, created_at)
-SELECT c.id, w.name, w.phone, w.service, w.date, w.time_range, 'active', w.note, NOW() - INTERVAL '2 day'
+SELECT c.id, w.n, w.p, w.s, w.d::date, w.t, 'active', w.note, NOW() - INTERVAL '2 day'
 FROM clients c,
-jsonb_to_recordset('[
-  {"name": "Linda Chew", "phone": "+6591230015", "service": "HIFU Face Lift", "date": "' || (NOW() + INTERVAL '2 day')::date || '", "time_range": "afternoon", "note": "Willing to take any afternoon slot"},
-  {"name": "Patricia Ng", "phone": "+6591230016", "service": "HydraFacial", "date": "' || (NOW() + INTERVAL '3 day')::date || '", "time_range": "morning", "note": "Only available mornings"},
-  {"name": "Sharon Lim", "phone": "+6591230017", "service": "Chemical Peel (Light)", "date": "' || (NOW() + INTERVAL '1 day')::date || '", "time_range": "any", "note": "Flexible timing"}
-]'::jsonb) AS w(name text, phone text, service text, date date, time_range text, note text)
+(VALUES
+  ('Linda Chew', '+6591230015', 'HIFU Face Lift', (NOW() + INTERVAL '2 day')::date::text, 'afternoon', 'Willing to take any afternoon slot'),
+  ('Patricia Ng', '+6591230016', 'HydraFacial', (NOW() + INTERVAL '3 day')::date::text, 'morning', 'Only available mornings'),
+  ('Sharon Lim', '+6591230017', 'Chemical Peel (Light)', (NOW() + INTERVAL '1 day')::date::text, 'any', 'Flexible timing')
+) AS w(n, p, s, d, t, note)
 WHERE c.slug = 'glow-aesthetics'
 ON CONFLICT DO NOTHING;
 
 -- ============================================================
--- PART 6: DAILY USAGE (Mock stats)
+-- PART 6: DAILY USAGE
 -- ============================================================
 
 INSERT INTO daily_usage (client_id, date, call_count, message_count, cost_usd, model)
-SELECT 
-  c.id,
-  (NOW() - (g.n || ' days')::interval)::date,
-  floor(random() * 30 + 10)::int,
-  floor(random() * 50 + 20)::int,
-  (random() * 0.5 + 0.1)::decimal(10,4),
-  'gpt-4o-mini'
-FROM clients c,
-  generate_series(1, 14) AS g(n)
+SELECT c.id, (NOW() - (g.n || ' days')::interval)::date, (10 + floor(random()*20)::int), (20 + floor(random()*30)::int), (0.1 + (random()*0.4))::decimal(10,4), 'gpt-4o-mini'
+FROM clients c, generate_series(1, 14) AS g(n)
 WHERE c.slug IN ('glow-aesthetics', 'pixellvault')
 ON CONFLICT DO NOTHING;
 
 -- ============================================================
--- PART 7: WEEKLY REPORT (Sample for Glow Aesthetics)
+-- PART 7: WEEKLY REPORT (Sample)
 -- ============================================================
 
 INSERT INTO weekly_reports (client_id, period_from, period_to, insights, suggestions, weekly_stats, generated_at)
-SELECT 
-  c.id,
-  (NOW() - INTERVAL '7 days')::date,
-  NOW()::date,
+SELECT c.id, (NOW() - INTERVAL '7 days')::date, NOW()::date,
   '[
     {"type": "faq_gap", "severity": "high", "title": "HIFU side effects not in FAQ", "detail": "5 patients asked about HIFU side effects and downtime in the past week, but this is not covered in the current FAQ. This is a barrier to booking."},
     {"type": "no_show", "severity": "medium", "title": "Saturday afternoon no-shows", "detail": "2 out of 4 Saturday afternoon appointments were no-shows (50% rate). Consider requiring deposit or confirmation for Saturday slots."},
@@ -245,5 +231,3 @@ SELECT
 FROM clients c
 WHERE c.slug = 'glow-aesthetics'
 ON CONFLICT DO NOTHING;
-
--- Done
