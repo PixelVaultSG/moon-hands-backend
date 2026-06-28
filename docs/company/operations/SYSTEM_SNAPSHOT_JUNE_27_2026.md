@@ -272,16 +272,18 @@ Patient WhatsApp Message
 
 | # | Issue | Status | Action Required |
 |---|-------|--------|-----------------|
-| 1 | WABA pending — cannot send WhatsApp | 🔴 BLOCKED | Complete Meta verification in 360dialog dashboard |
-| 2 | CORS allows all origins (`*`) | 🟡 LOW RISK | Restrict to production domains (security fix C1) |
-| 3 | No rate limit on `/api/calendar/verify` | 🟡 LOW RISK | Add IP-based rate limiting (security fix H1) |
-| 4 | In-memory rate limiting resets on deploy | 🟡 ACCEPTABLE | Migrate to Redis after 5 clinics (security fix H2) |
-| 5 | Calendar audit logging missing | 🟡 LOW RISK | Add `calendar_events` table (security fix M2) |
-| 6 | Migration 006 not yet run in Supabase | ⬜ PENDING | Re-run after syntax fixes confirmed |
-| 7 | Security headers missing | 🟡 LOW RISK | Add HSTS, X-Frame-Options, X-Content-Type-Options |
-| 8 | Two local folders (`moon-hands-backend` and `moonhands-backend`) | ✅ RESOLVED | Use `moon-hands-backend` (git repo). Old folder can be deleted |
-| 9 | Git push auth issues | ✅ WORKAROUND | Using GitHub API for file updates. PAT may need refresh |
+| 1 | WABA pending — cannot send WhatsApp | 🔴 BLOCKER | Complete Meta verification in 360dialog dashboard. ETA: 1-3 business days |
+| 2 | CORS allows all origins (`*`) | ✅ FIXED | Restricted to known Moon Hands origins only |
+| 3 | No rate limit on `/api/calendar/verify` | ✅ FIXED | IP-based rate limit: 5 req/min per IP |
+| 4 | In-memory rate limiting resets on deploy | ✅ FIXED | Persisted to Supabase `kv_store` every 5 min |
+| 5 | Calendar audit logging missing | ✅ FIXED | `calendar-audit.js` logs all operations to `audit_log` |
+| 6 | Migrations 006 + 007 | ✅ APPLIED | Both run successfully in Supabase |
+| 7 | Security headers missing | ✅ FIXED | HSTS, X-Frame-Options, CSP, Referrer-Policy added |
+| 8 | Two local folders | ✅ RESOLVED | Old folder renamed to `moonhands-backend-OLD` |
+| 9 | Git push auth issues | ✅ WORKAROUND | GitHub API used for all pushes |
 | 10 | Copy button added to onboarding | ✅ DEPLOYED | Live on wzejxaudglkym.kimi.page |
+| 11 | Calendar booking creation | ✅ VERIFIED | `test-calendar-create.js` works — events appear in Google Calendar |
+| 12 | All 8 security vulnerabilities | ✅ FIXED | Security grade: A- |
 
 ---
 
