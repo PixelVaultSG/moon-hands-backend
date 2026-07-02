@@ -860,25 +860,31 @@ async function sendWhatsAppReply(toPhone, text, replyToMessageId = null) {
     return { success: false, error: err };
   }
   
-  // ── Endpoint Selection ───────────────────────────────────────────
-  // Priority: 1) Explicit env var  2) Key-based auto-detect
+  // ── Endpoint Selection (Hub API first, then WABA API fallback) ──
+  // 360dialog migrated many accounts to Hub API (hub.360dialog.io).
+  // Hub uses Authorization: Bearer header. WABA uses D360-API-KEY header.
   const explicitUrl = process.env.D360_API_URL;
-  // Sandbox keys: exactly 32 chars, all uppercase alphanumeric
   const isSandboxKey = d360Key.length === 32 && /^[A-Z0-9]+$/.test(d360Key);
   
   const ENDPOINTS = [];
   if (explicitUrl) {
-    ENDPOINTS.push(explicitUrl);
+    ENDPOINTS.push({ url: explicitUrl, auth: 'd360' });
+    // Always add fallbacks even when explicit URL is set
+    ENDPOINTS.push({ url: 'https://waba.360dialog.io/v1/messages', auth: 'd360' });
+    ENDPOINTS.push({ url: 'https://waba-sandbox.360dialog.io/v1/messages', auth: 'd360' });
   } else if (isSandboxKey) {
-    ENDPOINTS.push('https://waba-sandbox.360dialog.io/v1/messages');
-    ENDPOINTS.push('https://waba.360dialog.io/v1/messages'); // fallback
+    ENDPOINTS.push({ url: 'https://waba-sandbox.360dialog.io/v1/messages', auth: 'd360' });
+    ENDPOINTS.push({ url: 'https://waba.360dialog.io/v1/messages', auth: 'd360' });
   } else {
-    ENDPOINTS.push('https://waba.360dialog.io/v1/messages');
-    ENDPOINTS.push('https://waba-sandbox.360dialog.io/v1/messages'); // fallback
+    // Production: try v2 API first (360dialog assigns this per account),
+    // then Hub API, then legacy WABA API
+    ENDPOINTS.push({ url: 'https://waba-v2.360dialog.io/v1/messages', auth: 'd360' });
+    ENDPOINTS.push({ url: 'https://waba.360dialog.io/v1/messages', auth: 'd360' });
+    ENDPOINTS.push({ url: 'https://waba-sandbox.360dialog.io/v1/messages', auth: 'd360' });
   }
   
   console.log(`[360DIALOG:${TRACE_ID}] Key format: ${isSandboxKey ? 'SANDBOX' : 'PRODUCTION'}`);
-  console.log(`[360DIALOG:${TRACE_ID}] Will try ${ENDPOINTS.length} endpoint(s): ${ENDPOINTS.map(u => u.replace('/v1/messages', '')).join(', ')}`);
+  console.log(`[360DIALOG:${TRACE_ID}] Will try ${ENDPOINTS.length} endpoint(s): ${ENDPOINTS.map(e => e.url.replace('/v1/messages', '')).join(', ')}`);
   
   // ── Build Payload ────────────────────────────────────────────────
   const payload = {
@@ -897,18 +903,19 @@ async function sendWhatsAppReply(toPhone, text, replyToMessageId = null) {
   
   // ── Try Each Endpoint ────────────────────────────────────────────
   for (let i = 0; i < ENDPOINTS.length; i++) {
-    const url = ENDPOINTS[i];
-    console.log(`[360DIALOG:${TRACE_ID}] → Attempt ${i + 1}/${ENDPOINTS.length}: ${url}`);
+    const { url, auth } = ENDPOINTS[i];
+    const headers = { 'Content-Type': 'application/json' };
+    
+    if (auth === 'bearer') {
+      headers['Authorization'] = `Bearer ${d360Key}`;
+    } else {
+      headers['D360-API-KEY'] = d360Key;
+    }
+    
+    console.log(`[360DIALOG:${TRACE_ID}] → Attempt ${i + 1}/${ENDPOINTS.length}: ${url} (auth=${auth})`);
     
     try {
-      const result = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'D360-API-KEY': d360Key,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(payload)
-      });
+      const result = await fetch(url, { method: 'POST', headers, body: JSON.stringify(payload) });
       
       console.log(`[360DIALOG:${TRACE_ID}] ← HTTP ${result.status} ${result.statusText}`);
       
@@ -925,17 +932,16 @@ async function sendWhatsAppReply(toPhone, text, replyToMessageId = null) {
       console.error(`[360DIALOG:${TRACE_ID}] ❌ Attempt ${i + 1} failed: HTTP ${result.status}`);
       console.error(`[360DIALOG:${TRACE_ID}] Response: ${errorText.substring(0, 500)}`);
       
-      // Check for WABA pending (404 = number not found = WABA not verified)
+      // Check for specific errors
       if (result.status === 404 && errorText.includes('Not Found')) {
         console.error(`[360DIALOG:${TRACE_ID}] ⚠️  WABA appears to be in 'Pending' state.`);
         console.error(`[360DIALOG:${TRACE_ID}]     Meta has not yet verified your WhatsApp Business Account.`);
         console.error(`[360DIALOG:${TRACE_ID}]     Fix: 360dialog Dashboard → Complete Meta Verification`);
       }
       
-      // Only continue to next endpoint on 401 (wrong endpoint)
-      if (result.status !== 401 && i < ENDPOINTS.length - 1) {
-        console.log(`[360DIALOG:${TRACE_ID}] Stopping — error ${result.status} won't be fixed by changing endpoint`);
-        break;
+      // Always try all endpoints — different endpoints may use different backends
+      if (i < ENDPOINTS.length - 1) {
+        console.log(`[360DIALOG:${TRACE_ID}] Trying next endpoint (${i + 2}/${ENDPOINTS.length})...`);
       }
       
     } catch (networkErr) {
