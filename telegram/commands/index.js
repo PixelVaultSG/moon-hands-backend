@@ -212,7 +212,7 @@ async function handleViewConfig(ctx, providedSlug = null) {
     return parts.length >= 2 ? parts[1].trim() : '';
   })();
   if (!slug) {
-    return ctx.reply('⚠️ Usage: /viewconfig <slug>\n\nExample: /viewconfig pixellvault\n\nUse /clients to see all slugs.');
+    return ctx.reply('⚠️ Usage: /viewconfig <slug>\n\nExample: /viewconfig pixelvault\n\nUse /clients to see all slugs.');
   }
 
   const client = await db.getClientBySlug(slug);
@@ -240,7 +240,7 @@ async function handleAddService(ctx) {
   if (args.length < 5) {
     return ctx.reply(
       '\u26a0\ufe0f Usage: /addservice <slug> "Service Name" <price> <duration>\n\n' +
-      'Example: /addservice pixellvault "HIFU Treatment" $350 60\n\n' +
+      'Example: /addservice pixelvault "HIFU Treatment" $350 60\n\n' +
       'Note: Price can be with or without $ sign. Duration is in minutes.'
     );
   }
@@ -261,7 +261,7 @@ async function handleAddService(ctx) {
       '1. Use straight quotes: "Service Name" (not curly quotes)\n' +
       '2. Price can be: $350 or just 350\n' +
       '3. Duration is in minutes: 60\n\n' +
-      'Example: /addservice pixellvault "HIFU Treatment" $350 60'
+      'Example: /addservice pixelvault "HIFU Treatment" $350 60'
     );
   }
 
@@ -313,7 +313,7 @@ async function handleUpdatePrice(ctx) {
   if (!match) {
     return ctx.reply(
       '\u26a0\ufe0f Format: /updateprice <slug> "Service" <price>\n\n' +
-      'Example: /updateprice pixellvault "HIFU Treatment" $299\n\n' +
+      'Example: /updateprice pixelvault "HIFU Treatment" $299\n\n' +
       `Your input: ${raw.substring(0, 60)}`
     );
   }
@@ -359,7 +359,7 @@ async function handleRemoveService(ctx) {
   if (!match) {
     return ctx.reply(
       '\u26a0\ufe0f Format: /removeservice <slug> "Service Name"\n\n' +
-      'Example: /removeservice pixellvault "HIFU Treatment"\n\n' +
+      'Example: /removeservice pixelvault "HIFU Treatment"\n\n' +
       `Your input: ${raw.substring(0, 60)}`
     );
   }
@@ -494,7 +494,7 @@ async function handlePause(ctx, providedSlug = null) {
     const parts = msgText.split(/\s+/);
     return parts.length >= 2 ? parts[1].trim() : '';
   })();
-  if (!slug) return ctx.reply('\u26a0\ufe0f Usage: `/pause <slug>`\n\nExample: /pause pixellvault\n\nUse /clients to see all slugs.');
+  if (!slug) return ctx.reply('\u26a0\ufe0f Usage: `/pause <slug>`\n\nExample: /pause pixelvault\n\nUse /clients to see all slugs.');
 
   const client = await db.getClientBySlug(slug);
   if (!client) return ctx.reply(`\u274c Client "${slug}" not found. Use /clients to see all slugs.`);
@@ -518,7 +518,7 @@ async function handleResume(ctx, providedSlug = null) {
     const parts = msgText.split(/\s+/);
     return parts.length >= 2 ? parts[1].trim() : '';
   })();
-  if (!slug) return ctx.reply('\u26a0\ufe0f Usage: `/resume <slug>`\n\nExample: /resume pixellvault\n\nUse /clients to see all slugs.');
+  if (!slug) return ctx.reply('\u26a0\ufe0f Usage: `/resume <slug>`\n\nExample: /resume pixelvault\n\nUse /clients to see all slugs.');
 
   const client = await db.getClientBySlug(slug);
   if (!client) return ctx.reply(`\u274c Client "${slug}" not found. Use /clients to see all slugs.`);
@@ -542,7 +542,7 @@ async function handleUsage(ctx, providedSlug = null) {
     const parts = text.split(/\s+/);
     return parts.length >= 2 ? parts[1].trim() : '';
   })();
-  if (!slug) return ctx.reply('⚠️ Usage: /usage <slug>\n\nExample: /usage pixellvault\n\nUse /clients to see all slugs.');
+  if (!slug) return ctx.reply('⚠️ Usage: /usage <slug>\n\nExample: /usage pixelvault\n\nUse /clients to see all slugs.');
 
   const client = await db.getClientBySlug(slug);
   if (!client) return ctx.reply(`❌ Client "${slug}" not found. Use /clients to see available slugs.`);

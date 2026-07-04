@@ -436,6 +436,30 @@ setTimeout(() => {
   }
 }, 700);
 
+// ─── TRIAL EXPIRY CHECKER ────────────────────────────────────────
+// Runs daily at 9 AM SGT. Alerts admin when trials are expiring.
+
+setTimeout(() => {
+  try {
+    const { checkTrialExpiries } = require('./jobs/trial-expiry-checker');
+    // Run at 9 AM SGT = 1 AM UTC
+    const now = new Date();
+    const sgNow = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Singapore' }));
+    const nineAM = new Date(sgNow);
+    nineAM.setHours(9, 0, 0, 0);
+    if (nineAM <= sgNow) nineAM.setDate(nineAM.getDate() + 1);
+    const msUntil9AM = nineAM - sgNow;
+    
+    setTimeout(() => {
+      checkTrialExpiries();
+      setInterval(checkTrialExpiries, 24 * 60 * 60 * 1000);
+    }, msUntil9AM);
+    console.log('  ✅ Trial expiry checker started (9 AM SGT daily)');
+  } catch (err) {
+    console.error('  ❌ Trial expiry checker failed:', err.message);
+  }
+}, 700);
+
 // ─── FINAL STATUS ────────────────────────────────────────────────
 
 setTimeout(() => {

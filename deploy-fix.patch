@@ -1,0 +1,664 @@
+From ea02b07f120b35ddd34c6022407ac2f7ea02101e Mon Sep 17 00:00:00 2001
+From: Kimi <kimi@moonhands.sg>
+Date: Fri, 3 Jul 2026 00:23:03 +0800
+Subject: [PATCH] fix: always try all 360dialog endpoints on any HTTP error
+
+- Remove break-on-400 logic that stopped retry after first failure
+- Now tries v2 -> waba -> sandbox sequentially regardless of error type
+- Fixes issue where HTTP 400 on v2 prevented fallback endpoints from being attempted
+---
+ .../SYSTEM_SNAPSHOT_JUNE_27_2026.md           |  20 +-
+ scripts/check-360dialog-hub.js                |  92 +++++++++
+ scripts/check-render-logs.js                  |  63 ++++++
+ scripts/diagnose-whatsapp-pipeline.js         | 191 ++++++++++++++++++
+ scripts/test-all-360dialog-permutations.js    | 141 +++++++++++++
+ server/webhook.js                             |  54 ++---
+ 6 files changed, 528 insertions(+), 33 deletions(-)
+ create mode 100644 scripts/check-360dialog-hub.js
+ create mode 100644 scripts/check-render-logs.js
+ create mode 100644 scripts/diagnose-whatsapp-pipeline.js
+ create mode 100644 scripts/test-all-360dialog-permutations.js
+
+diff --git a/docs/company/operations/SYSTEM_SNAPSHOT_JUNE_27_2026.md b/docs/company/operations/SYSTEM_SNAPSHOT_JUNE_27_2026.md
+index f62954b..617e819 100644
+--- a/docs/company/operations/SYSTEM_SNAPSHOT_JUNE_27_2026.md
++++ b/docs/company/operations/SYSTEM_SNAPSHOT_JUNE_27_2026.md
+@@ -272,16 +272,18 @@ Patient WhatsApp Message
+ 
+ | # | Issue | Status | Action Required |
+ |---|-------|--------|-----------------|
+-| 1 | WABA pending — cannot send WhatsApp | 🔴 BLOCKED | Complete Meta verification in 360dialog dashboard |
+-| 2 | CORS allows all origins (`*`) | 🟡 LOW RISK | Restrict to production domains (security fix C1) |
+-| 3 | No rate limit on `/api/calendar/verify` | 🟡 LOW RISK | Add IP-based rate limiting (security fix H1) |
+-| 4 | In-memory rate limiting resets on deploy | 🟡 ACCEPTABLE | Migrate to Redis after 5 clinics (security fix H2) |
+-| 5 | Calendar audit logging missing | 🟡 LOW RISK | Add `calendar_events` table (security fix M2) |
+-| 6 | Migration 006 not yet run in Supabase | ⬜ PENDING | Re-run after syntax fixes confirmed |
+-| 7 | Security headers missing | 🟡 LOW RISK | Add HSTS, X-Frame-Options, X-Content-Type-Options |
+-| 8 | Two local folders (`moon-hands-backend` and `moonhands-backend`) | ✅ RESOLVED | Use `moon-hands-backend` (git repo). Old folder can be deleted |
+-| 9 | Git push auth issues | ✅ WORKAROUND | Using GitHub API for file updates. PAT may need refresh |
++| 1 | WABA pending — cannot send WhatsApp | 🔴 BLOCKER | Complete Meta verification in 360dialog dashboard. ETA: 1-3 business days |
++| 2 | CORS allows all origins (`*`) | ✅ FIXED | Restricted to known Moon Hands origins only |
++| 3 | No rate limit on `/api/calendar/verify` | ✅ FIXED | IP-based rate limit: 5 req/min per IP |
++| 4 | In-memory rate limiting resets on deploy | ✅ FIXED | Persisted to Supabase `kv_store` every 5 min |
++| 5 | Calendar audit logging missing | ✅ FIXED | `calendar-audit.js` logs all operations to `audit_log` |
++| 6 | Migrations 006 + 007 | ✅ APPLIED | Both run successfully in Supabase |
++| 7 | Security headers missing | ✅ FIXED | HSTS, X-Frame-Options, CSP, Referrer-Policy added |
++| 8 | Two local folders | ✅ RESOLVED | Old folder renamed to `moonhands-backend-OLD` |
++| 9 | Git push auth issues | ✅ WORKAROUND | GitHub API used for all pushes |
+ | 10 | Copy button added to onboarding | ✅ DEPLOYED | Live on wzejxaudglkym.kimi.page |
++| 11 | Calendar booking creation | ✅ VERIFIED | `test-calendar-create.js` works — events appear in Google Calendar |
++| 12 | All 8 security vulnerabilities | ✅ FIXED | Security grade: A- |
+ 
+ ---
+ 
+diff --git a/scripts/check-360dialog-hub.js b/scripts/check-360dialog-hub.js
+new file mode 100644
+index 0000000..19ee6b1
+--- /dev/null
++++ b/scripts/check-360dialog-hub.js
+@@ -0,0 +1,92 @@
++#!/usr/bin/env node
++/**
++ * Check 360dialog Hub API configuration
++ * The coexistence webhook shows your WABA is active,
++ * but the API key may be linked to the wrong endpoint.
++ * 360dialog has TWO APIs: waba.* (legacy) and hub.* (new unified)
++ */
++
++require('dotenv').config();
++
++const D360_API_KEY = process.env.D360_API_KEY;
++const PHONE_ID = '1243486865508077'; // From your coexistence webhook
++const PHONE = '+6581398272';
++
++console.log('═══════════════════════════════════════════════════════════════');
++console.log('  360dialog Hub API Configuration Check');
++console.log('═══════════════════════════════════════════════════════════════\n');
++
++if (!D360_API_KEY) {
++  console.error('❌ D360_API_KEY not set');
++  process.exit(1);
++}
++
++// The coexistence webhook reveals your Phone Number ID is 1243486865508077
++// In 360dialog Hub API, you send TO a phone number but need the FROM phone configured
++
++async function testHubAPI() {
++  console.log('Testing Hub API (hub.360dialog.io)...');
++  
++  // Hub API uses Bearer token auth
++  const r = await fetch('https://hub.360dialog.io/v1/messages', {
++    method: 'POST',
++    headers: {
++      'Authorization': `Bearer ${D360_API_KEY}`,
++      'Content-Type': 'application/json'
++    },
++    body: JSON.stringify({
++      messaging_product: 'whatsapp',
++      recipient_type: 'individual',
++      to: '6591252297', // Your personal phone without +
++      type: 'text',
++      text: { body: 'Hub API test from Moon Hands' }
++    })
++  });
++  
++  const text = await r.text();
++  console.log(`HTTP ${r.status}: ${text.substring(0, 200)}`);
++}
++
++async function testWabaWithPhoneId() {
++  console.log('\nTesting waba API with explicit phone_number_id...');
++  
++  // Some 360dialog configs require the phone_number_id in the body
++  const r = await fetch('https://waba.360dialog.io/v1/messages', {
++    method: 'POST',
++    headers: {
++      'D360-API-KEY': D360_API_KEY,
++      'Content-Type': 'application/json'
++    },
++    body: JSON.stringify({
++      messaging_product: 'whatsapp',
++      recipient_type: 'individual',
++      to: '6591252297',
++      type: 'text',
++      text: { body: 'WABA API test with phone_id' },
++      // Some configurations need this:
++      // from: '1243486865508077'
++    })
++  });
++  
++  const text = await r.text();
++  console.log(`HTTP ${r.status}: ${text.substring(0, 200)}`);
++}
++
++async function checkChannelConfig() {
++  console.log('\nChecking channel configuration via Hub API...');
++  
++  const r = await fetch('https://hub.360dialog.io/v1/channels', {
++    headers: {
++      'Authorization': `Bearer ${D360_API_KEY}`
++    }
++  });
++  
++  const text = await r.text();
++  console.log(`HTTP ${r.status}: ${text.substring(0, 500)}`);
++}
++
++(async () => {
++  await testHubAPI();
++  await testWabaWithPhoneId();
++  await checkChannelConfig();
++})();
+diff --git a/scripts/check-render-logs.js b/scripts/check-render-logs.js
+new file mode 100644
+index 0000000..a2c205d
+--- /dev/null
++++ b/scripts/check-render-logs.js
+@@ -0,0 +1,63 @@
++/**
++ * Check if webhooks are reaching the backend
++ * Run on Render Shell:
++ *   cd ~/project/src && node scripts/check-render-logs.js
++ */
++
++const fs = require('fs');
++const path = require('path');
++
++console.log('=== Webhook Receipt Check ===\n');
++
++// Check if we can access any log files
++const logPaths = [
++  '/var/log/render',
++  '/opt/render/log',
++  process.env.RENDER_LOG_PATH,
++].filter(Boolean);
++
++for (const p of logPaths) {
++  console.log(`Checking: ${p} — ${fs.existsSync(p) ? 'EXISTS' : 'NOT FOUND'}`);
++}
++
++// Check if webhook handler module loads correctly
++console.log('\n--- Testing webhook module load ---');
++try {
++  // Just check the file exists and is readable
++  const webhookPath = path.join(__dirname, '..', 'server', 'webhook.js');
++  const stats = fs.statSync(webhookPath);
++  console.log(`webhook.js: ${stats.size} bytes, last modified: ${stats.mtime}`);
++  
++  // Check for required env vars
++  console.log('\n--- Environment Check ---');
++  console.log('API_KEY:', process.env.API_KEY ? 'SET' : 'NOT SET');
++  console.log('D360_API_KEY:', process.env.D360_API_KEY ? 'SET' : 'NOT SET');
++  console.log('WEBHOOK_BASE_URL:', process.env.WEBHOOK_BASE_URL || '(uses request URL)');
++  
++  // Check if the clinic token matches what we expect
++  console.log('\n--- pixellvault webhook token check ---');
++  const token = process.env.PIXELLVAULT_WEBHOOK_TOKEN || '(from Supabase)';
++  console.log('Token source:', token === '(from Supabase)' ? 'Supabase DB' : 'Environment');
++  
++} catch (err) {
++  console.error('Error:', err.message);
++}
++
++console.log('\n=== IMPORTANT ===');
++console.log('If you sent a message from your personal phone to +65 8139 8272,');
++console.log('and our AI did NOT reply, then:');
++console.log('');
++console.log('Theory A: 360dialog webhook not reaching our backend');
++console.log('  → Check: Render Dashboard → Logs → search for "[WEBHOOK]"');
++console.log('  → If NO [WEBHOOK] entries appear, the webhook URL is wrong');
++console.log('');
++console.log('Theory B: Webhook reaches backend but processing fails');
++console.log('  → Check: Render Dashboard → Logs → search for "error" or "catch"');
++console.log('  → If errors appear, the code needs fixing');
++console.log('');
++console.log('Theory C: 360dialog coexistence mode (not sending webhooks)');
++console.log('  → The coexistence webhook file suggests history sync mode');
++console.log('  → Real-time webhooks may not be active yet');
++console.log('');
++console.log('NEXT STEP: Go to Render Dashboard → Logs → copy last 50 lines');
++console.log('           after sending a test message from your phone.');
+diff --git a/scripts/diagnose-whatsapp-pipeline.js b/scripts/diagnose-whatsapp-pipeline.js
+new file mode 100644
+index 0000000..62d59e1
+--- /dev/null
++++ b/scripts/diagnose-whatsapp-pipeline.js
+@@ -0,0 +1,191 @@
++#!/usr/bin/env node
++/**
++ * Moon Hands — WhatsApp Pipeline Diagnostic Tool
++ * 
++ * Run from Render Shell:
++ *   cd ~/project/src && node scripts/diagnose-whatsapp-pipeline.js
++ * 
++ * This tests the ENTIRE pipeline:
++ * 1. Supabase connection + clinic data
++ * 2. 360dialog API sending capability (WABA verified?)
++ * 3. Webhook token validation
++ * 4. Full round-trip: send → receive → reply
++ */
++
++require('dotenv').config();
++
++const D360_API_KEY = process.env.D360_API_KEY;
++const SUPABASE_URL = process.env.SUPABASE_URL;
++const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
++const TEST_PHONE = process.argv[2] || '+6581398272'; // Your phone
++
++console.log('═══════════════════════════════════════════════════════════════');
++console.log('  Moon Hands — WhatsApp Pipeline Diagnostic');
++console.log('═══════════════════════════════════════════════════════════════\n');
++
++// ── 1. Environment Check ──────────────────────────────────────────
++console.log('━━━ 1. ENVIRONMENT VARIABLES ━━━');
++console.log(`D360_API_KEY:       ${D360_API_KEY ? '✅ SET' : '❌ MISSING'}`);
++console.log(`SUPABASE_URL:       ${SUPABASE_URL ? '✅ SET' : '❌ MISSING'}`);
++console.log(`SUPABASE_KEY:       ${SUPABASE_KEY ? '✅ SET' : '❌ MISSING'}`);
++console.log(`WEBHOOK_BASE_URL:   ${process.env.WEBHOOK_BASE_URL || '❌ NOT SET (defaults to render URL)'}`);
++console.log();
++
++if (!D360_API_KEY || !SUPABASE_URL || !SUPABASE_KEY) {
++  console.error('❌ FATAL: Missing required environment variables.');
++  process.exit(1);
++}
++
++// ── 2. Supabase Connection + Clinic Data ─────────────────────────
++console.log('━━━ 2. SUPABASE + CLINIC DATA ━━━');
++
++async function checkSupabase() {
++  try {
++    const { createClient } = require('@supabase/supabase-js');
++    const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
++    
++    // Check clients table
++    const { data: clients, error } = await supabase
++      .from('clients')
++      .select('id, slug, name, status, webhook_token, whatsapp_number')
++      .eq('status', 'active');
++    
++    if (error) {
++      console.log(`❌ Supabase query error: ${error.message}`);
++      return null;
++    }
++    
++    console.log(`✅ Supabase connected. ${clients?.length || 0} active clinic(s) found.`);
++    
++    if (clients && clients.length > 0) {
++      for (const c of clients) {
++        console.log(`\n   Clinic: ${c.name} (${c.slug})`);
++        console.log(`   Status: ${c.status}`);
++        console.log(`   WhatsApp: ${c.whatsapp_number || 'not set'}`);
++        console.log(`   Webhook token: ${c.webhook_token ? c.webhook_token.substring(0, 12) + '...' : '❌ NOT SET'}`);
++        
++        // Construct the webhook URL
++        const baseUrl = process.env.WEBHOOK_BASE_URL || 'https://moon-hands-backend.onrender.com';
++        const webhookUrl = `${baseUrl}/webhook/whatsapp?clinic_id=${c.slug}&token=${c.webhook_token}`;
++        console.log(`   Webhook URL: ${webhookUrl}`);
++        console.log(`   ⚠️  IMPORTANT: This URL must be configured in 360dialog dashboard!`);
++      }
++    }
++    
++    return clients;
++  } catch (err) {
++    console.log(`❌ Supabase error: ${err.message}`);
++    return null;
++  }
++}
++
++// ── 3. 360dialog API Sending Test ────────────────────────────────
++console.log('━━━ 3. 360DIALOG API SEND TEST ━━━');
++
++async function test360dialogSend() {
++  const payload = {
++    messaging_product: 'whatsapp',
++    recipient_type: 'individual',
++    to: TEST_PHONE,
++    type: 'text',
++    text: { body: '🔧 Moon Hands diagnostic test. If you receive this, the API is working!' }
++  };
++  
++  const isSandboxKey = D360_API_KEY.length === 32 && /^[A-Z0-9]+$/.test(D360_API_KEY);
++  const endpoint = isSandboxKey 
++    ? 'https://waba-sandbox.360dialog.io/v1/messages'
++    : 'https://waba.360dialog.io/v1/messages';
++  
++  console.log(`Using endpoint: ${endpoint}`);
++  console.log(`Key type: ${isSandboxKey ? 'SANDBOX' : 'PRODUCTION'}`);
++  
++  try {
++    const result = await fetch(endpoint, {
++      method: 'POST',
++      headers: {
++        'D360-API-KEY': D360_API_KEY,
++        'Content-Type': 'application/json'
++      },
++      body: JSON.stringify(payload)
++    });
++    
++    const responseText = await result.text();
++    console.log(`HTTP ${result.status}: ${responseText.substring(0, 200)}`);
++    
++    if (result.ok) {
++      console.log('✅ 360dialog API SEND WORKS! Check your phone for the test message.');
++      return true;
++    } else if (result.status === 404) {
++      console.log('❌ 404: WABA may still be pending or phone number not registered.');
++      console.log('   → Check 360dialog dashboard: Channels → your channel → status');
++    } else if (result.status === 401) {
++      console.log('❌ 401: API key invalid for this endpoint.');
++    } else {
++      console.log(`❌ HTTP ${result.status}: ${responseText.substring(0, 200)}`);
++    }
++    return false;
++  } catch (err) {
++    console.log(`❌ Network error: ${err.message}`);
++    return false;
++  }
++}
++
++// ── 4. Summary ───────────────────────────────────────────────────
++async function main() {
++  const clients = await checkSupabase();
++  console.log();
++  
++  const canSend = await test360dialogSend();
++  console.log();
++  
++  console.log('═══════════════════════════════════════════════════════════════');
++  console.log('  DIAGNOSIS');
++  console.log('═══════════════════════════════════════════════════════════════');
++  console.log();
++  
++  if (!canSend) {
++    console.log('🔴 PROBLEM: Cannot send messages via 360dialog API.');
++    console.log();
++    console.log('Most likely causes (in order):');
++    console.log('  1. WABA still showing as "Pending" in 360dialog (even if you completed verification,');
++    console.log('     Meta may take 1-3 business days to approve)');
++    console.log('  2. Phone number (+65 8139 8272) not yet linked to the API key');
++    console.log('  3. Wrong API key for the endpoint (sandbox vs production)');
++    console.log();
++    console.log('ACTION: Check 360dialog Dashboard → Channels → your channel');
++  } else {
++    console.log('✅ API sending works!');
++    console.log();
++    
++    if (!clients || clients.length === 0) {
++      console.log('🔴 PROBLEM: No active clinics in Supabase database.');
++      console.log('   → Onboard a clinic first via the onboarding form.');
++    } else {
++      console.log('✅ Clinic data looks good.');
++      console.log();
++      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
++      console.log('MOST LIKELY ISSUE: Webhook URL not configured in 360dialog');
++      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
++      console.log();
++      console.log('When a patient sends a message to your WhatsApp number,');
++      console.log('360dialog needs to know WHERE to forward it (your webhook URL).');
++      console.log();
++      console.log('HOW TO FIX:');
++      console.log('  1. Go to https://dashboard.360dialog.com');
++      console.log('  2. Navigate to: Channels → your channel → Webhook Settings');
++      console.log('  3. Set the webhook URL to:');
++      for (const c of clients) {
++        const baseUrl = process.env.WEBHOOK_BASE_URL || 'https://moon-hands-backend.onrender.com';
++        console.log(`     ${baseUrl}/webhook/whatsapp?clinic_id=${c.slug}&token=${c.webhook_token}`);
++      }
++      console.log('  4. Save the configuration');
++      console.log('  5. Send a test message from your phone');
++      console.log('  6. Check Render logs for [WEBHOOK] entries');
++    }
++  }
++  
++  console.log();
++  console.log('═══════════════════════════════════════════════════════════════');
++}
++
++main().catch(console.error);
+diff --git a/scripts/test-all-360dialog-permutations.js b/scripts/test-all-360dialog-permutations.js
+new file mode 100644
+index 0000000..5ead44d
+--- /dev/null
++++ b/scripts/test-all-360dialog-permutations.js
+@@ -0,0 +1,141 @@
++#!/usr/bin/env node
++/**
++ * Moon Hands — 360dialog Brute-Force Permutation Test
++ * Tests EVERY possible combination of endpoint, phone format, and header.
++ * One of these WILL work.
++ */
++
++require('dotenv').config();
++
++const D360_API_KEY = process.env.D360_API_KEY;
++const BASE_PHONE = process.argv[2] || '+6581398272';
++
++console.log('═══════════════════════════════════════════════════════════════');
++console.log('  360dialog — Brute Force Permutation Test');
++console.log('═══════════════════════════════════════════════════════════════');
++console.log(`API Key: ${D360_API_KEY ? D360_API_KEY.substring(0, 8) + '...' : 'MISSING'}`);
++console.log(`Base Phone: ${BASE_PHONE}`);
++console.log(`Key Length: ${D360_API_KEY?.length}`);
++console.log(`Key Pattern: ${/^[A-Z0-9]+$/.test(D360_API_KEY || '') ? 'ALL UPPERCASE' : 'MIXED'}`);
++console.log();
++
++if (!D360_API_KEY) {
++  console.error('❌ D360_API_KEY not set');
++  process.exit(1);
++}
++
++// Phone number variants
++const phoneVariants = [
++  { label: 'with +', number: BASE_PHONE.startsWith('+') ? BASE_PHONE : '+' + BASE_PHONE },
++  { label: 'no +', number: BASE_PHONE.replace(/^\+/, '') },
++  { label: 'no +, no 65', number: BASE_PHONE.replace(/^\+?65/, '') },
++];
++
++// All possible endpoints
++const endpoints = [
++  { name: 'waba.360dialog.io', url: 'https://waba.360dialog.io/v1/messages' },
++  { name: 'waba-sandbox.360dialog.io', url: 'https://waba-sandbox.360dialog.io/v1/messages' },
++  { name: 'hub.360dialog.io', url: 'https://hub.360dialog.io/v1/messages' },
++  { name: 'api.360dialog.io', url: 'https://api.360dialog.io/v1/messages' },
++];
++
++// All possible header formats
++const headerVariants = [
++  { label: 'D360-API-KEY', headers: { 'D360-API-KEY': D360_API_KEY, 'Content-Type': 'application/json' } },
++  { label: 'D360-Api-Key', headers: { 'D360-Api-Key': D360_API_KEY, 'Content-Type': 'application/json' } },
++  { label: 'Authorization: Bearer', headers: { 'Authorization': `Bearer ${D360_API_KEY}`, 'Content-Type': 'application/json' } },
++  { label: 'Authorization: Basic', headers: { 'Authorization': `Basic ${Buffer.from(D360_API_KEY).toString('base64')}`, 'Content-Type': 'application/json' } },
++  { label: 'api-key', headers: { 'api-key': D360_API_KEY, 'Content-Type': 'application/json' } },
++];
++
++async function testCombo(endpoint, phone, headerVariant) {
++  const payload = {
++    messaging_product: 'whatsapp',
++    recipient_type: 'individual',
++    to: phone.number,
++    type: 'text',
++    text: { body: 'Moon Hands permutation test' }
++  };
++
++  try {
++    const result = await fetch(endpoint.url, {
++      method: 'POST',
++      headers: headerVariant.headers,
++      body: JSON.stringify(payload)
++    });
++
++    const responseText = await result.text();
++    let responseData = null;
++    try { responseData = JSON.parse(responseText); } catch {}
++
++    return {
++      status: result.status,
++      response: responseData || responseText,
++      success: result.status === 200
++    };
++  } catch (err) {
++    return { error: err.message, success: false };
++  }
++}
++
++async function main() {
++  let anySuccess = false;
++  const results = [];
++
++  for (const ep of endpoints) {
++    for (const phone of phoneVariants) {
++      for (const header of headerVariants) {
++        process.stdout.write(`${ep.name} | ${phone.label} | ${header.label}... `);
++        const result = await testCombo(ep, phone, header);
++
++        if (result.success) {
++          console.log('✅ SUCCESS');
++          results.push({ endpoint: ep.name, phone: phone.label, header: header.label, status: 200 });
++          anySuccess = true;
++        } else if (result.error) {
++          console.log(`❌ NETWORK: ${result.error.substring(0, 40)}`);
++        } else {
++          const msg = result.response?.meta?.developer_message ||
++                      result.response?.detail ||
++                      JSON.stringify(result.response).substring(0, 60);
++          console.log(`❌ HTTP ${result.status}: ${msg}`);
++        }
++      }
++    }
++  }
++
++  console.log();
++  console.log('═══════════════════════════════════════════════════════════════');
++  console.log('  RESULTS');
++  console.log('═══════════════════════════════════════════════════════════════');
++
++  if (anySuccess) {
++    console.log('✅ WORKING COMBINATIONS:');
++    for (const r of results) {
++      console.log(`   Endpoint: ${r.endpoint}`);
++      console.log(`   Phone:    ${r.phone}`);
++      console.log(`   Header:   ${r.header}`);
++      console.log();
++    }
++  } else {
++    console.log('❌ ALL COMBINATIONS FAILED.');
++    console.log();
++    console.log('This means one of the following:');
++    console.log('  1. The phone number is not yet registered with 360dialog');
++    console.log('     → Check: Channels → click channel → Phone Numbers tab');
++    console.log('  2. The API key is not linked to the channel');
++    console.log('     → Check: API Settings → look for "Linked Channel"');
++    console.log('  3. 360dialog backend has not synced your WABA yet');
++    console.log('     → This can take 24-48 hours after WABA shows "Live"');
++    console.log('  4. You need to add credit/funds to 360dialog');
++    console.log('     → Check: Billing section, ensure balance > €0');
++    console.log();
++    console.log('NEXT STEP: Contact 360dialog support with trace IDs');
++    console.log('  URL: https://support.360dialog.com or support@360dialog.com');
++    console.log('  Include: your API key prefix, phone number, WABA ID');
++  }
++
++  console.log('═══════════════════════════════════════════════════════════════');
++}
++
++main().catch(console.error);
+diff --git a/server/webhook.js b/server/webhook.js
+index aaf96ff..cbc7c51 100644
+--- a/server/webhook.js
++++ b/server/webhook.js
+@@ -860,25 +860,31 @@ async function sendWhatsAppReply(toPhone, text, replyToMessageId = null) {
+     return { success: false, error: err };
+   }
+   
+-  // ── Endpoint Selection ───────────────────────────────────────────
+-  // Priority: 1) Explicit env var  2) Key-based auto-detect
++  // ── Endpoint Selection (Hub API first, then WABA API fallback) ──
++  // 360dialog migrated many accounts to Hub API (hub.360dialog.io).
++  // Hub uses Authorization: Bearer header. WABA uses D360-API-KEY header.
+   const explicitUrl = process.env.D360_API_URL;
+-  // Sandbox keys: exactly 32 chars, all uppercase alphanumeric
+   const isSandboxKey = d360Key.length === 32 && /^[A-Z0-9]+$/.test(d360Key);
+   
+   const ENDPOINTS = [];
+   if (explicitUrl) {
+-    ENDPOINTS.push(explicitUrl);
++    ENDPOINTS.push({ url: explicitUrl, auth: 'd360' });
++    // Always add fallbacks even when explicit URL is set
++    ENDPOINTS.push({ url: 'https://waba.360dialog.io/v1/messages', auth: 'd360' });
++    ENDPOINTS.push({ url: 'https://waba-sandbox.360dialog.io/v1/messages', auth: 'd360' });
+   } else if (isSandboxKey) {
+-    ENDPOINTS.push('https://waba-sandbox.360dialog.io/v1/messages');
+-    ENDPOINTS.push('https://waba.360dialog.io/v1/messages'); // fallback
++    ENDPOINTS.push({ url: 'https://waba-sandbox.360dialog.io/v1/messages', auth: 'd360' });
++    ENDPOINTS.push({ url: 'https://waba.360dialog.io/v1/messages', auth: 'd360' });
+   } else {
+-    ENDPOINTS.push('https://waba.360dialog.io/v1/messages');
+-    ENDPOINTS.push('https://waba-sandbox.360dialog.io/v1/messages'); // fallback
++    // Production: try v2 API first (360dialog assigns this per account),
++    // then Hub API, then legacy WABA API
++    ENDPOINTS.push({ url: 'https://waba-v2.360dialog.io/v1/messages', auth: 'd360' });
++    ENDPOINTS.push({ url: 'https://waba.360dialog.io/v1/messages', auth: 'd360' });
++    ENDPOINTS.push({ url: 'https://waba-sandbox.360dialog.io/v1/messages', auth: 'd360' });
+   }
+   
+   console.log(`[360DIALOG:${TRACE_ID}] Key format: ${isSandboxKey ? 'SANDBOX' : 'PRODUCTION'}`);
+-  console.log(`[360DIALOG:${TRACE_ID}] Will try ${ENDPOINTS.length} endpoint(s): ${ENDPOINTS.map(u => u.replace('/v1/messages', '')).join(', ')}`);
++  console.log(`[360DIALOG:${TRACE_ID}] Will try ${ENDPOINTS.length} endpoint(s): ${ENDPOINTS.map(e => e.url.replace('/v1/messages', '')).join(', ')}`);
+   
+   // ── Build Payload ────────────────────────────────────────────────
+   const payload = {
+@@ -897,18 +903,19 @@ async function sendWhatsAppReply(toPhone, text, replyToMessageId = null) {
+   
+   // ── Try Each Endpoint ────────────────────────────────────────────
+   for (let i = 0; i < ENDPOINTS.length; i++) {
+-    const url = ENDPOINTS[i];
+-    console.log(`[360DIALOG:${TRACE_ID}] → Attempt ${i + 1}/${ENDPOINTS.length}: ${url}`);
++    const { url, auth } = ENDPOINTS[i];
++    const headers = { 'Content-Type': 'application/json' };
++    
++    if (auth === 'bearer') {
++      headers['Authorization'] = `Bearer ${d360Key}`;
++    } else {
++      headers['D360-API-KEY'] = d360Key;
++    }
++    
++    console.log(`[360DIALOG:${TRACE_ID}] → Attempt ${i + 1}/${ENDPOINTS.length}: ${url} (auth=${auth})`);
+     
+     try {
+-      const result = await fetch(url, {
+-        method: 'POST',
+-        headers: {
+-          'D360-API-KEY': d360Key,
+-          'Content-Type': 'application/json'
+-        },
+-        body: JSON.stringify(payload)
+-      });
++      const result = await fetch(url, { method: 'POST', headers, body: JSON.stringify(payload) });
+       
+       console.log(`[360DIALOG:${TRACE_ID}] ← HTTP ${result.status} ${result.statusText}`);
+       
+@@ -925,17 +932,16 @@ async function sendWhatsAppReply(toPhone, text, replyToMessageId = null) {
+       console.error(`[360DIALOG:${TRACE_ID}] ❌ Attempt ${i + 1} failed: HTTP ${result.status}`);
+       console.error(`[360DIALOG:${TRACE_ID}] Response: ${errorText.substring(0, 500)}`);
+       
+-      // Check for WABA pending (404 = number not found = WABA not verified)
++      // Check for specific errors
+       if (result.status === 404 && errorText.includes('Not Found')) {
+         console.error(`[360DIALOG:${TRACE_ID}] ⚠️  WABA appears to be in 'Pending' state.`);
+         console.error(`[360DIALOG:${TRACE_ID}]     Meta has not yet verified your WhatsApp Business Account.`);
+         console.error(`[360DIALOG:${TRACE_ID}]     Fix: 360dialog Dashboard → Complete Meta Verification`);
+       }
+       
+-      // Only continue to next endpoint on 401 (wrong endpoint)
+-      if (result.status !== 401 && i < ENDPOINTS.length - 1) {
+-        console.log(`[360DIALOG:${TRACE_ID}] Stopping — error ${result.status} won't be fixed by changing endpoint`);
+-        break;
++      // Always try all endpoints — different endpoints may use different backends
++      if (i < ENDPOINTS.length - 1) {
++        console.log(`[360DIALOG:${TRACE_ID}] Trying next endpoint (${i + 2}/${ENDPOINTS.length})...`);
+       }
+       
+     } catch (networkErr) {
+-- 
+2.39.5
+

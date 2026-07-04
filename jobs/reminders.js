@@ -35,33 +35,56 @@ const REMINDER_MESSAGES = {
 
 // ─── SEND WHATSAPP MESSAGE VIA 360DIALOG ─────────────────────────
 
+// ─── SEND WHATSAPP MESSAGE VIA 360DIALOG ─────────────────────────
+// Tries endpoints in order: v2 → waba → sandbox (same as webhook.js)
+// Uses /messages path (not /v1/messages) per 360dialog docs.
+
+const D360_ENDPOINTS = [
+  'https://waba-v2.360dialog.io/messages',
+  'https://waba.360dialog.io/messages',
+  'https://waba-sandbox.360dialog.io/messages'
+];
+
 async function sendWhatsAppMessage(phoneNumber, message, apiKey) {
-  try {
-    const response = await fetch('https://waba.360dialog.io/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'D360-Api-Key': apiKey
-      },
-      body: JSON.stringify({
-        messaging_product: 'whatsapp',
-        to: phoneNumber,
-        type: 'text',
-        text: { body: message }
-      })
-    });
-
-    if (!response.ok) {
-      const error = await response.text();
-      console.error(`[REMINDER] WhatsApp send failed: ${error}`);
-      return false;
-    }
-
-    return true;
-  } catch (err) {
-    console.error(`[REMINDER] Send error: ${err.message}`);
+  const key = apiKey || process.env.D360_API_KEY;
+  if (!key) {
+    console.error('[REMINDER] No D360_API_KEY available');
     return false;
   }
+
+  const payload = {
+    messaging_product: 'whatsapp',
+    recipient_type: 'individual',
+    to: phoneNumber,
+    type: 'text',
+    text: { body: message }
+  };
+
+  for (const endpoint of D360_ENDPOINTS) {
+    try {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'D360-Api-Key': key
+        },
+        body: JSON.stringify(payload)
+      });
+
+      if (response.ok) {
+        console.log(`[REMINDER] Sent via ${endpoint.split('/')[2]}`);
+        return true;
+      }
+
+      const errorText = await response.text();
+      console.warn(`[REMINDER] ${endpoint} failed: ${response.status} ${errorText.substring(0, 100)}`);
+    } catch (err) {
+      console.warn(`[REMINDER] ${endpoint} error: ${err.message}`);
+    }
+  }
+
+  console.error('[REMINDER] All endpoints failed');
+  return false;
 }
 
 // ─── 24-HOUR REMINDERS ────────────────────────────────────────────

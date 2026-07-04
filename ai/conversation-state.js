@@ -15,6 +15,7 @@ const BOOKING_STATES = {
   AWAITING_TREATMENT: 'awaiting_treatment',
   AWAITING_NAME: 'awaiting_name',
   AWAITING_PHONE: 'awaiting_phone',
+  AWAITING_CONFIRMATION: 'awaiting_confirmation',
   READY_TO_BOOK: 'ready_to_book',
 };
 
@@ -86,22 +87,36 @@ function parseTimePhrase(phrase) {
   return `${String(hour).padStart(2,'0')}:${String(minute).padStart(2,'0')}`;
 }
 
+// ─── TREATMENT EXTRACTION ────────────────────────────────────────
+// Extracts ALL treatments mentioned in a message (for multi-treatment bookings)
+
 function extractTreatmentName(message, services = []) {
+  const all = extractAllTreatments(message, services);
+  return all.length > 0 ? all[0] : null; // backward compat
+}
+
+function extractAllTreatments(message, services = []) {
   const lower = message.toLowerCase();
   const keywords = services.length > 0 ? services.map(s => s.name.toLowerCase()) : [
     'hydrating facial','anti-aging treatment','acne clear facial',
     'laser skin rejuvenation','botox consultation','dermal filler',
     'hifu','thread lift','chemical peel','microneedling','facial','botox','filler','laser','peel'
   ];
-  for (const s of keywords) if (lower.includes(s)) return s;
-  const words = lower.split(/\s+/).filter(w => w.length >= 3);
-  for (const w of words) {
-    for (const s of keywords) {
-      const sw = s.split(/\s+/);
-      if (sw.some(x => x === w || x.includes(w) || w.includes(x))) return s;
+  
+  const found = [];
+  // Sort by length (longest first) so "thread lift" matches before "lift"
+  const sorted = [...keywords].sort((a, b) => b.length - a.length);
+  
+  let remaining = lower;
+  for (const s of sorted) {
+    if (remaining.includes(s)) {
+      found.push(s);
+      // Remove matched treatment so shorter ones don't match substrings
+      remaining = remaining.replace(s, ' ');
     }
   }
-  return null;
+  
+  return found;
 }
 
 function extractBookingFields(message, services = []) {
@@ -123,8 +138,12 @@ function extractBookingFields(message, services = []) {
     /(\d{1,2}):(\d{2})/, /\b(morning|afternoon|evening)\b/i,
   ];
   for (const p of timePatterns) { const m = message.match(p); if (m) { const t = parseTimePhrase(m[0]); if (t) { fields.time = t; break; } } }
-  // Treatment
-  fields.treatment = extractTreatmentName(message, services);
+  // Treatment(s) — extract ALL treatments for multi-treatment bookings
+  const allTreatments = extractAllTreatments(message, services);
+  if (allTreatments.length > 0) {
+    fields.treatment = allTreatments[0];   // primary (backward compat)
+    fields.treatments = allTreatments;     // all treatments found
+  }
   // Name
   const nm = message.match(/(?:my name is|i am|i'm)\s+([A-Za-z\s]+?)(?:\.|,|$|\s+(?:and|for|on|at))/i);
   if (nm) fields.name = nm[1].trim();
@@ -151,6 +170,6 @@ setInterval(() => {
 
 module.exports = {
   BOOKING_STATES, getState, setState, resetIdle,
-  extractBookingFields, extractTreatmentName,
+  extractBookingFields, extractTreatmentName, extractAllTreatments,
   isConfirmation, isDenial, parseDatePhrase, parseTimePhrase
 };

@@ -35,7 +35,7 @@ try {
   console.log('WEBHOOK_BASE_URL:', process.env.WEBHOOK_BASE_URL || '(uses request URL)');
   
   // Check if the clinic token matches what we expect
-  console.log('\n--- pixellvault webhook token check ---');
+  console.log('\n--- pixelvault webhook token check ---');
   const token = process.env.PIXELLVAULT_WEBHOOK_TOKEN || '(from Supabase)';
   console.log('Token source:', token === '(from Supabase)' ? 'Supabase DB' : 'Environment');
   

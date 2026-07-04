@@ -63,11 +63,12 @@ async function handleApprove(bot, msg, args) {
 
   try {
     // Find the pending booking
+    // NOTE: createBooking sets status='pending', NOT 'pending_approval'
     const { data: bookings } = await db.supabase
       .from('appointments')
-      .select('*')
+      .select('*, clients(id, slug, google_calendar_id, name)')
       .eq('customer_phone', phone)
-      .eq('status', 'pending_approval')
+      .eq('status', 'pending')
       .order('created_at', { ascending: false });
 
     if (!bookings || bookings.length === 0) {
@@ -79,11 +80,32 @@ async function handleApprove(bot, msg, args) {
     // Update to confirmed
     const { error } = await db.supabase
       .from('appointments')
-      .update({ status: 'confirmed' })
+      .update({ status: 'confirmed', approved_at: new Date().toISOString() })
       .eq('id', booking.id);
 
     if (error) {
       return bot.sendMessage(chatId, `Error approving booking: ${error.message}`);
+    }
+
+    // ── SYNC TO GOOGLE CALENDAR ──
+    let calendarSynced = false;
+    try {
+      const { createBookingEvent } = require('../../server/calendar-service');
+      if (booking.clients?.google_calendar_id) {
+        await createBookingEvent({
+          calendarId: booking.clients.google_calendar_id,
+          summary: `${booking.service} - ${booking.customer_name}`,
+          description: `Patient: ${booking.customer_name}\nPhone: ${booking.customer_phone}\nTreatment: ${booking.service}\nStatus: Confirmed\nSource: Moon Hands AI`,
+          startDateTime: `${booking.appointment_date}T${booking.appointment_time}:00+08:00`,
+          endDateTime: null, // Let calendar service calculate duration
+          patientPhone: booking.customer_phone,
+          patientName: booking.customer_name,
+          clinicName: booking.clients.name || 'Clinic'
+        });
+        calendarSynced = true;
+      }
+    } catch (calErr) {
+      console.error('[APPROVALS] Calendar sync failed:', calErr.message);
     }
 
     // Send confirmation to patient
@@ -97,7 +119,8 @@ async function handleApprove(bot, msg, args) {
       `Treatment: ${booking.service}`,
       `Date: ${booking.appointment_date} at ${booking.appointment_time}`,
       '',
-      sent ? '✓ Patient notified via WhatsApp' : '⚠ Failed to notify patient'
+      sent ? '✓ Patient notified via WhatsApp' : '⚠ Failed to notify patient',
+      calendarSynced ? '✓ Synced to Google Calendar' : '⚠ Calendar not synced'
     ].join('\n');
 
     bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
@@ -123,9 +146,9 @@ async function handleReject(bot, msg, args) {
   try {
     const { data: bookings } = await db.supabase
       .from('appointments')
-      .select('*, clients(whatsapp_api_key)')
+      .select('*, clients(id, slug, google_calendar_id, name)')
       .eq('customer_phone', phone)
-      .eq('status', 'pending_approval')
+      .eq('status', 'pending')
       .order('created_at', { ascending: false });
 
     if (!bookings || bookings.length === 0) {
@@ -140,14 +163,15 @@ async function handleReject(bot, msg, args) {
       .update({ status: 'cancelled', notes: `Rejected: ${reason}` })
       .eq('id', booking.id);
 
-    // Notify patient
-    if (booking.clients?.whatsapp_api_key) {
+    // Notify patient via WhatsApp
+    try {
       const { sendWhatsAppMessage } = require('../../jobs/reminders');
       await sendWhatsAppMessage(
-        phone,
-        `Hi ${booking.customer_name}, we regret to inform you that your ${booking.service} appointment for ${booking.appointment_date} at ${booking.appointment_time} cannot be confirmed.\n\nReason: ${reason}\n\nWould you like to reschedule? Reply here with your preferred date and time.`,
-        booking.clients.whatsapp_api_key
+        booking.customer_phone,
+        `Hi ${booking.customer_name}, we regret to inform you that your ${booking.service} appointment for ${booking.appointment_date} at ${booking.appointment_time} cannot be confirmed.\n\nReason: ${reason}\n\nWould you like to reschedule? Reply here with your preferred date and time.`
       );
+    } catch (notifyErr) {
+      console.error('[APPROVALS] Failed to notify patient of rejection:', notifyErr.message);
     }
 
     const message = [
@@ -170,10 +194,120 @@ async function handleReject(bot, msg, args) {
   }
 }
 
+// ─── INLINE BUTTON HANDLERS (by appointment ID) ──────────────────
+// Called by Telegram inline keyboard buttons (Approve/Reject)
+
+async function handleApproveById(appointmentId, adminChatId) {
+  try {
+    const { data: booking, error } = await db.supabase
+      .from('appointments')
+      .select('*, clients(id, slug, google_calendar_id, name)')
+      .eq('id', appointmentId)
+      .single();
+
+    if (error || !booking) {
+      return { success: false, error: 'Booking not found' };
+    }
+
+    // Update to confirmed
+    await db.supabase
+      .from('appointments')
+      .update({ status: 'confirmed', approved_at: new Date().toISOString() })
+      .eq('id', appointmentId);
+
+    // Sync to Google Calendar
+    let calendarSynced = false;
+    try {
+      const { createBookingEvent } = require('../../server/calendar-service');
+      if (booking.clients?.google_calendar_id) {
+        await createBookingEvent({
+          calendarId: booking.clients.google_calendar_id,
+          summary: `${booking.service} - ${booking.customer_name}`,
+          description: `Patient: ${booking.customer_name}\nPhone: ${booking.customer_phone}\nTreatment: ${booking.service}\nStatus: Confirmed`,
+          startDateTime: `${booking.appointment_date}T${booking.appointment_time}:00+08:00`,
+          endDateTime: null,
+          patientPhone: booking.customer_phone,
+          patientName: booking.customer_name,
+          clinicName: booking.clients.name
+        });
+        calendarSynced = true;
+      }
+    } catch (calErr) {
+      console.error('[APPROVALS] Calendar sync failed:', calErr.message);
+    }
+
+    // Notify patient
+    try {
+      const { sendApprovalConfirmation } = require('../../jobs/reminders');
+      await sendApprovalConfirmation(appointmentId);
+    } catch (notifyErr) {
+      console.error('[APPROVALS] Patient notification failed:', notifyErr.message);
+    }
+
+    return {
+      success: true,
+      patientName: booking.customer_name,
+      date: booking.appointment_date,
+      time: booking.appointment_time,
+      treatment: booking.service,
+      calendarSynced
+    };
+
+  } catch (err) {
+    console.error('[APPROVALS] handleApproveById error:', err.message);
+    return { success: false, error: err.message };
+  }
+}
+
+async function handleRejectById(appointmentId, adminChatId) {
+  try {
+    const { data: booking, error } = await db.supabase
+      .from('appointments')
+      .select('*')
+      .eq('id', appointmentId)
+      .single();
+
+    if (error || !booking) {
+      return { success: false, error: 'Booking not found' };
+    }
+
+    // Update to cancelled
+    await db.supabase
+      .from('appointments')
+      .update({ status: 'cancelled', notes: 'Rejected by clinic' })
+      .eq('id', appointmentId);
+
+    // Notify patient
+    try {
+      const { sendWhatsAppMessage } = require('../../jobs/reminders');
+      await sendWhatsAppMessage(
+        booking.customer_phone,
+        `Hi ${booking.customer_name}, we regret to inform you that your ${booking.service} appointment for ${booking.appointment_date} at ${booking.appointment_time} cannot be confirmed.\n\nWould you like to reschedule? Reply here with your preferred date and time.`
+      );
+    } catch (notifyErr) {
+      console.error('[APPROVALS] Patient notification failed:', notifyErr.message);
+    }
+
+    return {
+      success: true,
+      patientName: booking.customer_name,
+      date: booking.appointment_date,
+      time: booking.appointment_time,
+      treatment: booking.service
+    };
+
+  } catch (err) {
+    console.error('[APPROVALS] handleRejectById error:', err.message);
+    return { success: false, error: err.message };
+  }
+}
+
 // ─── EXPORTS ──────────────────────────────────────────────────────
 
 module.exports = {
   handlePending,
   handleApprove,
-  handleReject
+  handleReject,
+  handleApproveById,
+  handleRejectById
 };

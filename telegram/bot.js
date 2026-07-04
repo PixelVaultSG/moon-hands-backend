@@ -185,13 +185,13 @@ bot.action('menu_clients', safeHandler('menu_clients', async (ctx) => {
 
 bot.action('menu_usage', safeHandler('menu_usage', async (ctx) => {
   await ctx.answerCbQuery('Loading usage...');
-  // Get the first clinic's slug or use 'pixellvault' as default
-  await commands.handleUsage(ctx, 'pixellvault');
+  // Get the first clinic's slug or use 'pixelvault' as default
+  await commands.handleUsage(ctx, 'pixelvault');
 }));
 
 bot.action('menu_viewconfig', safeHandler('menu_viewconfig', async (ctx) => {
   await ctx.answerCbQuery('Loading config...');
-  await commands.handleViewConfig(ctx, 'pixellvault');
+  await commands.handleViewConfig(ctx, 'pixelvault');
 }));
 
 bot.action('menu_security', safeHandler('menu_security', async (ctx) => {
@@ -208,7 +208,7 @@ bot.action('menu_help', safeHandler('menu_help', async (ctx) => {
 bot.action('menu_addservice', safeHandler('menu_addservice', async (ctx) => {
   await ctx.answerCbQuery();
   await ctx.reply(
-    `➕ Add Service\n\nType:\n/addservice <slug> "Service Name" $price durationMin\n\nExample:\n/addservice pixellvault "HIFU Treatment" $350 60`,
+    `➕ Add Service\n\nType:\n/addservice <slug> "Service Name" $price durationMin\n\nExample:\n/addservice pixelvault "HIFU Treatment" $350 60`,
     BACK_TO_MENU
   );
 }));
@@ -216,7 +216,7 @@ bot.action('menu_addservice', safeHandler('menu_addservice', async (ctx) => {
 bot.action('menu_updateprice', safeHandler('menu_updateprice', async (ctx) => {
   await ctx.answerCbQuery();
   await ctx.reply(
-    `💰 Update Price\n\nType:\n/updateprice <slug> "Service Name" $newPrice\n\nExample:\n/updateprice pixellvault "HIFU Treatment" $299`,
+    `💰 Update Price\n\nType:\n/updateprice <slug> "Service Name" $newPrice\n\nExample:\n/updateprice pixelvault "HIFU Treatment" $299`,
     BACK_TO_MENU
   );
 }));
@@ -224,7 +224,7 @@ bot.action('menu_updateprice', safeHandler('menu_updateprice', async (ctx) => {
 bot.action('menu_updatehours', safeHandler('menu_updatehours', async (ctx) => {
   await ctx.answerCbQuery();
   await ctx.reply(
-    `🕐 Update Hours\n\nType:\n/updatehours <slug> <day> HH:MM HH:MM\n\nExample:\n/updatehours pixellvault Saturday 09:00 17:00`,
+    `🕐 Update Hours\n\nType:\n/updatehours <slug> <day> HH:MM HH:MM\n\nExample:\n/updatehours pixelvault Saturday 09:00 17:00`,
     BACK_TO_MENU
   );
 }));
@@ -232,7 +232,7 @@ bot.action('menu_updatehours', safeHandler('menu_updatehours', async (ctx) => {
 bot.action('menu_addfaq', safeHandler('menu_addfaq', async (ctx) => {
   await ctx.answerCbQuery();
   await ctx.reply(
-    `❓ Add FAQ\n\nType:\n/addfaq <slug> "Question?" | "Answer"\n\nExample:\n/addfaq pixellvault "Parking available?" | "Free parking at rear"`,
+    `❓ Add FAQ\n\nType:\n/addfaq <slug> "Question?" | "Answer"\n\nExample:\n/addfaq pixelvault "Parking available?" | "Free parking at rear"`,
     BACK_TO_MENU
   );
 }));
@@ -240,19 +240,52 @@ bot.action('menu_addfaq', safeHandler('menu_addfaq', async (ctx) => {
 bot.action('menu_voice', safeHandler('menu_voice', async (ctx) => {
   await ctx.answerCbQuery();
   await ctx.reply(
-    `🎤 Update Brand Voice\n\nType:\n/updatevoice <slug> <field> <value>\n\nFields: name, greeting, tone, enthusiasm, notes\n\nExample:\n/updatevoice pixellvault greeting "Welcome to Glow!"`,
+    `🎤 Update Brand Voice\n\nType:\n/updatevoice <slug> <field> <value>\n\nFields: name, greeting, tone, enthusiasm, notes\n\nExample:\n/updatevoice pixelvault greeting "Welcome to Glow!"`,
     BACK_TO_MENU
   );
 }));
 
 bot.action('menu_pause', safeHandler('menu_pause', async (ctx) => {
   await ctx.answerCbQuery('Pausing AI...');
-  await commands.handlePause(ctx, 'pixellvault');
+  await commands.handlePause(ctx, 'pixelvault');
 }));
 
 bot.action('menu_resume', safeHandler('menu_resume', async (ctx) => {
   await ctx.answerCbQuery('Resuming AI...');
-  await commands.handleResume(ctx, 'pixellvault');
+  await commands.handleResume(ctx, 'pixelvault');
+}));
+
+// ─── BOOKING APPROVAL INLINE BUTTONS ─────────────────────────────
+// Approve/Reject buttons from booking notification messages
+
+bot.action(/^approve_(.+)$/, safeHandler('approve_btn', async (ctx) => {
+  const apptId = ctx.match[1];
+  await ctx.answerCbQuery('Approving booking...');
+  
+  const { handleApproveById } = require('./commands/approvals');
+  const result = await handleApproveById(apptId, ctx.from.id);
+  
+  if (result.success) {
+    await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
+    await ctx.reply(`✅ Booking approved for ${result.patientName}\n📅 ${result.date} at ${result.time}\n🩺 ${result.treatment}\n✓ Patient notified\n${result.calendarSynced ? '✓ Google Calendar synced' : ''}`);
+  } else {
+    await ctx.answerCbQuery(`❌ ${result.error}`, { show_alert: true });
+  }
+}));
+
+bot.action(/^reject_(.+)$/, safeHandler('reject_btn', async (ctx) => {
+  const apptId = ctx.match[1];
+  await ctx.answerCbQuery('Rejecting booking...');
+  
+  const { handleRejectById } = require('./commands/approvals');
+  const result = await handleRejectById(apptId, ctx.from.id);
+  
+  if (result.success) {
+    await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
+    await ctx.reply(`❌ Booking rejected for ${result.patientName}\n📅 ${result.date} at ${result.time}\n🩺 ${result.treatment}\n✓ Patient notified`);
+  } else {
+    await ctx.answerCbQuery(`❌ ${result.error}`, { show_alert: true });
+  }
 }));
 
 // ─── COMMAND HANDLER WRAPPER ─────────────────────────────────────

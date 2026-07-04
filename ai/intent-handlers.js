@@ -5,9 +5,70 @@
  * 
  * Each handler receives: { message, clinicConfig, patientPhone, params, conversationHistory }
  * Returns: string response or null (if handler can't answer)
+ * 
+ * CRITICAL: clinicConfig from DB has structure { id, name, slug, config: { services, faqs, ... } }
+ * Use getConfig(clinicConfig, 'services') to access — NEVER getConfig(clinicConfig, 'services') directly.
  */
 
 const { supabase } = require('../supabase/client');
+
+// ─── CONFIG ACCESS HELPER ────────────────────────────────────────
+// clinicConfig from DB = { id, name, slug, config: { services, faqs, ... } }
+// This helper handles both nested (config.services) and flat (services) formats.
+function getConfig(clinicConfig, key) {
+  if (!clinicConfig) return null;
+  // Try nested config first (correct DB structure)
+  if (clinicConfig.config && clinicConfig.config[key] !== undefined) {
+    return clinicConfig.config[key];
+  }
+  // Fallback to flat access (legacy / direct property)
+  return clinicConfig[key] !== undefined ? clinicConfig[key] : null;
+}
+
+// ─── OPENING HOURS VALIDATION ────────────────────────────────────
+// Checks if a given time falls within the clinic's operating hours for a day.
+// Returns { isOpen: boolean, openTime: string, closeTime: string } 
+function isTimeWithinHours(timeStr, dayName, operatingHours) {
+  if (!operatingHours || !Array.isArray(operatingHours)) {
+    return { isOpen: true }; // Default to open if no hours configured
+  }
+  
+  // Normalize day name
+  const day = (dayName || '').toLowerCase().trim();
+  const dayEntry = operatingHours.find(h => 
+    h.day && h.day.toLowerCase() === day
+  );
+  
+  if (!dayEntry || !dayEntry.isOpen) {
+    return { isOpen: false, openTime: null, closeTime: null, reason: 'Closed' };
+  }
+  
+  if (!timeStr || !dayEntry.open_time || !dayEntry.close_time) {
+    return { isOpen: true, openTime: dayEntry.open_time, closeTime: dayEntry.close_time };
+  }
+  
+  // Parse times for comparison
+  const parseMin = (t) => {
+    const [h, m] = t.split(':').map(Number);
+    return h * 60 + m;
+  };
+  
+  try {
+    const requestMin = parseMin(timeStr);
+    const openMin = parseMin(dayEntry.open_time);
+    const closeMin = parseMin(dayEntry.close_time);
+    
+    const isOpen = requestMin >= openMin && requestMin < closeMin;
+    return { 
+      isOpen, 
+      openTime: dayEntry.open_time, 
+      closeTime: dayEntry.close_time,
+      reason: isOpen ? null : (requestMin < openMin ? 'Before opening' : 'After closing')
+    };
+  } catch {
+    return { isOpen: true, openTime: dayEntry.open_time, closeTime: dayEntry.close_time };
+  }
+}
 
 // ─── HANDLER REGISTRY ─────────────────────────────────────────────
 
@@ -20,6 +81,8 @@ const HANDLERS = {
   pricing_general: handlePricingGeneral,
   service_inquiry: handleServiceInquiry,
   service_list: handleServiceList,
+  treatment_enquiry: handleServiceList,        // "What treatments do you offer?"
+  treatment_info: handleServiceInquiry,         // "Tell me about Botox"
   booking_request: handleBookingRequest,
   cancel_request: handleCancelRequest,
   reschedule_request: handleRescheduleRequest,
@@ -57,19 +120,21 @@ async function executeHandler(intentName, context) {
 
 function handleGreeting({ clinicConfig }) {
   const name = clinicConfig.clinic_name || clinicConfig.name || 'our clinic';
-  const agentName = clinicConfig.agent_name || 'Sophia';
-  const treatments = getTopTreatments(clinicConfig, 3);
+  const agentName = getConfig(clinicConfig, 'agent_name') || 'Sophia';
   
-  // Warm, natural greeting — no bullet points, no menu
-  const greeting = clinicConfig.greeting 
-    ? clinicConfig.greeting.replace(/{businessName}/g, name)
-    : `Hey there! Welcome to ${name} ✨`;
-  
-  if (treatments) {
-    return `${greeting} I'm ${agentName}, your virtual receptionist. I can help you book appointments, check prices, or answer questions about our treatments like ${treatments}. What brings you in today?`;
+  // If clinic has a custom greeting, use it directly (it already has the full intro)
+  const customGreeting = getConfig(clinicConfig, 'greeting');
+  if (customGreeting) {
+    return customGreeting.replace(/{businessName}/g, name);
   }
   
-  return `${greeting} I'm ${agentName}, your virtual receptionist. I can help you with bookings, treatment info, or pricing. What can I do for you?`;
+  // Fallback: generate a simple greeting
+  const treatments = getTopTreatments(clinicConfig, 3);
+  if (treatments) {
+    return `Hey there! Welcome to ${name} ✨ I'm ${agentName}, your virtual receptionist. I can help you book appointments, check prices, or answer questions about our treatments like ${treatments}. What brings you in today?`;
+  }
+  
+  return `Hey there! Welcome to ${name} ✨ I'm ${agentName}, your virtual receptionist. I can help you with bookings, treatment info, or pricing. What can I do for you?`;
 }
 
 // ─── GOODBYE ──────────────────────────────────────────────────────
@@ -81,7 +146,7 @@ function handleGoodbye({ clinicConfig }) {
 // ─── OPERATING HOURS ──────────────────────────────────────────────
 
 function handleOperatingHours({ clinicConfig }) {
-  const hours = clinicConfig.operating_hours;
+  const hours = getConfig(clinicConfig, 'operating_hours');
   if (!hours) {
     return `We're open during regular business hours. Would you like me to check availability for a specific date?`;
   }
@@ -139,7 +204,7 @@ function handleLocation({ clinicConfig, message }) {
 
 function handlePricingSpecific({ clinicConfig, params }) {
   const requestedTreatment = params?.treatment;
-  const services = clinicConfig.services || [];
+  const services = getConfig(clinicConfig, 'services') || [];
   
   if (!requestedTreatment) {
     return `I'd be happy to share our pricing. Which treatment are you interested in?`;
@@ -170,7 +235,7 @@ ${match.description || 'Would you like to book this treatment?'}`;
 // ─── PRICING GENERAL ─────────────────────────────────────────────
 
 function handlePricingGeneral({ clinicConfig }) {
-  const services = clinicConfig.services || [];
+  const services = getConfig(clinicConfig, 'services') || [];
   const name = clinicConfig.clinic_name || clinicConfig.name || 'our clinic';
   
   if (services.length === 0) {
@@ -187,7 +252,7 @@ function handlePricingGeneral({ clinicConfig }) {
 
 function handleServiceInquiry({ clinicConfig, params }) {
   const requestedService = params?.treatment;
-  const services = clinicConfig.services || [];
+  const services = getConfig(clinicConfig, 'services') || [];
   
   if (!requestedService) {
     return handleServiceList({ clinicConfig });
@@ -209,32 +274,21 @@ function handleServiceInquiry({ clinicConfig, params }) {
 // ─── SERVICE LIST ─────────────────────────────────────────────────
 
 function handleServiceList({ clinicConfig }) {
-  const services = clinicConfig.services || [];
-  const categories = clinicConfig.service_categories || [];
+  const services = getConfig(clinicConfig, 'services') || [];
   
   if (services.length === 0) {
-    return `We offer a range of aesthetic treatments. Would you like me to arrange a consultation to discuss your needs?`;
+    return `We offer a range of aesthetic treatments. Let me know what you're interested in!`;
   }
   
-  // Group by category if available
-  if (categories.length > 0) {
-    const grouped = groupServicesByCategory(services, categories);
-    const lines = [];
-    
-    for (const [cat, svcs] of Object.entries(grouped)) {
-      lines.push(`\n${cat}:`);
-      svcs.slice(0, 4).forEach(s => lines.push(`  • ${s.name}`));
-      if (svcs.length > 4) lines.push(`  ...and ${svcs.length - 4} more`);
-    }
-    
-    return `Here are the treatments we offer:${lines.join('\n')}\n\nWhich treatment are you interested in? I can share pricing and help you book.`;
-  }
+  // Full detailed list with price, duration, and description
+  const list = services.map(s => {
+    const price = s.price ? ` (${s.price}${s.price_unit ? '/' + s.price_unit : ''})` : '';
+    const duration = s.duration ? ` — ${s.duration}min${s.duration > 1 ? 's' : ''}` : '';
+    const desc = s.description ? `: ${s.description}` : '';
+    return `• ${s.name}${price}${duration}${desc}`;
+  }).join('\n');
   
-  // Simple list
-  const list = services.slice(0, 8).map(s => `• ${s.name}`).join('\n');
-  const more = services.length > 8 ? `\n...and ${services.length - 8} more treatments.` : '';
-  
-  return `Here are our treatments:\n\n${list}${more}\n\nWhich one would you like to know more about?`;
+  return `Here are our treatments:\n\n${list}\n\nWhich one interests you? I can share more details or help you book.`;
 }
 
 // ─── BOOKING REQUEST ──────────────────────────────────────────────
@@ -243,7 +297,7 @@ function handleBookingRequest({ clinicConfig, patientPhone, params, message }) {
   const name = clinicConfig.clinic_name || 'our clinic';
   
   // Check if they specified a treatment
-  const services = clinicConfig.services || [];
+  const services = getConfig(clinicConfig, 'services') || [];
   const treatmentMatch = extractTreatmentFromMessage(message);
   const matchedService = treatmentMatch ? findServiceMatch(treatmentMatch, services) : null;
   
@@ -358,7 +412,7 @@ async function handleCheckAppointment({ clinicConfig, patientPhone }) {
 
 function handleFaqPrep({ clinicConfig, params }) {
   const treatment = params?.treatment;
-  const faqs = clinicConfig.faqs || {};
+  const faqs = getConfig(clinicConfig, 'faqs') || {};
   
   // Check for treatment-specific prep
   if (treatment && faqs[`prep_${treatment.toLowerCase().replace(/\s+/g, '_')}`]) {
@@ -377,7 +431,7 @@ function handleFaqPrep({ clinicConfig, params }) {
 
 function handleFaqAftercare({ clinicConfig, params }) {
   const treatment = params?.treatment;
-  const faqs = clinicConfig.faqs || {};
+  const faqs = getConfig(clinicConfig, 'faqs') || {};
   
   if (treatment && faqs[`aftercare_${treatment.toLowerCase().replace(/\s+/g, '_')}`]) {
     return faqs[`aftercare_${treatment.toLowerCase().replace(/\s+/g, '_')}`];
@@ -440,26 +494,37 @@ function findServiceMatch(query, services) {
   
   const normalizedQuery = query.toLowerCase().trim();
   
+  // Reject single-character or very short queries (prevents "b" matching)
+  if (normalizedQuery.length < 3) return null;
+  
   // Exact match
   let match = services.find(s => s.name.toLowerCase() === normalizedQuery);
   if (match) return match;
   
-  // Contains match
+  // Contains match (query inside service name)
   match = services.find(s => s.name.toLowerCase().includes(normalizedQuery));
   if (match) return match;
   
-  // Reverse contains
+  // Reverse contains (service name inside query)
   match = services.find(s => normalizedQuery.includes(s.name.toLowerCase()));
   if (match) return match;
   
-  // Word-level partial match
-  const queryWords = normalizedQuery.split(/\s+/);
+  // Word-level partial match (each word of query vs each word of service name)
+  const queryWords = normalizedQuery.split(/\s+/).filter(w => w.length >= 3);
   match = services.find(s => {
     const serviceWords = s.name.toLowerCase().split(/\s+/);
-    return queryWords.some(qw => serviceWords.some(sw => sw.includes(qw) && qw.length > 2));
+    return queryWords.some(qw => serviceWords.some(sw => sw === qw || (sw.includes(qw) && qw.length >= 4)));
   });
+  if (match) return match;
   
-  return match || null;
+  // Typo tolerance: 4-char prefix match (e.g. "botoz" → "botox" both start with "boto")
+  if (normalizedQuery.length >= 4) {
+    const prefix = normalizedQuery.substring(0, 4);
+    match = services.find(s => s.name.toLowerCase().startsWith(prefix));
+    if (match) return match;
+  }
+  
+  return null;
 }
 
 function findSimilarTreatments(query, services, limit = 3) {
@@ -503,7 +568,7 @@ function formatTime(timeStr) {
 }
 
 function getTopTreatments(clinicConfig, count) {
-  const services = clinicConfig.services || [];
+  const services = getConfig(clinicConfig, 'services') || [];
   if (services.length === 0) return '';
   
   return services.slice(0, count).map(s => s.name).join(', ');

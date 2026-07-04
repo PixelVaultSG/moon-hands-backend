@@ -35,6 +35,20 @@ const { recordMessage, recordRateLimit, recordLoop, recordError } = require('../
 const { checkLimit, trackSpend } = require('../middleware/cost-protection');
 const { logEvent, getDeviceFingerprint, classifyActor } = require('../monitoring/audit-system');
 
+// ─── RESPONSE SANITIZER (post-process OpenAI output) ─────────────
+// Strips forbidden phrases (Hello!, Welcome, etc.) that OpenAI keeps generating.
+// Wrapped in try/catch so missing file doesn't crash the server.
+let sanitizeResponse = (text) => text; // default no-op
+let sanitizerLoaded = false;
+try {
+  const sanitizer = require('./ai/response-sanitizer');
+  sanitizeResponse = sanitizer.sanitizeResponse || ((text) => text);
+  sanitizerLoaded = true;
+  console.log('[WEBHOOK] Response sanitizer loaded');
+} catch (err) {
+  console.error('[WEBHOOK] Response sanitizer NOT loaded — messages will NOT be sanitized:', err.message);
+}
+
 // ─── ADMIN TELEGRAM ALERTS ───────────────────────────────────────
 async function sendAdminAlert(message, level = 'warning') {
   const botToken = process.env.TELEGRAM_BOT_TOKEN;
@@ -579,7 +593,7 @@ async function handleWebhook(req, res, channel, url) {
     
     // Layer 11: SEND REPLY BACK TO WHATSAPP (360dialog API)
     // CRITICAL: The webhook receives messages from 360dialog, but we must explicitly
-    // call their /v1/messages API to send replies back to the user.
+    // call their /messages API to send replies back to the user.
     // COST PROTECTION: We NEVER block outbound messages — clinics must operate.
     // Instead, we alert both Moon Hands admin and clinic admin when limits are hit.
     let replySent = false;
@@ -709,9 +723,94 @@ function estimateHistoryTokens(turns) {
 
 const MAX_HISTORY_TOKENS = 2000; // ~2000 tokens keeps API cost predictable
 
+// ─── SUPPORT MODE FUNCTIONS ──────────────────────────────────────
+// When a registered clinic messages our WABA number, they get
+// Moon Hands support instead of the demo clinic AI.
+
+let _clinicPhoneCache = new Map();
+let _clinicPhoneCacheTime = 0;
+const CLINIC_PHONE_CACHE_TTL = 5 * 60 * 1000; // 5 min
+
+async function checkIfRegisteredClinic(phone) {
+  const cleanPhone = phone.replace(/\D/g, '');
+  
+  // Check cache first
+  if (Date.now() - _clinicPhoneCacheTime < CLINIC_PHONE_CACHE_TTL) {
+    return _clinicPhoneCache.has(cleanPhone);
+  }
+  
+  // Refresh cache
+  try {
+    const { data, error } = await db.supabase
+      .from('clients')
+      .select('contact_phone, whatsapp_number');
+    
+    if (error) throw error;
+    
+    _clinicPhoneCache.clear();
+    for (const row of (data || [])) {
+      if (row.contact_phone) _clinicPhoneCache.set(row.contact_phone.replace(/\D/g, ''), true);
+      if (row.whatsapp_number) _clinicPhoneCache.set(row.whatsapp_number.replace(/\D/g, ''), true);
+    }
+    _clinicPhoneCacheTime = Date.now();
+    
+    return _clinicPhoneCache.has(cleanPhone);
+  } catch (err) {
+    console.error('[SUPPORT_MODE] Failed to check clinic phone:', err.message);
+    return false;
+  }
+}
+
+async function handleSupportMessage(message, senderPhone) {
+  const lower = message.toLowerCase();
+  
+  // Quick keyword-based responses for common support topics
+  if (lower.includes('price') || lower.includes('cost') || lower.includes('plan')) {
+    return {
+      text: `Hi! Here are our plans:\n\n🌟 Basic: S$347/month\n⭐ Premium: S$547/month\n\nBoth include 14-day free trial. To sign up, visit moonhands.sg/onboarding or reply SIGNUP and we'll send you the link.`,
+      channel: 'whatsapp', ai_processed: true
+    };
+  }
+  
+  if (lower.includes('sign up') || lower.includes('signup') || lower.includes('register') || lower.includes('onboard')) {
+    return {
+      text: `Welcome to Moon Hands! 🌙\n\nTo get started:\n1. Visit: https://moonhands.sg/onboarding\n2. Fill in your clinic details\n3. Your 14-day free trial starts immediately\n\nNeed help? Our team will guide you through WhatsApp API setup.`,
+      channel: 'whatsapp', ai_processed: true
+    };
+  }
+  
+  if (lower.includes('technical') || lower.includes('problem') || lower.includes('issue') || lower.includes('not working') || lower.includes('bug')) {
+    return {
+      text: `Sorry to hear you're having trouble. Our technical team is on it.\n\nFor fastest response:\n- Describe the issue\n- Include your clinic name\n- Screenshots help if applicable\n\nWe'll get back to you within 2 hours.`,
+      channel: 'whatsapp', ai_processed: true
+    };
+  }
+  
+  if (lower.includes('enhancement') || lower.includes('feature') || lower.includes('request') || lower.includes('suggest')) {
+    return {
+      text: `We love hearing feature ideas! 🚀\n\nPlease share:\n- What you'd like to see\n- How it would help your clinic\n\nWe review all requests weekly and prioritise based on clinic needs.`,
+      channel: 'whatsapp', ai_processed: true
+    };
+  }
+  
+  if (lower.includes('billing') || lower.includes('invoice') || lower.includes('payment')) {
+    return {
+      text: `For billing enquiries, please contact our accounts team.\n\nWe'll connect you with the right person shortly.`,
+      channel: 'whatsapp', ai_processed: true
+    };
+  }
+  
+  // Default support greeting
+  return {
+    text: `Hello! This is Moon Hands support. 🌙\n\nHow can we help you today? You can ask about:\n• Plans & pricing\n• Sign up / onboarding\n• Technical issues\n• Feature requests\n• Billing`,
+    channel: 'whatsapp', ai_processed: true
+  };
+}
+
 function addConversationTurn(phone, userMsg, aiMsg) {
   const cached = conversationCache.get(phone) || { turns: [], lastAccess: Date.now() };
-  cached.turns.push({ user: userMsg, ai: aiMsg });
+  // Store timestamp for 1-hour inactivity greeting rule
+  cached.turns.push({ user: userMsg, ai: aiMsg, timestamp: Date.now() });
   // Token-based trimming: keep history under ~2000 tokens instead of fixed 10 turns
   while (cached.turns.length > 2 && estimateHistoryTokens(cached.turns) > MAX_HISTORY_TOKENS) {
     cached.turns.shift(); // Remove oldest turn
@@ -722,7 +821,6 @@ function addConversationTurn(phone, userMsg, aiMsg) {
 
 async function routeToAI(text, message, channel, preResolvedClientId = null) {
   // Determine client ID from the webhook path or phone number
-  // For now, use a lookup based on the destination phone number
   const clientId = preResolvedClientId || await resolveClientId(message.to, channel);
   
   if (!clientId) {
@@ -731,6 +829,22 @@ async function routeToAI(text, message, channel, preResolvedClientId = null) {
       channel: channel,
       ai_processed: false
     };
+  }
+  
+  // ── SUPPORT MODE DETECTION ──
+  // If a registered clinic messages our WABA number (81398272), 
+  // they get Moon Hands support, not the demo clinic AI
+  const SUPPORT_NUMBER = process.env.SUPPORT_WABA_NUMBER || '+6581398272';
+  const senderPhone = (message.from || '').replace(/\D/g, '');
+  const destPhone = (message.to || '').replace(/\D/g, '');
+  const supportPhoneClean = SUPPORT_NUMBER.replace(/\D/g, '');
+  
+  if (destPhone === supportPhoneClean) {
+    const isClinicStaff = await checkIfRegisteredClinic(senderPhone);
+    if (isClinicStaff) {
+      console.log(`[SUPPORT_MODE] Clinic staff ${senderPhone} messaging support WABA`);
+      return await handleSupportMessage(text, senderPhone);
+    }
   }
 
   try {
@@ -765,11 +879,20 @@ async function routeToAI(text, message, channel, preResolvedClientId = null) {
     const estimatedCost = 0.005 + (estimatedTokens / 1000) * 0.003;
     trackSpend(clientId, estimatedCost);
     
-    // Cache conversation turn
+    // Cache conversation turn (raw AI response for context)
     addConversationTurn(message.from, text, result.text);
     
+    // ── SANITIZE: Strip forbidden phrases (Hello!, Welcome, etc.) ──
+    const sanitizedText = sanitizerLoaded 
+      ? sanitizeResponse(result.text, { intent: result.intent })
+      : result.text;
+    
+    if (sanitizedText !== result.text) {
+      console.log(`[SANITIZER] Cleaned: "${result.text.substring(0, 60)}..." → "${sanitizedText.substring(0, 60)}..."`);
+    }
+    
     return {
-      text: result.text,
+      text: sanitizedText,
       channel: channel,
       ai_processed: true,
       function_called: result.function_called || null,
@@ -860,33 +983,36 @@ async function sendWhatsAppReply(toPhone, text, replyToMessageId = null) {
     return { success: false, error: err };
   }
   
-  // ── Endpoint Selection (Hub API first, then WABA API fallback) ──
-  // 360dialog migrated many accounts to Hub API (hub.360dialog.io).
-  // Hub uses Authorization: Bearer header. WABA uses D360-API-KEY header.
+  // ── Endpoint Selection ──
+  // 360dialog API endpoint is /messages (NOT /v1/messages).
+  // Per official docs: https://docs.360dialog.com/docs/guides/send-and-receive-messages
+  const BASE_ENDPOINT = '/messages';
   const explicitUrl = process.env.D360_API_URL;
   const isSandboxKey = d360Key.length === 32 && /^[A-Z0-9]+$/.test(d360Key);
   
   const ENDPOINTS = [];
   if (explicitUrl) {
     ENDPOINTS.push({ url: explicitUrl, auth: 'd360' });
-    // Always add fallbacks even when explicit URL is set
-    ENDPOINTS.push({ url: 'https://waba.360dialog.io/v1/messages', auth: 'd360' });
-    ENDPOINTS.push({ url: 'https://waba-sandbox.360dialog.io/v1/messages', auth: 'd360' });
+    const fallbacks = [
+      `https://waba-v2.360dialog.io${BASE_ENDPOINT}`,
+      `https://waba.360dialog.io${BASE_ENDPOINT}`
+    ];
+    for (const fb of fallbacks) {
+      if (fb !== explicitUrl) ENDPOINTS.push({ url: fb, auth: 'd360' });
+    }
   } else if (isSandboxKey) {
-    ENDPOINTS.push({ url: 'https://waba-sandbox.360dialog.io/v1/messages', auth: 'd360' });
-    ENDPOINTS.push({ url: 'https://waba.360dialog.io/v1/messages', auth: 'd360' });
+    ENDPOINTS.push({ url: `https://waba-sandbox.360dialog.io${BASE_ENDPOINT}`, auth: 'd360' });
+    ENDPOINTS.push({ url: `https://waba.360dialog.io${BASE_ENDPOINT}`, auth: 'd360' });
   } else {
-    // Production: try v2 API first (360dialog assigns this per account),
-    // then Hub API, then legacy WABA API
-    ENDPOINTS.push({ url: 'https://waba-v2.360dialog.io/v1/messages', auth: 'd360' });
-    ENDPOINTS.push({ url: 'https://waba.360dialog.io/v1/messages', auth: 'd360' });
-    ENDPOINTS.push({ url: 'https://waba-sandbox.360dialog.io/v1/messages', auth: 'd360' });
+    ENDPOINTS.push({ url: `https://waba-v2.360dialog.io${BASE_ENDPOINT}`, auth: 'd360' });
+    ENDPOINTS.push({ url: `https://waba.360dialog.io${BASE_ENDPOINT}`, auth: 'd360' });
   }
   
-  console.log(`[360DIALOG:${TRACE_ID}] Key format: ${isSandboxKey ? 'SANDBOX' : 'PRODUCTION'}`);
-  console.log(`[360DIALOG:${TRACE_ID}] Will try ${ENDPOINTS.length} endpoint(s): ${ENDPOINTS.map(e => e.url.replace('/v1/messages', '')).join(', ')}`);
+  console.log(`[360DIALOG:${TRACE_ID}] Key format: ${isSandboxKey ? 'SANDBOX' : 'PRODUCTION'} (len=${d360Key.length})`);
+  console.log(`[360DIALOG:${TRACE_ID}] Will try ${ENDPOINTS.length} endpoint(s): ${ENDPOINTS.map(e => e.url.replace(BASE_ENDPOINT, '')).join(', ')}`);
   
   // ── Build Payload ────────────────────────────────────────────────
+  // Per official 360dialog docs: recipient_type is REQUIRED.
   const payload = {
     messaging_product: 'whatsapp',
     recipient_type: 'individual',
@@ -912,7 +1038,7 @@ async function sendWhatsAppReply(toPhone, text, replyToMessageId = null) {
       headers['D360-API-KEY'] = d360Key;
     }
     
-    console.log(`[360DIALOG:${TRACE_ID}] → Attempt ${i + 1}/${ENDPOINTS.length}: ${url} (auth=${auth})`);
+    console.log(`[360DIALOG:${TRACE_ID}] → Attempt ${i + 1}/${ENDPOINTS.length}: ${url} (auth=${auth}, header=${auth === 'bearer' ? 'Authorization: Bearer ***' : 'D360-API-KEY: ***'})`);
     
     try {
       const result = await fetch(url, { method: 'POST', headers, body: JSON.stringify(payload) });
@@ -934,9 +1060,11 @@ async function sendWhatsAppReply(toPhone, text, replyToMessageId = null) {
       
       // Check for specific errors
       if (result.status === 404 && errorText.includes('Not Found')) {
-        console.error(`[360DIALOG:${TRACE_ID}] ⚠️  WABA appears to be in 'Pending' state.`);
-        console.error(`[360DIALOG:${TRACE_ID}]     Meta has not yet verified your WhatsApp Business Account.`);
-        console.error(`[360DIALOG:${TRACE_ID}]     Fix: 360dialog Dashboard → Complete Meta Verification`);
+        console.error(`[360DIALOG:${TRACE_ID}] ⚠️  WABA not found on this endpoint.`);
+      }
+      if (result.status === 400 && errorText.includes('Bad request')) {
+        console.error(`[360DIALOG:${TRACE_ID}] ⚠️  Request rejected (400).`);
+        console.error(`[360DIALOG:${TRACE_ID}]     Most likely cause: API key is incorrect or incomplete.`);
       }
       
       // Always try all endpoints — different endpoints may use different backends
@@ -950,7 +1078,7 @@ async function sendWhatsAppReply(toPhone, text, replyToMessageId = null) {
   }
   
   // All endpoints failed
-  const finalError = `All ${ENDPOINTS.length} endpoints failed. Check D360_API_KEY in Render Dashboard.`;
+  const finalError = `All ${ENDPOINTS.length} endpoints failed (used /messages path per 360dialog docs). Contact 360dialog support with trace ID ${TRACE_ID}.`;
   console.error(`[360DIALOG:${TRACE_ID}] ❌ ${finalError}`);
   console.error(`[360DIALOG:${TRACE_ID}] ══════════════════════════════════════`);
   return { success: false, error: finalError };
@@ -1127,12 +1255,13 @@ async function requestHandler(req, res) {
           timestamp: new Date().toISOString()
         };
         
+        const MSG_ENDPOINT = '/messages';
         const endpoints = [];
         if (process.env.D360_API_URL) {
           endpoints.push(process.env.D360_API_URL);
         }
-        endpoints.push('https://waba.360dialog.io/v1/messages');
-        endpoints.push('https://waba-sandbox.360dialog.io/v1/messages');
+        endpoints.push(`https://waba-v2.360dialog.io${MSG_ENDPOINT}`);
+        endpoints.push(`https://waba.360dialog.io${MSG_ENDPOINT}`);
         
         for (const endpoint of endpoints) {
           try {
@@ -1144,6 +1273,7 @@ async function requestHandler(req, res) {
               },
               body: JSON.stringify({
                 messaging_product: 'whatsapp',
+                recipient_type: 'individual',
                 to: testPhone,
                 type: 'text',
                 text: { body: testMessage }
@@ -1152,14 +1282,14 @@ async function requestHandler(req, res) {
             
             const responseText = await fetchResult.text();
             diagnostics.endpoints_tested.push({
-              endpoint: endpoint.replace('/v1/messages', ''),
+              endpoint: endpoint.replace(MSG_ENDPOINT, ''),
               status: fetchResult.status,
               statusText: fetchResult.statusText,
               response_preview: responseText.substring(0, 300)
             });
           } catch (netErr) {
             diagnostics.endpoints_tested.push({
-              endpoint: endpoint.replace('/v1/messages', ''),
+              endpoint: endpoint.replace(MSG_ENDPOINT, ''),
               status: 'NETWORK_ERROR',
               error: netErr.message
             });

@@ -15,17 +15,21 @@ const ADMIN_CHAT_ID = process.env.TELEGRAM_ADMIN_CHAT_ID;
 
 // ─── TELEGRAM SEND HELPER ────────────────────────────────────────
 
-async function sendTelegramMessage(text, chatId = ADMIN_CHAT_ID) {
+async function sendTelegramMessage(text, chatId = ADMIN_CHAT_ID, replyMarkup = undefined) {
   if (!TELEGRAM_BOT_TOKEN || !chatId) return;
   try {
+    const payload = {
+      chat_id: chatId,
+      text,
+      parse_mode: 'Markdown',
+    };
+    if (replyMarkup) {
+      payload.reply_markup = replyMarkup;
+    }
     await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text,
-        parse_mode: 'Markdown',
-      }),
+      body: JSON.stringify(payload),
     });
   } catch (err) {
     console.error('[BOOKING_NOTIFY] Telegram send failed:', err.message);
@@ -43,6 +47,7 @@ async function notifyBookingCreated(appointment, clinicConfig) {
   const dateStr = formatDateSG(appointment.date);
   const timeStr = formatTimeSG(appointment.time);
   const dayName = getDayName(appointment.date);
+  const apptId = appointment.id || '';
   
   const message = [
     `✅ *NEW BOOKING*`,
@@ -54,13 +59,21 @@ async function notifyBookingCreated(appointment, clinicConfig) {
     appointment.notes ? `📝 ${escapeMarkdown(appointment.notes)}` : '',
     ``,
     appointment.status === 'pending' 
-      ? `⏳ *Status: Pending your approval*\nReply /approve ${appointment.id?.slice(0, 6) || ''} to confirm`
+      ? `⏳ *Status: Pending your approval*`
       : `✅ *Status: Confirmed*`,
     ``,
     `_Received: ${formatTimeSG(new Date())}_`,
   ].filter(Boolean).join('\n');
   
-  await sendTelegramMessage(message, chatId);
+  // Add inline buttons for pending bookings
+  const replyMarkup = appointment.status === 'pending' ? {
+    inline_keyboard: [[
+      { text: '✅ Approve', callback_data: `approve_${apptId}` },
+      { text: '❌ Reject', callback_data: `reject_${apptId}` }
+    ]]
+  } : undefined;
+  
+  await sendTelegramMessage(message, chatId, replyMarkup);
 }
 
 /**

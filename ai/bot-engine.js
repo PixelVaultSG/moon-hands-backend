@@ -772,6 +772,17 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
     // ─── FALLBACK: Generalist OpenAI (if experts fail) ─────────────
     console.log(`[BOT_ENGINE] Expert system → Generalist fallback`);
     
+    // ── Check conversation freshness for greeting control ──
+    const ONE_HOUR_MS = 60 * 60 * 1000;
+    const now = Date.now();
+    let lastMsgTime = 0;
+    if (conversationHistory.length > 0) {
+      lastMsgTime = conversationHistory[conversationHistory.length - 1].timestamp || 0;
+    }
+    const timeSinceLastMsg = now - lastMsgTime;
+    const isRecent = conversationHistory.length > 0 && timeSinceLastMsg < ONE_HOUR_MS;
+    console.log(`[BOT_ENGINE] Conversation freshness: lastMsg=${Math.round(timeSinceLastMsg/1000)}s ago, recent=${isRecent}`);
+    
     // Build system prompt
     const services = (clientConfig.config.services || []).map(s => `${s.name} (${s.price}, ${s.duration}min): ${s.description}`).join('\n');
     const hours = (clientConfig.config.operating_hours || []).filter(h => h.isOpen).map(h => `${h.day}: ${h.open_time} - ${h.close_time}`).join(', ');
@@ -780,7 +791,22 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
     // Load relevant project knowledge from episodic memory
     const memoryContext = memory.getContext(messageText, 2);
 
-    const systemPrompt = `You are ${clientConfig.config.agent_name || 'Sophia'} — a warm, friendly receptionist at ${clientConfig.name}. You chat like a real person, not a robot.\n\n` +
+    // ANTI-GREETING BLOCK — must be LINE 1 of the system prompt
+    // When conversation is recent (<1hr), we FORBID all greeting phrases
+    const antiGreetingBlock = isRecent ?
+      `!!! FORBIDDEN: DO NOT GREET !!!\n` +
+      `You have ALREADY greeted this patient. Using any greeting phrase will confuse them.\n` +
+      `FORBIDDEN phrases you must NEVER use:\n` +
+      `- "Hello!" / "Hello there!" / "Hi!" / "Hey there!"\n` +
+      `- "Welcome to our clinic!" / "Welcome to Pixel Vault!"\n` +
+      `- "I'd be happy to help!" / "I'd be happy to assist!" / "I can help you with booking an appointment..."\n` +
+      `- "How can I assist you today?" / "How may I help you?"\n` +
+      `- "Let me connect you with our team..."\n` +
+      `INSTEAD: Just answer directly in 1-2 sentences, as if continuing a chat. No introductions.\n\n` :
+      '';
+
+    const systemPrompt = `${antiGreetingBlock}` +
+      `You are ${clientConfig.config.agent_name || 'Sophia'} — a warm, friendly receptionist at ${clientConfig.name}. You chat like a real person, not a robot.\n\n` +
       `${memoryContext}\n\n` +
       `HOW TO SPEAK:\n` +
       `- Warm and friendly, like texting a helpful friend who works at the clinic\n` +
@@ -790,8 +816,10 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
       `- Match the patient's energy — if they're casual, be casual. If they're formal, be polite.\n` +
       `- NEVER sound like a menu or FAQ list. Don't bullet-point everything. Just chat naturally.\n` +
       `- When listing services, present them conversationally, not as a catalogue\n` +
-      `- Use contractions ("we'd", "you'll", "I'm") — they make you sound human\n\n` +
-      `GREETING STYLE: ${(clientConfig.config.greeting || 'Hello! Welcome to {businessName}.').replace('{businessName}', clientConfig.name)}\n\n` +
+      `- Use contractions ("we'd", "you'll", "I'm") — they make you sound human\n` +
+      `${isRecent ? `- CRITICAL: This is a CONTINUING conversation. NEVER greet again.\n` : ''}` +
+      `\n` +
+      `GREETING STYLE (FIRST MESSAGE ONLY — NOT NOW): ${(clientConfig.config.greeting || 'Hello! Welcome to {businessName}.').replace('{businessName}', clientConfig.name)}\n\n` +
       `AVAILABLE TREATMENTS (call get_pricing() when asked about services/prices):\n${services || 'Contact clinic for services'}\n\n` +
       `HOURS: ${hours || 'Please contact us for hours'}\n\n` +
       `${faqs ? `FAQs:\n${faqs}\n\n` : ''}` +
@@ -810,16 +838,19 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
       `- ALL bookings start as PENDING — clinic must approve. Say "request received, clinic will confirm soon"\n` +
       `- Confirm name and phone before creating any booking\n` +
       `- For cancellations: get explicit "CANCEL MY BOOKING" confirmation before proceeding\n` +
-      `- Today is ${new Date().toLocaleDateString('en-SG', { timeZone: 'Asia/Singapore' })} (Singapore time).`;
+      `- Today is ${new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Asia/Singapore' })} (Singapore time, GMT+8). Current day: ${['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][new Date().getDay()]}.`;
 
     // Build messages array
+    // When conversation is recent, add a system signal to the user message
+    // to reinforce "no greeting" — this works even when system prompt is long
+    const userMessagePrefix = isRecent ? '[CONTINUING — NO GREETING] ' : '';
     const messages = [
       { role: 'system', content: systemPrompt },
       ...conversationHistory.slice(-6).flatMap(turn => [
         { role: 'user', content: turn.user },
         { role: 'assistant', content: turn.ai || '' }
       ]),
-      { role: 'user', content: messageText }
+      { role: 'user', content: userMessagePrefix + messageText }
     ];
 
     // Call OpenAI with function calling

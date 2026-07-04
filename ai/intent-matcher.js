@@ -55,29 +55,74 @@ const INTENT_PATTERNS = {
   },
   
   service_inquiry: {
-    regex: /(?:do\s+you\s+(?:do|have|offer)|is\s+(?:.+?)\s+available|can\s+i\s+get\s+(?:a|an)?\s*(.+?)|do\s+you\s+do\s+(.+?)|(?:have|offer)\s+(?:.+?))(?:\?|$)/i,
-    keywords: ['do you have', 'do you offer', 'is available', 'can i get'],
+    // Specific treatment inquiry: "do you do Botox?", "can i get HIFU?", "botox?"
+    // CRITICAL FIX: Added (?:\?|$) end anchors to prevent (.+?) from capturing
+    // just 1 character. Without end anchors, lazy capture "b" instead of "botox".
+    regex: /(?:do\s+(?:you|u)\s+(?:do|have|offer)\s+(.+?)(?:\?|$)|can\s+i\s+get\s+(?:a|an)?\s*(.+?)(?:\?|$)|is\s+(.+?)\s+available|^(botox|filler|hifu|rejuran|thread|laser|facial|peel|microneedling|picosure)s?\??$)/i,
+    keywords: ['do you do', 'can i get', 'is available', 'botox', 'filler', 'hifu', 'rejuran', 'thread', 'laser', 'facial', 'peel'],
     weight: 0.85,
     extract: (match, msg) => {
-      const treatment = match[1] || match[2];
-      return treatment ? { treatment: treatment.trim() } : {};
+      // match[1] = do you have CAPTURE, match[2] = can i get CAPTURE, 
+      // match[3] = is CAPTURE available, match[4] = standalone treatment
+      let treatment = match[1] || match[2] || match[3] || match[4];
+      if (treatment) {
+        treatment = treatment.trim().toLowerCase().replace(/\?$/, ''); // Remove trailing ?
+        // Verify it's a treatment name, not generic words
+        const genericWords = ['service', 'treatment', 'procedure', 'consultation', 'booking', 'appointment'];
+        if (!genericWords.some(g => treatment.includes(g))) {
+          return { treatment };
+        }
+      }
+      return {};
     }
   },
-  
+
   service_list: {
-    regex: /(?:what\s+(?:services|treatments|procedures)\s+(?:do\s+you\s+offer|do\s+you\s+have|are\s+available)|what\s+do\s+you\s+(?:do|offer)|list\s+(?:of\s+)?(?:services|treatments)|(?:show|give)\s+me\s+(?:the\s+)?(?:services|treatments|menu))/i,
-    keywords: ['what services', 'what treatments', 'what do you offer', 'list of services'],
+    // Handles: "what services do you offer", "what do you have?", "what treatment do you offer",
+    // "show me your treatments", "what can you do?", "list of services"
+    regex: /(?:what|wat|which)\s+(?:services|treatments|procedures|things?)\s+(?:do\s+(?:you|u)\s+(?:offer|have)|are\s+(?:available|there|offered))|what\s+(?:do\s+(?:you|u)\s+(?:do|offer|have)|can\s+(?:you|u)\s+do)|list\s+(?:of\s+)?(?:services|treatments|procedures)|(?:show|give|tell)\s+me\s+(?:the\s+)?(?:services|treatments|menu|list|options)|(?:what|wat)\s+(?:do\s+(?:you|u)\s+)?have[?\s]*$/i,
+    keywords: ['what services', 'what treatments', 'what do you offer', 'what do you have', 'list of services', 'wat services', 'show me', 'what can you do'],
     weight: 0.9,
   },
   
+  clarification: {
+    // Follow-up to vague answers: "Such as?", "Like what?", "What kind?", "Examples?"
+    // Must be short (1-3 words) and contain a question
+    regex: /^(?:such\s+as|like\s+what|what\s+kind|examples?[?]?|what\s+types?|what\s+else|and[?]?|what[?]|tell\s+me\s+more)[?\s]*$/i,
+    keywords: ['such as', 'like what', 'what kind', 'examples'],
+    weight: 0.95, // High confidence — these are unambiguous
+  },
+  
+  confirmation_yes: {
+    // Short affirmative in conversation context: "Yes", "Yeah", "Sure", "Okay", "Ok"
+    // Must be short (1-2 words) to avoid matching sentences containing "yes"
+    regex: /^(?:yes|yeah|yup|sure|okay|ok|ok[ay]|yep|yah|alright|definitely|absolutely)[!\.\s]*$/i,
+    keywords: ['yes', 'yeah', 'sure', 'okay', 'ok'],
+    weight: 0.8, // Needs conversation context to be meaningful
+  },
+  
+  confirmation_no: {
+    // Short negative in conversation context
+    regex: /^(?:no|nah|nope|not\s+(?:now|really)|maybe\s+(?:later|another\s+time))[!\.\s]*$/i,
+    keywords: ['no', 'nah', 'nope'],
+    weight: 0.8,
+  },
+  
   booking_request: {
+    // Handles: "can I book?", "I want to make another booking for Botox and laser"
     regex: /(?:i\s+(?:want|would\s+like|wanna)\s+(?:to\s+)?(?:book|make|schedule)|can\s+i\s+(?:book|make|schedule)|(?:book|schedule|make)\s+(?:an?\s+)?(?:appointment|booking|slot)|(?:i\s+want|looking\s+for)\s+(?:an?\s+)?(?:slot|appointment)|available\s+(?:slot|appointment)|when\s+(?:can|is)\s+i\s+(?:book|come)|next\s+available|earliest\s+(?:slot|appointment))/i,
-    keywords: ['book', 'appointment', 'schedule', 'slot', 'available'],
+    keywords: ['book', 'appointment', 'schedule', 'slot', 'available', 'booking'],
     weight: 0.9,
     extract: (match, msg) => {
       // Try to extract date preference
       const dateMatch = msg.match(/(?:next\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday|today|tomorrow|this\s+week|next\s+week)/i);
-      return dateMatch ? { preferred_day: dateMatch[1] } : {};
+      // Try to extract treatments mentioned
+      const knownTreatments = ['botox', 'filler', 'hifu', 'rejuran', 'thread', 'laser', 'facial', 'peel', 'microneedling', 'picosure'];
+      const foundTreatments = knownTreatments.filter(t => msg.toLowerCase().includes(t));
+      const result = {};
+      if (dateMatch) result.preferred_day = dateMatch[1];
+      if (foundTreatments.length > 0) result.treatments = foundTreatments;
+      return result;
     }
   },
   
@@ -154,14 +199,14 @@ const INTENT_PATTERNS = {
  * Main entry point. Analyzes message and returns all matched intents.
  * Handles multi-intent by splitting on conjunctions.
  */
-function matchIntents(message, conversationHistory = []) {
+function matchIntents(message, conversationHistory = [], isFirstContact = true) {
   const normalized = message.toLowerCase().trim();
   
   // Strategy: Check full message first, then split by conjunctions
   let allMatches = [];
   
   // Try full message match (catches intents that span across conjunctions)
-  const fullMatches = findIntentsInSegment(normalized);
+  const fullMatches = findIntentsInSegment(normalized, isFirstContact);
   allMatches.push(...fullMatches);
   
   // Split by conjunctions and check each segment
@@ -192,10 +237,13 @@ function matchIntents(message, conversationHistory = []) {
 /**
  * Check a single text segment against all intent patterns.
  */
-function findIntentsInSegment(segment) {
+function findIntentsInSegment(segment, isFirstContact = true) {
   const matches = [];
   
   for (const [intentName, pattern] of Object.entries(INTENT_PATTERNS)) {
+    // Skip greeting detection on follow-up messages (not first contact)
+    if (intentName === 'greeting' && !isFirstContact) continue;
+    
     let matched = false;
     let params = {};
     let confidence = 0;
@@ -326,10 +374,13 @@ const CHINESE_INTENTS = {
 /**
  * Check if message is Chinese and match Chinese intents.
  */
-function matchChineseIntents(message) {
+function matchChineseIntents(message, isFirstContact = true) {
   const matches = [];
   
   for (const [intent, regex] of Object.entries(CHINESE_INTENTS)) {
+    // Skip greeting detection on follow-up messages
+    if (intent === 'greeting' && !isFirstContact) continue;
+    
     if (regex.test(message)) {
       matches.push({ intent, confidence: 0.9, params: {} });
     }
@@ -340,16 +391,16 @@ function matchChineseIntents(message) {
 
 // Override main function to include Chinese
 const originalMatchIntents = matchIntents;
-module.exports.matchIntents = function(message, history) {
+module.exports.matchIntents = function(message, history, isFirstContact = true) {
   // Detect if message has Chinese characters
   const hasChinese = /[\u4e00-\u9fff]/.test(message);
   
   if (hasChinese) {
-    const chineseMatches = matchChineseIntents(message);
+    const chineseMatches = matchChineseIntents(message, isFirstContact);
     if (chineseMatches.length > 0) return chineseMatches;
   }
   
-  return originalMatchIntents(message, history);
+  return originalMatchIntents(message, history, isFirstContact);
 };
 
 module.exports.extractTreatmentFromMessage = extractTreatmentFromMessage;

@@ -222,6 +222,11 @@ function sanitizeSubmission(data) {
     }
   }
   
+  // Trial tracking — 14-day free trial starts immediately
+  sanitized.status = 'trial_active';
+  sanitized.trial_started_at = new Date().toISOString();
+  sanitized.trial_expires_at = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
+  
   return sanitized;
 }
 
@@ -293,16 +298,15 @@ async function sendTelegramAlert(submission) {
       '',
       `*Booking:* ${submission.booking_auto_confirm ? 'Auto-confirm' : 'Hold for approval'} · ${submission.booking_allow_same_day ? 'Same-day OK' : 'No same-day'} · ${submission.booking_min_notice_hours || 2}h notice`,
       '',
-      `*Payment Required:*`,
-      `💰 Amount: ${planName.includes('547') ? 'S\\$547' : 'S\\$347'}`,
-      `📊 Status: PENDING\\_PAYMENT`,
-      `🏦 Bank: DBS Bank · Pixel Vault Pte Ltd`,
+      `*Trial:* 14\\-day free trial started`,
+      `📊 Status: TRIAL\\_ACTIVE`,
+      `⏰ Trial ends: ${new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toLocaleDateString('en-GB', { timeZone: 'Asia/Singapore' })}`,
       ``,
       `*Actions:*`,
-      `1\. Wait for payment screenshot via email`,
-      `2\. Confirm payment → activate clinic`,
-      `3\. Guide clinic to set up 360dialog`,
-      `4\. Test bot → mark active when ready`,
+      `1\. Clinic is on 14\\-day trial — bot is LIVE now`,
+      `2\. Guide clinic to set up 360dialog`,
+      `3\. Collect payment BEFORE trial ends`,
+      `4\. After payment: update status to active`,
       '',
       `_Received: ${new Date().toLocaleString('en-SG', { timeZone: 'Asia/Singapore' })}_`,
     ].filter(Boolean).join('\n');
@@ -398,27 +402,24 @@ async function handleOnboarding(req, res) {
     // Step 6: Send Telegram alert to Pixel Vault admin with payment details
     await sendTelegramAlert(submission);
     
-    // Step 7: Return success with payment instructions
-    const planPrice = sanitized.selected_plan === 'premium' ? 547 : 347;
+    // Step 7: Return success — trial starts immediately
+    const trialEndDate = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
     return res.writeHead(201, { 'Content-Type': 'application/json' }).end(JSON.stringify({
       status: 'success',
-      message: 'Onboarding submitted! Please complete payment to activate your AI receptionist.',
+      message: 'Welcome to Moon Hands! Your 14-day free trial has started. Your AI receptionist is being set up.',
       submission_id: submission.id,
-      status: 'pending_payment',
-      payment: {
-        bank: 'DBS Bank',
-        account_name: 'Pixel Vault Pte Ltd',
-        account_number: '[UPDATE_THIS]',
-        amount: `S$${planPrice}`,
-        reference: sanitized.clinicName || 'Clinic',
-        instructions: 'Email payment screenshot to hello@pixelvault.sg'
+      status: 'trial_active',
+      trial: {
+        starts: new Date().toISOString(),
+        ends: trialEndDate.toISOString(),
+        days_remaining: 14
       },
       next_steps: [
-        '1. Make bank transfer (details above)',
-        '2. Email payment screenshot to hello@pixelvault.sg',
-        '3. We activate your AI receptionist within 24 hours',
-        '4. Set up your 360dialog WhatsApp Business API account (we will guide you)',
-        '5. Your AI receptionist goes LIVE!'
+        '1. Our team will contact you to set up your WhatsApp Business API',
+        '2. Your AI receptionist goes LIVE within 24 hours',
+        '3. Test your bot with sample patient conversations',
+        '4. Before your trial ends, our team will contact you for payment',
+        '5. Continue enjoying your AI receptionist!'
       ]
     }));
     

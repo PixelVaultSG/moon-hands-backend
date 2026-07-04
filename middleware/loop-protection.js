@@ -21,13 +21,15 @@
 // ─── CONFIGURATION ────────────────────────────────────────────────
 
 const LOOP_CONFIG = {
-  // Velocity: if >4 exchanges in 60 seconds, likely a bot loop
-  velocityThreshold: 4,      // exchanges per minute
-  velocityWindowMs: 60000,   // 1 minute
+  // Velocity: if >20 exchanges in 3 minutes, likely a bot loop
+  // Very relaxed — normal conversations can have 10+ back-and-forth exchanges
+  // before a booking is confirmed. Only flag TRUE loops (bot repeating itself).
+  velocityThreshold: 20,      // exchanges per 3 minutes
+  velocityWindowMs: 180000,   // 3 minutes
   
   // After detecting loop, how many responses before we stop replying
-  maxLoopResponses: 3,       // respond 3 times then go silent
-  loopSilenceDurationMs: 30 * 60 * 1000, // 30 min silence after loop detected
+  maxLoopResponses: 8,       // respond 8 times then go silent
+  loopSilenceDurationMs: 3 * 60 * 1000, // 3 min silence (was 30min)
   
   // Bot signature detection
   botPatterns: [
@@ -111,14 +113,30 @@ class LoopDetector {
       }
     }
 
-    // 4. VELOCITY CHECK: Too many exchanges too fast = loop
+    // 4. VELOCITY CHECK: Too many BACK-AND-FORTH exchanges = loop
+    // NOT triggered by multi-bubble messages (multiple incoming without our reply).
+    // Only triggered when we reply AND they reply AND we reply AND they reply...
     record.exchanges.push({ time: now, from: 'them', text: messageText.substring(0, 100) });
     
     const recentExchanges = record.exchanges.filter(e => e.time > now - LOOP_CONFIG.velocityWindowMs);
     record.exchanges = recentExchanges; // Trim old
     
-    if (recentExchanges.length >= LOOP_CONFIG.velocityThreshold) {
-      console.warn(`[LOOP_PROTECTION] High velocity detected: ${recentExchanges.length} exchanges/min from ${fromPhone}`);
+    // Count back-and-forth pairs
+    const ourReplies = recentExchanges.filter(e => e.from === 'us').length;
+    const theirMessages = recentExchanges.filter(e => e.from === 'them').length;
+    
+    // Skip simple confirmation exchanges (Yes/No/Ok) — these are normal
+    const shortConfirmations = recentExchanges.filter(e => 
+      e.from === 'them' && e.text && e.text.length <= 5 &&
+      /^(yes|yeah|yup|no|nah|nope|ok|okay|sure|yep)[!\.\s]*$/i.test(e.text)
+    ).length;
+    const adjustedTheirMessages = theirMessages - shortConfirmations;
+    
+    // Only flag as loop if there's actual back-and-forth with substantive messages
+    // A user sending 4 bubbles in a row (ourReplies=0) is NOT a loop — just multi-bubble.
+    // Simple Yes/No exchanges don't count toward the threshold.
+    if (recentExchanges.length >= LOOP_CONFIG.velocityThreshold && ourReplies >= 5 && adjustedTheirMessages >= 5) {
+      console.warn(`[LOOP_PROTECTION] High back-and-forth: ${recentExchanges.length} exchanges, ${ourReplies} our replies, ${adjustedTheirMessages} substantive patient messages from ${fromPhone}`);
       record.loopDetected = true;
     }
 
