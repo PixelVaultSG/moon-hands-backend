@@ -44,11 +44,30 @@ function resetIdle(phone) { setState(phone, BOOKING_STATES.IDLE, {}); }
 function parseDatePhrase(phrase) {
   const now = new Date();
   const lower = phrase.toLowerCase().trim();
-  if (lower === 'tomorrow') {
+  // Handle common short forms and typos: tmr, tmrw, nxt, sat, sun
+  const SHORT_FORMS = {
+    'tmr': 'tomorrow', 'tmrw': 'tomorrow',
+    'nxt': 'next', 'nx': 'next',
+    'mon': 'monday', 'tue': 'tuesday', 'tues': 'tuesday', 'wed': 'wednesday',
+    'thu': 'thursday', 'thur': 'thursday', 'thurs': 'thursday',
+    'fri': 'friday', 'sat': 'saturday', 'sun': 'sunday',
+  };
+  // Expand short forms in phrase
+  let expanded = lower;
+  for (const [short, full] of Object.entries(SHORT_FORMS)) {
+    expanded = expanded.replace(new RegExp(`\\b${short}\\b`, 'g'), full);
+  }
+  
+  if (expanded === 'tomorrow') {
     const d = new Date(now); d.setDate(d.getDate() + 1);
     return formatDate(d);
   }
-  const dayMatch = lower.match(/(next|this)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)/);
+  // Handle "next week" → 7 days from now
+  if (expanded === 'next week') {
+    const d = new Date(now); d.setDate(d.getDate() + 7);
+    return formatDate(d);
+  }
+  const dayMatch = expanded.match(/(next|this)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)/);
   if (dayMatch) {
     const dayNames = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
     const targetDay = dayNames.indexOf(dayMatch[2]);
@@ -97,22 +116,68 @@ function extractTreatmentName(message, services = []) {
 
 function extractAllTreatments(message, services = []) {
   const lower = message.toLowerCase();
-  const keywords = services.length > 0 ? services.map(s => s.name.toLowerCase()) : [
-    'hydrating facial','anti-aging treatment','acne clear facial',
-    'laser skin rejuvenation','botox consultation','dermal filler',
-    'hifu','thread lift','chemical peel','microneedling','facial','botox','filler','laser','peel'
-  ];
-  
   const found = [];
-  // Sort by length (longest first) so "thread lift" matches before "lift"
-  const sorted = [...keywords].sort((a, b) => b.length - a.length);
-  
   let remaining = lower;
-  for (const s of sorted) {
-    if (remaining.includes(s)) {
-      found.push(s);
-      // Remove matched treatment so shorter ones don't match substrings
-      remaining = remaining.replace(s, ' ');
+  
+  if (services.length > 0) {
+    const svcNames = services.map(s => s.name.toLowerCase());
+    
+    // PASS 1: Exact matches ("hydrating facial" → "Hydrating Facial")
+    // These take priority over partial matches
+    for (const svcName of svcNames) {
+      if (remaining.includes(svcName) && !found.includes(svcName)) {
+        found.push(svcName);
+        remaining = remaining.replace(svcName, ' ');
+      }
+    }
+    
+    // PASS 2: Partial matches ("botox" → "Botox Consultation")
+    // Sort by relevance: services with more query words come first
+    const queryWords = remaining.split(' ').filter(w => w.length >= 3);
+    const relevanceScore = (svcName) => {
+      const svcWords = svcName.split(' ');
+      let score = 0;
+      for (const qw of queryWords) {
+        if (svcWords.some(sw => sw.includes(qw) || qw.includes(sw))) score++;
+      }
+      return score;
+    };
+    const sorted = [...svcNames]
+      .filter(s => !found.includes(s))
+      // Sort: higher relevance first, then fewer words (more specific), then longer name
+      .sort((a, b) => relevanceScore(b) - relevanceScore(a) || a.split(' ').length - b.split(' ').length || b.length - a.length);
+    
+    for (const svcName of sorted) {
+      // Skip if already found or if remaining is too short
+      if (found.includes(svcName) || remaining.trim().length < 3) continue;
+      
+      // Check if any significant word from service name is in remaining
+      // "botox" (≥4 chars) matches "Botox Consultation"
+      // "facial" should NOT match if already exact-matched "Hydrating Facial"
+      const words = svcName.split(' ').filter(w => w.length >= 4);
+      const hasMatch = words.some(word => remaining.includes(word));
+      
+      if (hasMatch) {
+        found.push(svcName);
+        // Remove matched words from remaining
+        for (const word of words) {
+          remaining = remaining.replace(word, ' ');
+        }
+      }
+    }
+  } else {
+    // Fallback keyword list when no services provided
+    const keywords = [
+      'hydrating facial','anti-aging treatment','acne clear facial',
+      'laser skin rejuvenation','botox consultation','dermal filler',
+      'hifu','thread lift','chemical peel','microneedling','facial','botox','filler','laser','peel'
+    ];
+    const sorted = [...keywords].sort((a, b) => b.length - a.length);
+    for (const s of sorted) {
+      if (remaining.includes(s)) {
+        found.push(s);
+        remaining = remaining.replace(s, ' ');
+      }
     }
   }
   
@@ -122,10 +187,15 @@ function extractAllTreatments(message, services = []) {
 function extractBookingFields(message, services = []) {
   const lower = message.toLowerCase();
   const fields = {};
-  // Date
+  // Date patterns — must include short forms (tmr, nxt, sat) because
+  // parseDatePhrase only receives the matched text, not the full message
   const datePatterns = [
     /next\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)/i,
     /this\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)/i,
+    /nxt\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)/i,
+    /next\s+(mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun)\b/i,
+    /next week/i,
+    /\btmr\b|\btmrw\b/i,
     /tomorrow/i,
     /\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}\b/i,
     /\b\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b/i,
@@ -159,7 +229,7 @@ function isConfirmation(message) {
 }
 
 function isDenial(message) {
-  return ['no','nope','not','wrong','incorrect','cancel','stop']
+  return ['no','nope','nah','not','wrong','incorrect','cancel','stop']
     .some(w => { const l = message.toLowerCase().trim(); return l === w || l.startsWith(w + ' '); });
 }
 

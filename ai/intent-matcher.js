@@ -17,6 +17,9 @@ const CONJUNCTIONS = /\s+(?:and|also|plus|as well as|\&|\/)\s+|\s*[,;]\s+/i;
 
 const INTENT_PATTERNS = {
   greeting: {
+    // CRITICAL: Must be a PURE greeting with nothing else.
+    // "Hi" ✓  "Hi there" ✗  "Hello! How are you" ✗  "hi, i want to book" ✗
+    // Uses negative lookahead to reject multi-word non-greetings.
     regex: /^(hi+|hello+|hey+|good\s+(morning|afternoon|evening)|gm|howdy)[\s!]*$/i,
     keywords: ['hi', 'hello', 'hey', 'good morning', 'good afternoon'],
     weight: 1.0,
@@ -36,15 +39,28 @@ const INTENT_PATTERNS = {
   
   location: {
     regex: /(?:where\s+(?:are\s+you|is\s+(?:the\s+)?clinic|are\s+you\s+located|do\s+i\s+find)|address|location|how\s+to\s+get\s+(?:there|to)|(?:clinic|shop)\s+near|nearest\s+(?:mrt|bus|mrt\s+station)|parking)/i,
-    keywords: ['where', 'address', 'location', 'how to get', 'find you', 'parking'],
+    keywords: ['where', 'address', 'location', 'how to get', 'find you', 'parking', 'nearby', 'near'],
     weight: 0.9,
   },
   
   pricing_specific: {
-    regex: /(?:how\s+much\s+(?:is|for|does)|what\s+(?:is\s+the\s+price|does\s+it\s+cost)|price\s+(?:of|for))\s+(.+?)(?:\?|$|\s+(?:cost|price))/i,
+    // Handles: "how much is botox", "price of hifu", "botox how much", "hifu price?"
+    // The reversed form (.+?)\s+(?:how\s+much|price|cost) catches "botox how much"
+    regex: /(?:how\s+much(?:\s+(?:is|for|does))?|what\s+(?:is\s+the\s+price|does\s+it\s+cost)|price\s+(?:of|for))\s+(.+?)(?:\?|$|\s+(?:cost|price))|(.+?)\s+(?:how\s+much|price|cost)[?\s]*$/i,
     keywords: ['how much is', 'price of', 'cost of', 'what is the price'],
     weight: 0.95,
-    extract: (match) => ({ treatment: match[1]?.trim() })
+    extract: (match) => {
+      const treatment = (match[1] || match[2])?.trim().toLowerCase();
+      if (!treatment) return {};
+      // Reject garbage captures that aren't treatment names
+      const garbageWords = ['are your', 'roughly', 'about', 'around', 'please', 'pls', 'thank', 'thanks'];
+      if (garbageWords.some(g => treatment.includes(g))) return {};
+      // Reject captures that are too short or too generic
+      if (treatment.length < 3) return {};
+      const genericWords = ['service', 'treatment', 'procedure', 'consultation', 'booking', 'appointment', 'slot', 'here', 'there'];
+      if (genericWords.some(g => treatment.includes(g))) return {};
+      return { treatment };
+    }
   },
   
   pricing_general: {
@@ -56,9 +72,9 @@ const INTENT_PATTERNS = {
   
   service_inquiry: {
     // Specific treatment inquiry: "do you do Botox?", "can i get HIFU?", "botox?"
-    // CRITICAL FIX: Added (?:\?|$) end anchors to prevent (.+?) from capturing
-    // just 1 character. Without end anchors, lazy capture "b" instead of "botox".
-    regex: /(?:do\s+(?:you|u)\s+(?:do|have|offer)\s+(.+?)(?:\?|$)|can\s+i\s+get\s+(?:a|an)?\s*(.+?)(?:\?|$)|is\s+(.+?)\s+available|^(botox|filler|hifu|rejuran|thread|laser|facial|peel|microneedling|picosure)s?\??$)/i,
+    // CRITICAL: The "can i get" pattern excludes booking words (slot, appointment, booking)
+    // so "can i get a slot" goes to booking_request instead.
+    regex: /(?:do\s+(?:you|u)\s+(?:do|have|offer)\s+(.+?)(?:\?|$)|can\s+i\s+get\s+(?:a|an)?\s*(?!slot|appointment|booking)(.+?)(?:\?|$)|is\s+(.+?)\s+available|^(botox|filler|hifu|rejuran|thread|laser|facial|peel|microneedling|picosure)s?\??$)/i,
     keywords: ['do you do', 'can i get', 'is available', 'botox', 'filler', 'hifu', 'rejuran', 'thread', 'laser', 'facial', 'peel'],
     weight: 0.85,
     extract: (match, msg) => {
@@ -68,7 +84,7 @@ const INTENT_PATTERNS = {
       if (treatment) {
         treatment = treatment.trim().toLowerCase().replace(/\?$/, ''); // Remove trailing ?
         // Verify it's a treatment name, not generic words
-        const genericWords = ['service', 'treatment', 'procedure', 'consultation', 'booking', 'appointment'];
+        const genericWords = ['service', 'treatment', 'procedure', 'consultation', 'booking', 'appointment', 'slot', 'here', 'there'];
         if (!genericWords.some(g => treatment.includes(g))) {
           return { treatment };
         }
@@ -109,9 +125,12 @@ const INTENT_PATTERNS = {
   },
   
   booking_request: {
-    // Handles: "can I book?", "I want to make another booking for Botox and laser"
-    regex: /(?:i\s+(?:want|would\s+like|wanna)\s+(?:to\s+)?(?:book|make|schedule)|can\s+i\s+(?:book|make|schedule)|(?:book|schedule|make)\s+(?:an?\s+)?(?:appointment|booking|slot)|(?:i\s+want|looking\s+for)\s+(?:an?\s+)?(?:slot|appointment)|available\s+(?:slot|appointment)|when\s+(?:can|is)\s+i\s+(?:book|come)|next\s+available|earliest\s+(?:slot|appointment))/i,
-    keywords: ['book', 'appointment', 'schedule', 'slot', 'available', 'booking'],
+    // Handles: "can I book?", "I want to make a booking", "can I come tomorrow"
+    // Note: "no slots available" conflicts with waitlist_request — waitlist wins (0.95 > 0.9)
+    // "i want hifu" — treatment name after "i want" implies booking intent
+    // The last alt matches: "i want botox", "i wanna hifu", etc.
+    regex: /(?:i\s+(?:want|would\s+like|wanna)\s+(?:to\s+)?(?:book|make|schedule)|can\s+i\s+(?:book|make|schedule|come)|(?:book|schedule|make)\s+(?:an?\s+)?(?:appointment|booking|slot)|(?:i\s+want|looking\s+for)\s+(?:an?\s+)?(?:slot|appointment)|when\s+(?:can|is)\s+i\s+(?:book|come)|next\s+available|earliest\s+(?:slot|appointment)|i\s+(?:want|wanna)\s+(?:to\s+)?(?:botox|filler|hifu|laser|facial|rejuran|thread|peel|microneedling))/i,
+    keywords: ['book', 'appointment', 'schedule', 'slot', 'booking', 'i want to come', 'available slots'],
     weight: 0.9,
     extract: (match, msg) => {
       // Try to extract date preference
@@ -133,8 +152,10 @@ const INTENT_PATTERNS = {
   },
   
   reschedule_request: {
-    regex: /(?:reschedule|change|move|shift)\s+(?:my\s+)?(?:appointment|booking)|(?:can\s+i|i\s+want\s+to)\s+(?:change|move)\s+(?:my\s+)?(?:appointment|date|time)|different\s+(?:date|time|day)/i,
-    keywords: ['reschedule', 'change appointment', 'move booking'],
+    // Handles: "reschedule my appointment", "change my booking", "shift my appt"
+    // "appt" is common abbreviation for appointment. "change my slot" also included.
+    regex: /(?:reschedule|change|move|shift)\s+(?:my\s+)?(?:appointment|booking|appt|slot)|(?:can\s+i|i\s+want\s+to)\s+(?:change|move)\s+(?:my\s+)?(?:appointment|booking|date|time|slot)|different\s+(?:date|time|day)/i,
+    keywords: ['reschedule', 'change appointment', 'change my slot', 'move booking', 'shift my'],
     weight: 0.95,
   },
   
@@ -145,8 +166,9 @@ const INTENT_PATTERNS = {
   },
   
   faq_prep: {
-    regex: /(?:what\s+(?:should|do)\s+i\s+(?:do|need)\s+(?:to\s+)?(?:prepare|do)\s+(?:before|prior\s+to)|preparation\s+(?:before|for)|before\s+(?:the\s+)?(?:treatment|procedure)|prep\s+(?:needed|required)|any\s+(?:preparation|prep|things\s+to\s+do)\s+before)/i,
-    keywords: ['prepare', 'before treatment', 'preparation', 'prep needed'],
+    // "what should i do before treatment", "anything to do before botox", "prep needed"
+    regex: /(?:what\s+(?:should|do|to)\s+i\s+(?:do|need|have)\s+(?:to\s+)?(?:prepare|do)\s+(?:before|prior\s+to)|preparation\s+(?:before|for)|before\s+(?:the\s+)?(?:treatment|procedure)|prep\s+(?:needed|required)|any\s+(?:preparation|prep|things\s+to\s+do)\s+before|anything\s+to\s+do\s+before)/i,
+    keywords: ['prepare', 'before treatment', 'preparation', 'prep needed', 'anything to do before'],
     weight: 0.85,
     extract: (match, msg) => {
       const treatmentMatch = msg.match(/before\s+(?:the\s+)?(\w+(?:\s+\w+){0,3})/i);
@@ -175,8 +197,9 @@ const INTENT_PATTERNS = {
   },
   
   human_handoff: {
-    regex: /(?:speak|talk)\s+(?:to\s+a\s+)?(?:human|person|staff|doctor|nurse|receptionist|someone|real\s+person)|i\s+want\s+(?:a\s+)?human|transfer\s+(?:me\s+)?to\s+(?:a\s+)?(?:human|staff|person)|can\s+i\s+speak\s+to|call\s+me/i,
-    keywords: ['human', 'staff', 'doctor', 'speak to someone', 'transfer'],
+    // "speak to someone", "talk to a person", "real person please", "i want a human"
+    regex: /(?:speak|talk)\s+(?:to\s+(?:a\s+)?)?(?:human|person|staff|doctor|nurse|receptionist|someone)|real\s+(?:person|human)|i\s+want\s+(?:a\s+)?(?:human|person|real\s+person|staff)|transfer\s+(?:me\s+)?to\s+(?:a\s+)?(?:human|staff|person)|can\s+i\s+speak\s+to|call\s+me/i,
+    keywords: ['human', 'staff', 'doctor', 'speak to someone', 'talk to someone', 'real person', 'transfer'],
     weight: 0.9,
   },
   
@@ -187,9 +210,11 @@ const INTENT_PATTERNS = {
   },
   
   waitlist_request: {
-    regex: /(?:waitlist|waiting\s+list|add\s+me\s+(?:to\s+)?(?:the\s+)?wait|no\s+(?:slot|appointment|space|availability)\s+(?:available)?|fully\s+booked|all\s+(?:slot|appointment)s?\s+(?:are\s+)?taken|put\s+me\s+on\s+(?:the\s+)?wait)/i,
-    keywords: ['waitlist', 'no slot', 'fully booked', 'waiting list'],
-    weight: 0.9,
+    // "no slots available", "fully booked", "all appointments taken"
+    // Higher weight (0.95) than booking_request (0.9) to win when both match
+    regex: /(?:waitlist|waiting\s+list|add\s+me\s+(?:to\s+)?(?:the\s+)?wait|no\s+(?:slot|appointment|space|availability)\s+(?:available)?|fully\s+booked|all\s+(?:slot|appointment|appt)s?\s+(?:are\s+)?taken|put\s+me\s+on\s+(?:the\s+)?wait)/i,
+    keywords: ['waitlist', 'no slot', 'no slots', 'fully booked', 'waiting list', 'all taken'],
+    weight: 0.95,
   },
 };
 
@@ -262,13 +287,32 @@ function findIntentsInSegment(segment, isFirstContact = true) {
           } catch (e) {
             params = {};
           }
+          // If extractor returns empty params for inquiry-type intents,
+          // the match was too generic — reject it
+          if (Object.keys(params).length === 0 && 
+              (intentName === 'service_inquiry' || intentName === 'pricing_specific')) {
+            matched = false;
+            confidence = 0;
+          }
         }
       }
     }
     
     // Fallback: keyword matching (lower confidence)
-    if (!matched && pattern.keywords) {
-      const keywordMatches = pattern.keywords.filter(kw => segment.includes(kw.toLowerCase()));
+    // Uses word boundary matching to prevent substring false positives:
+    // "hifu" must NOT match greeting keyword "hi" (but "hi" or "hifu " should)
+    // Greeting is SKIPPED — regex-only to prevent "Hi there" from matching
+    if (!matched && pattern.keywords && intentName !== 'greeting') {
+      const keywordMatches = pattern.keywords.filter(kw => {
+        const kwLower = kw.toLowerCase();
+        // For single-word keywords, require word boundary
+        if (!kwLower.includes(' ')) {
+          const regex = new RegExp(`\\b${kwLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+          return regex.test(segment);
+        }
+        // For multi-word keywords, use substring (phrase match)
+        return segment.includes(kwLower);
+      });
       if (keywordMatches.length > 0) {
         matched = true;
         confidence = (pattern.weight || 0.8) * 0.7; // Lower confidence for keyword-only
@@ -358,15 +402,22 @@ function extractTreatmentFromMessage(message) {
 // ─── CHINESE SUPPORT ──────────────────────────────────────────────
 
 const CHINESE_INTENTS = {
+  // Order matters: specific intents BEFORE general ones
+  // e.g., cancel_request before booking_request, check_appointment before booking_request
   greeting: /^(你好|您好|嗨|哈啰|在吗|有人在吗|你好呀)[!！]?$/,
   goodbye: /^(谢谢|感谢|拜拜|再见|好的谢谢|知道了)[!！]?$/,
-  operating_hours: /(?:营业时间|几点开门|几点关门|什么时候营业|营业时间|开到几点|几点到几点|周末开吗)/,
-  location: /(?:地址|在哪里|怎么去|位置| clinic 在哪里|靠近哪里|附近有什么)/,
-  pricing_specific: /(?:.*多少钱|.*怎么收费|.*价格是多少|.*的价钱)/,
-  pricing_general: /(?:价格表|价目表|怎么收费|多少钱|贵不贵)/,
-  booking_request: /(?:预约|我要预约|想预约|可以预约吗|有位置吗|有空位吗)/,
-  cancel_request: /(?:取消预约|取消|我要取消|删掉预约)/,
-  check_appointment: /(?:我的预约|我的booking|我预约了|我的时间)/,
+  operating_hours: /(?:营业时间|几点开门|几点关门|什么时候营业|开到几点|几点到几点|周末开吗)/,
+  location: /(?:地址|在哪里|怎么去|位置|靠近哪里|附近有什么)/,
+  // pricing_specific: treatment name + price question (mixed Chinese-English OK)
+  pricing_specific: /(?:botox|filler|hifu|laser|facial|thread|rejuran|皮秒|水光针|玻尿酸|肉毒素|热玛吉|[a-z]+).*?(?:多少钱|怎么收费|价格)/i,
+  // pricing_general: just asking about price
+  pricing_general: /^(?:价格表|价目表|怎么收费|多少钱|贵不贵)$/,
+  // cancel_request BEFORE booking_request to avoid "取消预约" matching booking
+  cancel_request: /(?:取消预约|我要取消|取消我的|删掉预约|想取消)/,
+  // check_appointment BEFORE booking_request
+  check_appointment: /(?:我的预约|查询预约|查我的|我的booking|我预约了什么时候|我book了)/,
+  // booking_request comes after more specific intents
+  booking_request: /(?:我要预约|想预约|可以预约吗|有位置吗|有空位吗)/,
   human_handoff: /(?:人工|真人|客服|工作人员|找医生)/,
   language_switch: /(?:可以说中文吗|中文|华文|会说中文吗)/,
 };

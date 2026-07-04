@@ -604,8 +604,14 @@ async function attemptBooking(clinicConfig, patientPhone, fields, conversationHi
     
     if (result.success) {
       const multiNote = matchedServices.length > 1 ? ` (${totalDuration}mins total)` : '';
+      const calendarId = clinicConfig.config?.google_calendar_id || clinicConfig.google_calendar_id;
+      const clinicId = clinicConfig.id || 'unknown';
+      const hasCalendar = !!(calendarId && isCalendarHealthy(clinicId));
+      const confirmationMsg = hasCalendar 
+        ? `The clinic will confirm within 30 minutes.` 
+        : `This is subject to clinic confirmation and they'll get back to you shortly.`;
       return {
-        text: `✅ Booking request received! ${serviceNames}${multiNote} on ${fields.date} at ${fields.time}. The clinic will confirm within 30 minutes.`,
+        text: `✅ Booking request received! ${serviceNames}${multiNote} on ${fields.date} at ${fields.time}. ${confirmationMsg}`,
         source: 'hardcoded',
         cost_saved: 0.5,
         latency_ms: Date.now() - startTime
@@ -630,9 +636,44 @@ async function attemptBooking(clinicConfig, patientPhone, fields, conversationHi
   }
 }
 
+// ─── CALENDAR HEALTH TRACKER ─────────────────────────────────────
+// Tracks per-clinic calendar API failures. After 30 minutes of consecutive
+// failures, we fall back to "subject to clinic confirmation" mode.
+const calendarHealthTracker = new Map();
+const CALENDAR_FAILURE_WINDOW_MS = 30 * 60 * 1000; // 30 minutes
+const CALENDAR_API_TIMEOUT_MS = 15 * 1000; // 15 seconds — patient can wait
+
+function recordCalendarFailure(clinicId, error) {
+  const now = Date.now();
+  const record = calendarHealthTracker.get(clinicId) || { firstFailure: now, count: 0, lastError: '' };
+  record.count++;
+  record.lastError = error;
+  calendarHealthTracker.set(clinicId, record);
+  console.log(`[CALENDAR_HEALTH] Clinic ${clinicId}: failure #${record.count}, first at ${new Date(record.firstFailure).toISOString()}`);
+}
+
+function recordCalendarSuccess(clinicId) {
+  calendarHealthTracker.delete(clinicId);
+}
+
+function isCalendarHealthy(clinicId) {
+  const record = calendarHealthTracker.get(clinicId);
+  if (!record) return true; // No failures recorded
+  const elapsed = Date.now() - record.firstFailure;
+  if (elapsed > CALENDAR_FAILURE_WINDOW_MS) {
+    // 30 minutes of failures — mark unhealthy
+    console.log(`[CALENDAR_HEALTH] Clinic ${clinicId}: UNHEALTHY after ${Math.round(elapsed / 60000)}min of failures`);
+    return false;
+  }
+  // Within 30-min window — still try, but log warning
+  console.log(`[CALENDAR_HEALTH] Clinic ${clinicId}: trying despite ${record.count} recent failures`);
+  return true;
+}
+
 // ─── BOOKING CONFIRMATION SUMMARY ────────────────────────────────
 // Builds a detailed booking summary for patient confirmation.
 // Includes: treatments, prices, total duration, date/time.
+// For clinics without Google Calendar: always shows "subject to clinic confirmation"
 
 async function buildBookingSummary(clinicConfig, date, time, treatments, services) {
   const matchedServices = [];
@@ -658,19 +699,31 @@ async function buildBookingSummary(clinicConfig, date, time, treatments, service
   const priceLine = totalPrice > 0 ? `\n💰 Total: ~S$${totalPrice}` : '';
   const durLine = totalDuration > 0 ? `\n⏱ Total duration: ${totalDuration}mins` : '';
   
-  // Check calendar availability (with 1-second timeout)
+  // ── Calendar availability check ──
   let availabilityNote = '';
-  try {
-    const calendarId = clinicConfig.config?.google_calendar_id || clinicConfig.google_calendar_id;
-    if (calendarId) {
+  let confirmationNote = '';
+  const calendarId = clinicConfig.config?.google_calendar_id || clinicConfig.google_calendar_id;
+  const clinicId = clinicConfig.id || 'unknown';
+  
+  if (!calendarId) {
+    // Clinic has NO Google Calendar — always show "subject to clinic confirmation"
+    confirmationNote = '\n\n⏳ This booking is subject to clinic confirmation.';
+  } else if (!isCalendarHealthy(clinicId)) {
+    // Calendar has been failing for 30+ minutes — fall back
+    confirmationNote = '\n\n⏳ Our calendar sync is temporarily unavailable. This booking is subject to clinic confirmation.';
+  } else {
+    // Clinic HAS calendar and it's healthy — check availability (patient can wait 15s)
+    try {
       const calendarService = require('../server/calendar-service');
       const isAvailable = await Promise.race([
         calendarService.isSlotAvailable(calendarId, date, time, totalDuration),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 1000))
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), CALENDAR_API_TIMEOUT_MS))
       ]);
       
-      if (!isAvailable) {
-        // Find 2 alternative slots
+      if (isAvailable) {
+        recordCalendarSuccess(clinicId);
+      } else {
+        // Slot is taken — find 2 alternatives (patient can wait another 15s)
         const hours = clinicConfig.config?.operating_hours || [];
         const dayEntry = hours.find(h => {
           const d = new Date(date + 'T00:00:00+08:00');
@@ -681,22 +734,24 @@ async function buildBookingSummary(clinicConfig, date, time, treatments, service
         if (dayEntry?.isOpen) {
           const altSlots = await Promise.race([
             calendarService.getAvailableSlots(calendarId, date, { open: dayEntry.open_time, close: dayEntry.close_time }, totalDuration, 15),
-            new Promise(resolve => setTimeout(() => resolve([]), 1500))
+            new Promise(resolve => setTimeout(() => resolve([]), CALENDAR_API_TIMEOUT_MS))
           ]);
           
           const alternatives = altSlots.slice(0, 2);
           if (alternatives.length > 0) {
-            const altText = alternatives.map((s, i) => `${i + 1}. ${s.time}`).join('\n');
+            const altText = alternatives.map((s, i) => `${i + 1}. ${s.start}`).join('\n');
             availabilityNote = `\n\n⚠️ That slot is taken. Available alternatives:\n${altText}\n\nReply with the number (1 or 2) or suggest another time.`;
           } else {
             availabilityNote = `\n\n⚠️ That slot is taken. Please suggest another time.`;
           }
         }
       }
+    } catch (err) {
+      // Calendar API failed or timed out — record failure but still proceed
+      recordCalendarFailure(clinicId, err.message);
+      console.log(`[BOOKING_SUMMARY] Calendar check failed: ${err.message}. Proceeding with subject-to-confirmation.`);
+      confirmationNote = '\n\n⏳ Checking our calendar... This booking is subject to clinic confirmation.';
     }
-  } catch (err) {
-    // Calendar check failed or timed out — proceed without it
-    console.log(`[BOOKING_SUMMARY] Calendar check skipped: ${err.message}`);
   }
   
   // Multi-treatment warning
@@ -705,7 +760,7 @@ async function buildBookingSummary(clinicConfig, date, time, treatments, service
     multiNote = `\n\n⚠️ This will take ${totalDuration} minutes. Would you prefer to split into 2 separate appointments? Reply SPLIT if yes.`;
   }
   
-  return `Please confirm your booking:\n\n${serviceLines}${priceLine}${durLine}\n📅 ${date} at ${time}${availabilityNote}${multiNote}\n\nReply YES to confirm, or NO to make changes.`;
+  return `Please confirm your booking:\n\n${serviceLines}${priceLine}${durLine}\n📅 ${date} at ${time}${availabilityNote}${confirmationNote}${multiNote}\n\nReply YES to confirm, or NO to make changes.`;
 }
 
 // ─── BOOKING CONFIRMATION HANDLER ────────────────────────────────
