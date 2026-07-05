@@ -138,8 +138,128 @@ const BACK_TO_MENU = Markup.inlineKeyboard([
   [Markup.button.callback('🔙 Back to Menu', 'menu_main')],
 ]);
 
-// bot.start and bot.command('menu') handlers are defined below
-// alongside the clinic-linking /start handler and quick menu keyboard
+// ─── COMBINED /START — ADMIN vs CLINIC STAFF ────────────────────
+//
+// DUAL-MODE: This bot serves both Moon Hands admin (Ash) and
+// clinic staff. The same /start command shows the right view
+// based on who's using it.
+//
+// Admin (ADMIN_CHAT_ID)        → Inline admin menu (business owner view)
+// Clinic staff (/start GLOW001) → Reply quick menu (clinic admin view)
+
+bot.start(safeHandler('/start', async (ctx) => {
+  const chatId = ctx.chat.id;
+  const name = ctx.from.first_name || 'there';
+
+  // ── MODE 1: ADMIN ──
+  if (chatId.toString() === ADMIN_CHAT_ID) {
+    auditCommand(ctx.from.id, '/start', true);
+    await ctx.reply(
+      `Moon Hands Admin Bot\n\n` +
+      `Welcome back, boss.\n\n` +
+      `Use /menu for the quick-action dashboard, or /help for full commands.`,
+      MENU_KEYBOARD
+    );
+    return;
+  }
+
+  // ── MODE 2: CLINIC STAFF ──
+  // Clinic staff linking via /start GLOW001
+  const startParam = ctx.payload; // e.g., "GLOW001" from /start GLOW001
+  const { linkChatToClinic } = require('./multi-clinic-sender');
+  const { supabase } = require('../server/supabase/client');
+
+  // Check if this chat is already linked to any clinic
+  const { data: linkedClinics } = await supabase
+    .from('clients')
+    .select('id, name, telegram_chat_ids')
+    .contains('telegram_chat_ids', [chatId]);
+
+  // If linked to exactly 1 clinic → show quick menu
+  if (linkedClinics && linkedClinics.length === 1 && !startParam) {
+    await ctx.reply(
+      `👋 Welcome back, ${name}!\n\n` +
+      `You're linked to *${linkedClinics[0].name}*.`,
+      { parse_mode: 'Markdown', reply_markup: QUICK_MENU_KEYBOARD }
+    );
+    return;
+  }
+
+  // If linked to multiple clinics → ask which one
+  if (linkedClinics && linkedClinics.length > 1 && !startParam) {
+    const keyboard = linkedClinics.map(c => [{ text: c.name, callback_data: `select_clinic:${c.id}` }]);
+    await ctx.reply(
+      `👋 Welcome back, ${name}!\n\n` +
+      `You're linked to multiple clinics. Which one?`,
+      { reply_markup: { inline_keyboard: keyboard } }
+    );
+    return;
+  }
+
+  // New user with start parameter (from onboarding link)
+  if (startParam) {
+    const result = await linkChatToClinic(chatId, startParam);
+    if (result.success) {
+      await ctx.reply(
+        `👋 Welcome, ${name}!\n\n` +
+        `You're now linked to *${result.clinicName}*.\n\n` +
+        `You'll receive booking notifications and alerts for this clinic.`,
+        { parse_mode: 'Markdown', reply_markup: QUICK_MENU_KEYBOARD }
+      );
+    } else {
+      await ctx.reply(
+        `❌ Could not link to clinic: ${result.error}\n\n` +
+        `Please contact Pixel Vault support.`,
+        { parse_mode: 'Markdown' }
+      );
+    }
+    return;
+  }
+
+  // New user without start parameter — show available clinics
+  const { data: allClinics } = await supabase
+    .from('clients')
+    .select('id, name')
+    .order('name');
+
+  if (!allClinics || allClinics.length === 0) {
+    await ctx.reply('❌ No clinics found. Contact Pixel Vault support.');
+    return;
+  }
+
+  const keyboard = allClinics.map(c => [{ text: c.name, callback_data: `link_clinic:${c.id}` }]);
+  await ctx.reply(
+    `👋 Welcome to Moon Hands, ${name}!\n\n` +
+    `Which clinic are you from?`,
+    { reply_markup: { inline_keyboard: keyboard } }
+  );
+}));
+
+// ─── COMBINED /MENU — ADMIN vs CLINIC STAFF ─────────────────────
+
+bot.command('menu', safeHandler('/menu', async (ctx) => {
+  const chatId = ctx.chat.id;
+
+  // ── MODE 1: ADMIN ──
+  if (chatId.toString() === ADMIN_CHAT_ID) {
+    await ctx.reply(
+      `📱 Moon Hands Quick Menu\n\n` +
+      `Tap any button to manage your clinics.`,
+      MENU_KEYBOARD
+    );
+    return;
+  }
+
+  // ── MODE 2: CLINIC STAFF ──
+  await ctx.reply(
+    '📱 *Moon Hands Quick Menu*\n\n' +
+    'Tap any button to manage your clinics.',
+    {
+      parse_mode: 'Markdown',
+      reply_markup: QUICK_MENU_KEYBOARD
+    }
+  );
+}));
 
 // ─── CALLBACK HANDLERS ───────────────────────────────────────────
 
@@ -373,99 +493,9 @@ const QUICK_MENU_KEYBOARD = {
   one_time_keyboard: false,
 };
 
-// Send menu on /menu command
-bot.command('menu', safeHandler('/menu', async (ctx) => {
-  await ctx.reply(
-    '📱 *Moon Hands Quick Menu*\n\n' +
-    'Tap any button to manage your clinics.',
-    {
-      parse_mode: 'Markdown',
-      reply_markup: QUICK_MENU_KEYBOARD
-    }
-  );
-}));
-
-// ─── /START COMMAND — CLINIC LINKING ─────────────────────────────
-// Handles both:
-//   /start          — Returning user (already linked)
-//   /start GLOW001  — New user linking to clinic from onboarding
-
-bot.start(safeHandler('/start', async (ctx) => {
-  const chatId = ctx.chat.id;
-  // SECURITY: Sanitize first_name to prevent Markdown injection
-  const { escapeMarkdown } = require('./booking-notifications');
-  const name = escapeMarkdown(ctx.from.first_name || 'there');
-  const startParam = ctx.payload; // e.g., "GLOW001" from /start GLOW001
-  
-  // Import here to avoid circular deps
-  const { linkChatToClinic, getClinicTelegramChats } = require('./multi-clinic-sender');
-  
-  // Check if this chat is already linked to any clinic
-  const { supabase } = require('../server/supabase/client');
-  const { data: linkedClinics } = await supabase
-    .from('clients')
-    .select('id, name, telegram_chat_ids')
-    .contains('telegram_chat_ids', [chatId]);
-  
-  // If linked to exactly 1 clinic → show menu
-  if (linkedClinics && linkedClinics.length === 1 && !startParam) {
-    await ctx.reply(
-      `👋 Welcome back, ${name}!\n\n` +
-      `You're linked to *${linkedClinics[0].name}*.`,
-      { parse_mode: 'Markdown', reply_markup: QUICK_MENU_KEYBOARD }
-    );
-    return;
-  }
-  
-  // If linked to multiple clinics → ask which one (edge case)
-  if (linkedClinics && linkedClinics.length > 1 && !startParam) {
-    const keyboard = linkedClinics.map(c => [{ text: c.name, callback_data: `select_clinic:${c.id}` }]);
-    await ctx.reply(
-      `👋 Welcome back, ${name}!\n\n` +
-      `You're linked to multiple clinics. Which one?`,
-      { reply_markup: { inline_keyboard: keyboard } }
-    );
-    return;
-  }
-  
-  // New user with start parameter (from onboarding link)
-  if (startParam) {
-    const result = await linkChatToClinic(chatId, startParam);
-    if (result.success) {
-      await ctx.reply(
-        `👋 Welcome, ${name}!\n\n` +
-        `You're now linked to *${result.clinicName}*.\n\n` +
-        `You'll receive booking notifications and alerts for this clinic.`,
-        { parse_mode: 'Markdown', reply_markup: QUICK_MENU_KEYBOARD }
-      );
-    } else {
-      await ctx.reply(
-        `❌ Could not link to clinic: ${result.error}\n\n` +
-        `Please contact Pixel Vault support.`,
-        { parse_mode: 'Markdown' }
-      );
-    }
-    return;
-  }
-  
-  // New user without start parameter — show available clinics
-  const { data: allClinics } = await supabase
-    .from('clients')
-    .select('id, name')
-    .order('name');
-  
-  if (!allClinics || allClinics.length === 0) {
-    await ctx.reply('❌ No clinics found. Contact Pixel Vault support.');
-    return;
-  }
-  
-  const keyboard = allClinics.map(c => [{ text: c.name, callback_data: `link_clinic:${c.id}` }]);
-  await ctx.reply(
-    `👋 Welcome to Moon Hands, ${name}!\n\n` +
-    `Which clinic are you from?`,
-    { reply_markup: { inline_keyboard: keyboard } }
-  );
-}));
+// NOTE: /menu and /start handlers are defined above (combined admin + clinic staff).
+// Clinic staff linking via /start GLOW001 and quick menu are handled there.
+// The QUICK_MENU_KEYBOARD definition above is used by those combined handlers.
 
 // ─── INLINE KEYBOARD CALLBACK HANDLER ────────────────────────────
 // Handles taps on inline buttons (e.g., "▶️ Resume Bot", "🔄 Suggest Alternative")

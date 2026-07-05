@@ -3,17 +3,16 @@
  * 
  * /approve <phone> - Approve a pending booking
  * /reject <phone> [reason] - Reject a pending booking
- * /pending - List all pending bookings (scoped to user's clinic)
+ * /pending - List all pending bookings
  * 
- * SECURITY: All approval commands are scoped to the clinic(s)
- * the user's Telegram chat_id is linked to. Cross-clinic access
- * is blocked at the query level.
+ * These commands are used by clinic staff to approve/reject
+ * bookings that require manual approval.
  */
 
 const db = require('../../supabase/client');
 const { sendApprovalConfirmation } = require('../../jobs/reminders');
 
-// ─── AUTHORIZATION HELPER ────────────────────────────────────────
+// ─── AUTHORIZATION HELPERS ───────────────────────────────────────
 // Every approval command MUST verify the user is authorized for
 // the clinic that owns the booking. This prevents cross-clinic PII leaks.
 

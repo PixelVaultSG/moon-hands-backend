@@ -26,7 +26,6 @@ const MAX_PENDING_ALTS = 1000; // Security: prevent memory exhaustion
 function setPendingAlternative(chatId, bookingId) {
   // Security: enforce max size with LRU eviction
   if (pendingAlternatives.size >= MAX_PENDING_ALTS) {
-    // Evict oldest entry
     const oldestKey = pendingAlternatives.keys().next().value;
     pendingAlternatives.delete(oldestKey);
     console.warn('[BOOKING_NOTIFY] pendingAlternatives at max size, evicted oldest entry');
@@ -128,7 +127,6 @@ async function notifyBookingCreated(appointment, clinicConfig) {
 
 /**
  * Send notification when a booking is cancelled.
- * SECURITY: Uses multi-clinic sender — scoped to clinic's telegram_chat_ids[]
  */
 async function notifyBookingCancelled(appointment, clinicConfig, reason = '') {
   const dateStr = formatDateSG(appointment.date);
@@ -150,7 +148,6 @@ async function notifyBookingCancelled(appointment, clinicConfig, reason = '') {
   if (clinicId) {
     await sendClinicNotification(clinicId, message);
   } else {
-    // Fallback: admin-only (should never happen in production)
     console.warn('[BOOKING_NOTIFY] notifyBookingCancelled called without clinicId — sending admin-only');
     await sendAdminOnly(message);
   }
@@ -158,7 +155,6 @@ async function notifyBookingCancelled(appointment, clinicConfig, reason = '') {
 
 /**
  * Send notification when a booking is rescheduled.
- * SECURITY: Uses multi-clinic sender — scoped to clinic's telegram_chat_ids[]
  */
 async function notifyBookingRescheduled(oldAppt, newAppt, clinicConfig) {
   const oldDate = formatDateSG(oldAppt.date);
