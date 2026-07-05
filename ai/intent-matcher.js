@@ -94,10 +94,12 @@ const INTENT_PATTERNS = {
   },
 
   service_list: {
-    // Handles: "what services do you offer", "what do you have?", "what treatment do you offer",
+    // Handles: "what services do you offer", "what treatment do you offer",
     // "show me your treatments", "what can you do?", "list of services"
-    regex: /(?:what|wat|which)\s+(?:services|treatments|procedures|things?)\s+(?:do\s+(?:you|u)\s+(?:offer|have)|are\s+(?:available|there|offered))|what\s+(?:do\s+(?:you|u)\s+(?:do|offer|have)|can\s+(?:you|u)\s+do)|list\s+(?:of\s+)?(?:services|treatments|procedures)|(?:show|give|tell)\s+me\s+(?:the\s+)?(?:services|treatments|menu|list|options)|(?:what|wat)\s+(?:do\s+(?:you|u)\s+)?have[?\s]*$/i,
-    keywords: ['what services', 'what treatments', 'what do you offer', 'what do you have', 'list of services', 'wat services', 'show me', 'what can you do'],
+    // CRITICAL: "treatment" and "service" are INTERCHANGEABLE — patients use both.
+    // Both singular and plural forms must match. "treatment info" also included.
+    regex: /(?:what|wat|which)\s+(?:services?|treatments?)\s+(?:do\s+(?:you|u)\s+(?:offer|have)|are\s+(?:available|there|offered)|info)|what\s+(?:do\s+(?:you|u)\s+(?:do|offer|have)|can\s+(?:you|u)\s+do)|list\s+(?:of\s+)?(?:services?|treatments?|procedures)|(?:show|give|tell)\s+me\s+(?:the\s+)?(?:services?|treatments?|menu|list|options)|(?:what|wat)\s+(?:do\s+(?:you|u)\s+)?have[?\s]*$|(?:treatment|service)\s+(?:list|menu|info)/i,
+    keywords: ['what services', 'what treatments', 'what treatment', 'treatment info', 'what do you offer', 'what do you have', 'list of services', 'list of treatments', 'wat services', 'show me', 'what can you do', 'treatment list', 'service list'],
     weight: 0.9,
   },
   

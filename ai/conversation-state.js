@@ -10,6 +10,7 @@ const TTL_MS = 60 * 60 * 1000;
 const BOOKING_STATES = {
   IDLE: 'idle',
   MULTI_INTENT_CONFIRM: 'multi_intent_confirm',
+  BOOKING_OFFERED: 'booking_offered',  // Bot offered to help with booking, awaiting Yes/No
   AWAITING_DATE: 'awaiting_date',
   AWAITING_TIME: 'awaiting_time',
   AWAITING_TREATMENT: 'awaiting_treatment',

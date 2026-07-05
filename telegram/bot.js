@@ -324,6 +324,312 @@ bot.command('threats', safeHandler('/threats', commands.handleThreats));
 bot.command('authlog', safeHandler('/authlog', commands.handleAuthLog));
 bot.command('debug', safeHandler('/debug', commands.handleDebug));
 
+// ─── STAFF TAKEOVER COMMANDS ─────────────────────────────────────
+// Allow clinic staff to pause/resume bot per-patient to prevent
+// bot↔staff double-reply conflicts when staff manually replies.
+
+const {
+  handlePauseCommand,
+  handleResumeCommand,
+  handleStatusCommand,
+  handleTakeoverCommand
+} = require('../middleware/staff-takeover');
+
+bot.command('patientpause', safeHandler('/patientpause', async (ctx) => {
+  const text = ctx.message.text;
+  const chatId = ctx.chat.id;
+  // For multi-clinic: resolve clinic from chat context
+  // For now, pass null (staff-takeover handles null clinicId)
+  await handlePauseCommand(bot.telegram, chatId, text, null);
+}));
+
+bot.command('patientresume', safeHandler('/patientresume', async (ctx) => {
+  const text = ctx.message.text;
+  const chatId = ctx.chat.id;
+  await handleResumeCommand(bot.telegram, chatId, text);
+}));
+
+bot.command('patientstatus', safeHandler('/patientstatus', async (ctx) => {
+  const chatId = ctx.chat.id;
+  await handleStatusCommand(bot.telegram, chatId, null);
+}));
+
+bot.command('takeover', safeHandler('/takeover', async (ctx) => {
+  const text = ctx.message.text;
+  const chatId = ctx.chat.id;
+  await handleTakeoverCommand(bot.telegram, chatId, text, null);
+}));
+
+// ─── QUICK MENU KEYBOARD ─────────────────────────────────────────
+// ReplyKeyboardMarkup with emoji buttons for common actions
+// Matches the screenshot style: green grid buttons with icons
+
+// ─── QUICK MENU KEYBOARD ─────────────────────────────────────────
+// ReplyKeyboardMarkup with emoji buttons for clinic staff.
+// DESIGN DECISION: Only show buttons clinic staff NEED for daily ops.
+// DELIBERATELY EXCLUDED (business optics):
+//   - 📈 Usage (could make clinics question subscription value)
+//   - 🛡️ Security (internal Moon Hands concern, not clinic's)
+//   - ➕ Add Service / 💰 Update Price / 🕐 Update Hours 
+//     (clinic submits REQUEST, Moon Hands approves and applies)
+//
+// This prevents:
+//   1. Clinics seeing low usage → unsubscribing
+//   2. Clinics breaking bot with invalid data entry
+//   3. No audit trail of who changed what
+
+const QUICK_MENU_KEYBOARD = {
+  keyboard: [
+    [{ text: '📊 Status' }, { text: '⚙️ View Config' }, { text: '📝 Request Changes' }],
+    [{ text: '⏸️ Pause AI' }, { text: '▶️ Resume AI' }, { text: '📋 My Bookings' }],
+    [{ text: '❓ Help' }],
+  ],
+  resize_keyboard: true,
+  one_time_keyboard: false,
+};
+
+// Send menu on /menu command
+bot.command('menu', safeHandler('/menu', async (ctx) => {
+  await ctx.reply(
+    '📱 *Moon Hands Quick Menu*\n\n' +
+    'Tap any button to manage your clinics.',
+    {
+      parse_mode: 'Markdown',
+      reply_markup: QUICK_MENU_KEYBOARD
+    }
+  );
+}));
+
+// ─── /START COMMAND — CLINIC LINKING ─────────────────────────────
+// Handles both:
+//   /start          — Returning user (already linked)
+//   /start GLOW001  — New user linking to clinic from onboarding
+
+bot.start(safeHandler('/start', async (ctx) => {
+  const chatId = ctx.chat.id;
+  const name = ctx.from.first_name || 'there';
+  const startParam = ctx.payload; // e.g., "GLOW001" from /start GLOW001
+  
+  // Import here to avoid circular deps
+  const { linkChatToClinic, getClinicTelegramChats } = require('./multi-clinic-sender');
+  
+  // Check if this chat is already linked to any clinic
+  const { supabase } = require('../server/supabase/client');
+  const { data: linkedClinics } = await supabase
+    .from('clients')
+    .select('id, name, telegram_chat_ids')
+    .contains('telegram_chat_ids', [chatId]);
+  
+  // If linked to exactly 1 clinic → show menu
+  if (linkedClinics && linkedClinics.length === 1 && !startParam) {
+    await ctx.reply(
+      `👋 Welcome back, ${name}!\n\n` +
+      `You're linked to *${linkedClinics[0].name}*.`,
+      { parse_mode: 'Markdown', reply_markup: QUICK_MENU_KEYBOARD }
+    );
+    return;
+  }
+  
+  // If linked to multiple clinics → ask which one (edge case)
+  if (linkedClinics && linkedClinics.length > 1 && !startParam) {
+    const keyboard = linkedClinics.map(c => [{ text: c.name, callback_data: `select_clinic:${c.id}` }]);
+    await ctx.reply(
+      `👋 Welcome back, ${name}!\n\n` +
+      `You're linked to multiple clinics. Which one?`,
+      { reply_markup: { inline_keyboard: keyboard } }
+    );
+    return;
+  }
+  
+  // New user with start parameter (from onboarding link)
+  if (startParam) {
+    const result = await linkChatToClinic(chatId, startParam);
+    if (result.success) {
+      await ctx.reply(
+        `👋 Welcome, ${name}!\n\n` +
+        `You're now linked to *${result.clinicName}*.\n\n` +
+        `You'll receive booking notifications and alerts for this clinic.`,
+        { parse_mode: 'Markdown', reply_markup: QUICK_MENU_KEYBOARD }
+      );
+    } else {
+      await ctx.reply(
+        `❌ Could not link to clinic: ${result.error}\n\n` +
+        `Please contact Pixel Vault support.`,
+        { parse_mode: 'Markdown' }
+      );
+    }
+    return;
+  }
+  
+  // New user without start parameter — show available clinics
+  const { data: allClinics } = await supabase
+    .from('clients')
+    .select('id, name')
+    .order('name');
+  
+  if (!allClinics || allClinics.length === 0) {
+    await ctx.reply('❌ No clinics found. Contact Pixel Vault support.');
+    return;
+  }
+  
+  const keyboard = allClinics.map(c => [{ text: c.name, callback_data: `link_clinic:${c.id}` }]);
+  await ctx.reply(
+    `👋 Welcome to Moon Hands, ${name}!\n\n` +
+    `Which clinic are you from?`,
+    { reply_markup: { inline_keyboard: keyboard } }
+  );
+}));
+
+// ─── INLINE KEYBOARD CALLBACK HANDLER ────────────────────────────
+// Handles taps on inline buttons (e.g., "▶️ Resume Bot", "🔄 Suggest Alternative")
+
+bot.on('callback_query', safeHandler('callback_query', async (ctx) => {
+  const data = ctx.callbackQuery.data;
+  const chatId = ctx.callbackQuery.message.chat.id;
+  
+  // ── Resume bot for patient ──
+  if (data.startsWith('resume:')) {
+    const phone = data.replace('resume:', '');
+    const result = require('../middleware/staff-takeover').resumeBot(phone);
+    
+    if (result.success) {
+      await ctx.answerCbQuery(`Bot resumed for ${result.patientPhone}`);
+      await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
+      await ctx.reply(`🔊 Bot resumed for ${result.patientPhone}. The bot will now auto-reply to this patient again.`);
+    } else {
+      await ctx.answerCbQuery(result.error);
+    }
+    return;
+  }
+  
+  // ── Clinic linking ──
+  if (data.startsWith('link_clinic:') || data.startsWith('select_clinic:')) {
+    const clinicId = data.split(':')[1];
+    const { linkChatToClinic } = require('./multi-clinic-sender');
+    const result = await linkChatToClinic(chatId, clinicId);
+    
+    if (result.success) {
+      await ctx.answerCbQuery(`Linked to ${result.clinicName}`);
+      await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
+      await ctx.reply(
+        `✅ You're now linked to *${result.clinicName}*!`,
+        { parse_mode: 'Markdown', reply_markup: QUICK_MENU_KEYBOARD }
+      );
+    } else {
+      await ctx.answerCbQuery('Failed to link');
+      await ctx.reply(`❌ ${result.error}`);
+    }
+    return;
+  }
+  
+  // ── Suggest alternative timeslot ──
+  // Step 1: Clinic taps "🔄 Suggest Alternative" on booking notification
+  if (data.startsWith('suggest_alt_')) {
+    const bookingId = data.replace('suggest_alt_', '');
+    // Store that this chat is now in "suggesting alternative" mode for this booking
+    // We'll use a simple in-memory map (clinic staff chat_id → booking_id)
+    const pendingAlts = require('./booking-notifications').pendingAlternatives;
+    pendingAlts.set(chatId, bookingId);
+    
+    await ctx.answerCbQuery('Suggesting alternative time');
+    await ctx.reply(
+      `🔄 *Suggest Alternative Time*\n\n` +
+      `Please reply with the alternative time you'd like to offer:\n\n` +
+      `Examples:\n` +
+      `• "Wednesday 3pm"\n` +
+      `• "Tomorrow at 2:30pm"\n` +
+      `• "Next Monday 10am"`,
+      { parse_mode: 'Markdown' }
+    );
+    return;
+  }
+  
+  // ── Patient confirms alternative timeslot ──
+  if (data.startsWith('confirm_alt_')) {
+    const bookingId = data.replace('confirm_alt_', '');
+    // Forward to booking confirmation handler
+    const { handlePatientConfirmAlternative } = require('./booking-notifications');
+    await handlePatientConfirmAlternative(ctx, bookingId);
+    return;
+  }
+}));
+
+// ─── BUTTON TEXT HANDLERS ────────────────────────────────────────
+// These handle taps on the ReplyKeyboard buttons (not /commands)
+
+bot.hears('📊 Status', safeHandler('📊 Status', async (ctx) => {
+  await handleStatusCommand(bot.telegram, ctx.chat.id, null);
+}));
+
+bot.hears('⚙️ View Config', safeHandler('⚙️ View Config', async (ctx) => {
+  await commands.handleViewConfig(ctx);
+}));
+
+bot.hears('📝 Request Changes', safeHandler('📝 Request Changes', async (ctx) => {
+  await ctx.reply(
+    '📝 *Request Changes to Your Clinic Setup*\n\n' +
+    'Moon Hands manages all changes to ensure your bot works perfectly.\n\n' +
+    '*Reply with your request in this format:*\n' +
+    '```\n' +
+    'ADD TREATMENT:\n' +
+    'Name: [treatment name]\n' +
+    'Price: [price]\n' +
+    'Duration: [minutes]\n' +
+    'Description: [brief description]\n\n' +
+    'OR\n\n' +
+    'UPDATE HOURS:\n' +
+    'Monday: 10:00-20:00\n' +
+    'Tuesday: 10:00-20:00\n' +
+    '(etc)\n\n' +
+    'OR\n\n' +
+    'UPDATE PRICE:\n' +
+    'Treatment: [name]\n' +
+    'New Price: [price]\n' +
+    '```\n\n' +
+    'Your request will be reviewed and applied within 24 hours.',
+    { parse_mode: 'Markdown' }
+  );
+}));
+
+bot.hears('⏸️ Pause AI', safeHandler('⏸️ Pause AI', async (ctx) => {
+  await ctx.reply(
+    '⏸️ *Pause Bot for a Patient*\n\n' +
+    'Send the patient\'s phone number:\n' +
+    '`/patientpause +6581234567`',
+    { parse_mode: 'Markdown' }
+  );
+}));
+
+bot.hears('▶️ Resume AI', safeHandler('▶️ Resume AI', async (ctx) => {
+  await ctx.reply(
+    '▶️ *Resume Bot for a Patient*\n\n' +
+    'Send the patient\'s phone number:\n' +
+    '`/patientresume +6581234567`',
+    { parse_mode: 'Markdown' }
+  );
+}));
+
+bot.hears('📋 My Bookings', safeHandler('📋 My Bookings', async (ctx) => {
+  await commands.handleClients(ctx);
+}));
+
+bot.hears('❓ Help', safeHandler('❓ Help', async (ctx) => {
+  await ctx.reply(
+    '📖 *Moon Hands Help*\n\n' +
+    '*Staff Controls:*\n' +
+    '`/patientpause <phone>` — Pause bot for patient\n' +
+    '`/patientresume <phone>` — Resume bot for patient\n' +
+    '`/patientstatus` — List paused conversations\n' +
+    '`/takeover <phone>` — Take over conversation\n\n' +
+    '*What these do:*\n' +
+    'When you need to reply to a patient manually (e.g., complaint, complex question), pause the bot first so the patient doesn\'t get two conflicting replies.\n\n' +
+    '*Requesting Changes:*\n' +
+    'Tap 📝 Request Changes to submit changes to your treatments, pricing, or hours. Moon Hands reviews and applies them to ensure everything works correctly.\n\n' +
+    'Need help? Contact Pixel Vault support.',
+    { parse_mode: 'Markdown' }
+  );
+}));
+
 // ─── APPOINTMENT ATTENDANCE CALLBACKS ────────────────────────────
 // YES/NO buttons from daily booking summary
 

@@ -115,6 +115,14 @@ async function routeMessage(message, clinicConfig, patientPhone = null, conversa
   
   // Check if this should go to OpenAI
   if (AI_ONLY_INTENTS.includes(primaryIntent.intent) || primaryIntent.confidence < 0.7) {
+    // BEFORE sending to OpenAI: check if message contains booking fields
+    // (date + time or date + treatment) even without explicit booking words
+    // e.g., "Next Tue at 9pm for both treatments" → should start booking flow
+    const fields = extractBookingFields(message);
+    if (fields.date && (fields.time || fields.treatment)) {
+      console.log(`[SMART_ROUTER] Message has booking fields (date+${fields.time ? 'time' : 'treatment'}) but intent was '${primaryIntent.intent}' — routing to booking flow`);
+      return await startBookingFlow(message, clinicConfig, patientPhone, conversationHistory, startTime);
+    }
     return await routeToOpenAI(message, clinicConfig, conversationHistory, matchedIntents, startTime);
   }
   
@@ -152,6 +160,25 @@ async function routeMessage(message, clinicConfig, patientPhone = null, conversa
     });
     
     if (response) {
+      // Check if the response offers booking assistance — if so, set BOOKING_OFFERED state
+      // so a subsequent "Yes" from the patient enters the booking flow instead of resetting
+      const bookingOfferPhrases = [
+        'would you like me to assist you with booking',
+        'would you like to book',
+        'would you like me to help you book',
+        'shall i help you book',
+        'would you like to schedule',
+        'would you like me to check availability',
+        'would you like to make a booking'
+      ];
+      const lowerResponse = response.toLowerCase();
+      if (bookingOfferPhrases.some(phrase => lowerResponse.includes(phrase))) {
+        // Extract any booking data from the conversation that we might need
+        const existingData = getState(patientPhone).data || {};
+        setState(patientPhone, BOOKING_STATES.BOOKING_OFFERED, existingData);
+        console.log(`[SMART_ROUTER] Set BOOKING_OFFERED state for ${patientPhone.slice(-4)} (response contained booking offer)`);
+      }
+      
       return {
         text: response,
         source: 'hardcoded',
@@ -360,6 +387,7 @@ function combineResponses(responses) {
 
 function isBookingState(state) {
   return [
+    BOOKING_STATES.BOOKING_OFFERED,
     BOOKING_STATES.AWAITING_DATE,
     BOOKING_STATES.AWAITING_TIME,
     BOOKING_STATES.AWAITING_TREATMENT,
@@ -466,6 +494,35 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
   }
   
   switch (currentState.state) {
+    case BOOKING_STATES.BOOKING_OFFERED:
+      // Bot offered to help with booking ("Would you like me to assist with booking?")
+      // Patient replied — check if Yes or No
+      if (isConfirmation(message)) {
+        // Patient confirmed — start booking flow, preserve any data from offer
+        const offerData = currentState.data || {};
+        if (offerData.date && offerData.time && offerData.treatment) {
+          // All fields already collected! Show confirmation summary
+          return await attemptBooking(clinicConfig, patientPhone, offerData, conversationHistory, startTime);
+        }
+        if (offerData.date) {
+          setState(patientPhone, BOOKING_STATES.AWAITING_TIME, { date: offerData.date, treatment: offerData.treatment });
+          return { text: `Great! ${offerData.date} noted. What time works for you?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+        }
+        if (offerData.treatment) {
+          setState(patientPhone, BOOKING_STATES.AWAITING_DATE, { treatment: offerData.treatment });
+          return { text: `Perfect! What date works for your ${offerData.treatment} appointment?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+        }
+        setState(patientPhone, BOOKING_STATES.AWAITING_DATE, {});
+        return { text: `Excellent! What date works for you? (e.g., 'next Tuesday' or 'July 15')`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+      } else if (isDenial(message)) {
+        resetIdle(patientPhone);
+        return { text: `No problem! Feel free to ask about our treatments, pricing, or anything else.`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+      } else {
+        // Patient said something else (not Yes/No) — treat as booking intent with data
+        resetIdle(patientPhone);
+        return await startBookingFlow(message, clinicConfig, patientPhone, conversationHistory, startTime);
+      }
+    
     case BOOKING_STATES.AWAITING_DATE:
       if (!data.date) {
         return { text: "Sorry, I didn't catch the date. Could you say it again? (e.g., 'next Tuesday' or 'May 27')", source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };

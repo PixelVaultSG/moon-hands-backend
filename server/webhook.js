@@ -34,6 +34,7 @@ const { generateICalFeed } = require('../utils/ical-generator');
 const { recordMessage, recordRateLimit, recordLoop, recordError } = require('../monitoring/uptime-metrics');
 const { checkLimit, trackSpend } = require('../middleware/cost-protection');
 const { logEvent, getDeviceFingerprint, classifyActor } = require('../monitoring/audit-system');
+const { isStaffActive, pauseBot, shouldAutoPause } = require('../middleware/staff-takeover');
 
 // ─── RESPONSE SANITIZER (post-process OpenAI output) ─────────────
 // Strips forbidden phrases (Hello!, Welcome, etc.) that OpenAI keeps generating.
@@ -123,6 +124,51 @@ async function sendClinicCostAlert(clinicId, type, reason, isDouble = false) {
     }
   } catch (err) {
     // Clinic may not have telegram_chat_id configured — that's ok, admin still gets it
+  }
+}
+
+// ─── STAFF TAKEOVER NOTIFICATION ─────────────────────────────────
+// Notifies clinic staff via Telegram when bot auto-pauses on complaint/human_handoff
+// so they can manually take over the conversation.
+
+async function notifyStaffTakeover(clinicId, patientPhone, intent, patientMessage) {
+  const botToken = process.env.TELEGRAM_BOT_TOKEN;
+  if (!botToken) return;
+  
+  const emoji = intent === 'complaint' ? '😠' : '👤';
+  const title = intent === 'complaint' ? 'Complaint detected' : 'Human handoff requested';
+  const action = intent === 'complaint' ? 'is unhappy and may need personal attention' : 'wants to speak to a staff member';
+  
+  const message = [
+    `${emoji} *${title} — Bot auto-paused*`,
+    ``,
+    `Patient: \`${patientPhone}\``,
+    ``,
+    `*Message:* "${patientMessage.substring(0, 100)}${patientMessage.length > 100 ? '...' : ''}"`,
+    ``,
+    `The patient ${action}. The bot has automatically paused and will NOT reply to this patient until you resume it.`,
+    ``,
+    `*What you can do:*`,
+    `1️⃣ Reply to the patient from your WhatsApp Business app (same WABA number your patients use)`,
+    `2️⃣ When done, send \`/resume ${patientPhone}\` to let the bot take over again`,
+    `3️⃣ Or send \`/takeover ${patientPhone}\` to keep the bot paused indefinitely`,
+    ``,
+    `⏰ Bot auto-resumes in 30 minutes if you don't action.`,
+  ].join('\n');
+  
+  // Send via multi-clinic sender (scopes to clinic's telegram_chat_ids + admin copy)
+  try {
+    const { sendClinicNotification } = require('./telegram/multi-clinic-sender');
+    await sendClinicNotification(clinicId, message, {
+      replyMarkup: {
+        inline_keyboard: [[
+          { text: '▶️ Resume Bot', callback_data: `resume:${patientPhone}` }
+        ]]
+      }
+    });
+    console.log(`[STAFF_TAKEOVER] Multi-clinic notification sent for ${patientPhone.slice(-4)}`);
+  } catch (err) {
+    console.error('[STAFF_TAKEOVER] Failed to send multi-clinic notification:', err.message);
   }
 }
 
@@ -573,11 +619,28 @@ async function handleWebhook(req, res, channel, url) {
     const clinicName = preResolvedClinicName || null;
     addTrace(message.from, 'CLIENT', clientId ? 'RESOLVED' : 'NOT_FOUND', `${clinicName || ''} ${clientId || ''}`.trim());
     
+    // ─── LAYER 9.6: STAFF TAKEOVER CHECK ────────────────────────────
+    // If clinic staff has manually taken over this conversation (via Telegram
+    // /pause or auto-detection), the bot stays completely silent.
+    // This prevents bot↔staff double-reply conflicts.
+    const staffCheck = isStaffActive(message.from);
+    if (staffCheck.active) {
+      console.log(`[STAFF_TAKEOVER] Silent for ${message.from.slice(-4)} | reason: ${staffCheck.reason} | elapsed: ${Math.round((Date.now()-staffCheck.pausedAt)/60000)}min`);
+      addTrace(message.from, 'STAFF_TAKEOVER', 'SILENT', staffCheck.reason);
+      return sendSecurityResponse(res, 200, 'Staff takeover — bot silent', {
+        processed: false,
+        reason: 'STAFF_TAKEOVER',
+        staffActive: true
+      });
+    }
+    
     // Layer 10: Route to appropriate AI handler
     let response;
+    let matchedIntent = null;
     console.log(`[WEBHOOK:${channel}] Routing to AI: clientId=${clientId?.slice(0, 8)}, text="${sanitizedText.substring(0, 50)}"`);
     try {
       response = await routeToAI(sanitizedText, message, channel, clientId);
+      matchedIntent = response?.intent || null;
       console.log(`[WEBHOOK:${channel}] AI responded: len=${response?.text?.length}, fn=${response?.function_called || 'none'}, model=${response?.model || 'unknown'}`);
       addTrace(message.from, 'AI', 'RESPONSE', `len=${response.text?.length}, fn=${response.function_called || 'none'}`);
     } catch (aiErr) {
@@ -586,6 +649,17 @@ async function handleWebhook(req, res, channel, url) {
       addTrace(message.from, 'AI', 'ERROR', aiErr.message);
       recordError(`AI routing: ${aiErr.message}`);
       response = { text: "I'm having a moment. Please try again shortly.", channel, ai_processed: false };
+    }
+    
+    // ─── LAYER 10.5: AUTO-PAUSE ON COMPLAINT/HUMAN_HANDOFF ──────────
+    // If the patient is complaining or asking for a human, auto-pause the bot
+    // so staff can take over without the bot interrupting. The bot still sends
+    // ONE acknowledgment response, then stays silent until staff resumes.
+    if (matchedIntent && shouldAutoPause(matchedIntent, message.from, clientId)) {
+      console.log(`[STAFF_TAKEOVER] Auto-paused ${message.from.slice(-4)} after intent: ${matchedIntent}`);
+      addTrace(message.from, 'STAFF_TAKEOVER', 'AUTO_PAUSED', matchedIntent);
+      // Notify clinic staff via Telegram that they should take over
+      notifyStaffTakeover(clientId, message.from, matchedIntent, sanitizedText);
     }
     
     // Record outgoing message for loop detection (tracks our responses)

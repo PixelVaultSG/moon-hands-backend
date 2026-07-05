@@ -13,6 +13,15 @@ const { formatDateSG, formatTimeSG, getDayName } = require('../utils/date-helper
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const ADMIN_CHAT_ID = process.env.TELEGRAM_ADMIN_CHAT_ID;
 
+// Multi-clinic notification sender (enforces clinic isolation)
+const { sendClinicNotification, sendAdminOnly } = require('./multi-clinic-sender');
+
+// ─── PENDING ALTERNATIVES TRACKING ───────────────────────────────
+// Maps: clinic staff chat_id → { bookingId, clinicId, timestamp }
+// Used when clinic staff suggests an alternative timeslot
+const pendingAlternatives = new Map();
+const ALT_TIMEOUT_MS = 10 * 60 * 1000; // 10 minute timeout
+
 // ─── TELEGRAM SEND HELPER ────────────────────────────────────────
 
 async function sendTelegramMessage(text, chatId = ADMIN_CHAT_ID, replyMarkup = undefined) {
@@ -66,14 +75,26 @@ async function notifyBookingCreated(appointment, clinicConfig) {
   ].filter(Boolean).join('\n');
   
   // Add inline buttons for pending bookings
+  const clinicId = clinicConfig.id || clinicConfig.clinic_id || null;
   const replyMarkup = appointment.status === 'pending' ? {
-    inline_keyboard: [[
-      { text: '✅ Approve', callback_data: `approve_${apptId}` },
-      { text: '❌ Reject', callback_data: `reject_${apptId}` }
-    ]]
+    inline_keyboard: [
+      [
+        { text: '✅ Approve', callback_data: `approve_${apptId}` },
+        { text: '❌ Reject', callback_data: `reject_${apptId}` }
+      ],
+      [
+        { text: '🔄 Suggest Alternative Time', callback_data: `suggest_alt_${apptId}` }
+      ]
+    ]
   } : undefined;
   
-  await sendTelegramMessage(message, chatId, replyMarkup);
+  // Send via multi-clinic sender (scopes to clinic's telegram_chat_ids + admin copy)
+  if (clinicId) {
+    await sendClinicNotification(clinicId, message, { replyMarkup });
+  } else {
+    // Fallback for legacy calls without clinicId
+    await sendTelegramMessage(message, chatId, replyMarkup);
+  }
 }
 
 /**
@@ -344,6 +365,117 @@ async function sendDailyClosingSummary(clinicConfig, supabase) {
   await sendTelegramMessage(message, chatId);
 }
 
+// ─── ALTERNATIVE TIMESLOT FLOW ───────────────────────────────────
+
+/**
+ * Step 1: Clinic staff suggests an alternative time
+ * Called when clinic replies to the "Suggest Alternative Time" prompt
+ */
+async function handleClinicSuggestAlternative(staffChatId, alternativeTimeText) {
+  const pending = pendingAlternatives.get(staffChatId);
+  if (!pending) {
+    return { success: false, error: 'No pending alternative suggestion. Please tap 🔄 Suggest Alternative on the booking notification first.' };
+  }
+  
+  // Check timeout
+  if (Date.now() - pending.timestamp > ALT_TIMEOUT_MS) {
+    pendingAlternatives.delete(staffChatId);
+    return { success: false, error: 'Alternative suggestion timed out. Please try again.' };
+  }
+  
+  try {
+    // Get booking details
+    const { data: booking } = await supabase
+      .from('appointments')
+      .select('*')
+      .eq('id', pending.bookingId)
+      .single();
+    
+    if (!booking) {
+      pendingAlternatives.delete(staffChatId);
+      return { success: false, error: 'Booking not found.' };
+    }
+    
+    // Store the alternative in the booking record
+    await supabase
+      .from('appointments')
+      .update({ 
+        alternative_time_suggested: alternativeTimeText,
+        status: 'pending_alternative' 
+      })
+      .eq('id', pending.bookingId);
+    
+    // Clear pending
+    pendingAlternatives.delete(staffChatId);
+    
+    // Send alternative to patient via WhatsApp
+    const { sendWhatsAppMessage } = require('../server/whatsapp');
+    await sendWhatsAppMessage(
+      booking.patient_phone,
+      `📅 *Alternative Time Suggested*\n\n` +
+      `Your clinic suggests: *${alternativeTimeText}*\n\n` +
+      `Would this work for you? Reply YES to confirm, or suggest another time.`,
+      booking.clinic_id
+    );
+    
+    return { success: true, booking, alternativeTime: alternativeTimeText };
+  } catch (err) {
+    console.error('[BOOKING_NOTIFY] Alternative suggestion error:', err.message);
+    return { success: false, error: 'Failed to process alternative suggestion.' };
+  }
+}
+
+/**
+ * Step 2: Patient confirms the alternative time
+ * Called when patient replies "YES" to the alternative time suggestion
+ */
+async function handlePatientConfirmAlternative(bookingId) {
+  try {
+    const { data: booking } = await supabase
+      .from('appointments')
+      .select('*')
+      .eq('id', bookingId)
+      .single();
+    
+    if (!booking || !booking.alternative_time_suggested) {
+      return { success: false, error: 'No alternative time found for this booking.' };
+    }
+    
+    // Update booking: confirmed with alternative time
+    await supabase
+      .from('appointments')
+      .update({ 
+        status: 'confirmed',
+        notes: (booking.notes || '') + ` | Alternative time: ${booking.alternative_time_suggested}`
+      })
+      .eq('id', bookingId);
+    
+    // Notify clinic staff
+    const { data: client } = await supabase
+      .from('clients')
+      .select('id')
+      .eq('id', booking.clinic_id)
+      .single();
+    
+    if (client) {
+      await sendClinicNotification(
+        client.id,
+        `✅ *Patient Accepted Alternative Time*\n\n` +
+        `👤 ${escapeMarkdown(booking.patient_name || 'Patient')}\n` +
+        `📅 New time: *${booking.alternative_time_suggested}*\n` +
+        `🩺 ${escapeMarkdown(booking.treatment || 'General consultation')}\n\n` +
+        `Booking confirmed.`,
+        { includeAdmin: true }
+      );
+    }
+    
+    return { success: true, booking };
+  } catch (err) {
+    console.error('[BOOKING_NOTIFY] Patient confirm alternative error:', err.message);
+    return { success: false, error: 'Failed to confirm alternative.' };
+  }
+}
+
 // ─── EXPORTS ─────────────────────────────────────────────────────
 
 module.exports = {
@@ -353,4 +485,7 @@ module.exports = {
   sendWeeklyRoundup,
   sendDailyClosingSummary,
   isSlotAvailable,
+  pendingAlternatives,
+  handleClinicSuggestAlternative,
+  handlePatientConfirmAlternative,
 };
