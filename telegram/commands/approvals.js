@@ -3,14 +3,38 @@
  * 
  * /approve <phone> - Approve a pending booking
  * /reject <phone> [reason] - Reject a pending booking
- * /pending - List all pending bookings
+ * /pending - List all pending bookings (scoped to user's clinic)
  * 
- * These commands are used by clinic staff to approve/reject
- * bookings that require manual approval.
+ * SECURITY: All approval commands are scoped to the clinic(s)
+ * the user's Telegram chat_id is linked to. Cross-clinic access
+ * is blocked at the query level.
  */
 
 const db = require('../../supabase/client');
 const { sendApprovalConfirmation } = require('../../jobs/reminders');
+
+// ─── AUTHORIZATION HELPER ────────────────────────────────────────
+// Every approval command MUST verify the user is authorized for
+// the clinic that owns the booking. This prevents cross-clinic PII leaks.
+
+async function getAuthorizedClinicIds(chatId) {
+  try {
+    const { data: linkedClinics } = await db.supabase
+      .from('clients')
+      .select('id')
+      .contains('telegram_chat_ids', [chatId]);
+    return linkedClinics?.map(c => c.id) || [];
+  } catch (err) {
+    console.error('[APPROVALS AUTH] Failed to resolve clinic IDs:', err.message);
+    return [];
+  }
+}
+
+async function isAuthorizedForBooking(chatId, bookingClientId) {
+  const clinicIds = await getAuthorizedClinicIds(chatId);
+  // Admin (no linked clinics) can access all; clinic staff only their own
+  return clinicIds.length === 0 || clinicIds.includes(bookingClientId);
+}
 
 // ─── /PENDING ─────────────────────────────────────────────────────
 
@@ -18,11 +42,27 @@ async function handlePending(bot, msg) {
   const chatId = msg.chat.id;
   
   try {
-    const { data: bookings } = await db.supabase
+    // SECURITY: Scope to clinics this user is authorized for
+    const clinicIds = await getAuthorizedClinicIds(chatId);
+    
+    let query = db.supabase
       .from('appointments')
       .select('*, clients(name)')
       .eq('status', 'pending_approval')
       .order('created_at', { ascending: true });
+    
+    // If user is linked to specific clinics, filter by those
+    if (clinicIds.length > 0) {
+      query = query.in('client_id', clinicIds);
+    }
+    // If clinicIds is empty, user is admin — show all (no filter)
+    
+    const { data: bookings, error } = await query;
+    
+    if (error) {
+      console.error('[APPROVALS] /pending DB error:', error.message);
+      return bot.sendMessage(chatId, 'Unable to fetch pending bookings. Please try again later.');
+    }
 
     if (!bookings || bookings.length === 0) {
       return bot.sendMessage(chatId, 'No pending bookings requiring approval.');
@@ -46,7 +86,7 @@ async function handlePending(bot, msg) {
 
   } catch (err) {
     console.error('[APPROVALS] /pending error:', err.message);
-    bot.sendMessage(chatId, 'Error fetching pending bookings.');
+    bot.sendMessage(chatId, 'Unable to process your request. Please try again later.');
   }
 }
 
@@ -208,6 +248,13 @@ async function handleApproveById(appointmentId, adminChatId) {
     if (error || !booking) {
       return { success: false, error: 'Booking not found' };
     }
+    
+    // SECURITY: Verify user is authorized for this booking's clinic
+    const authorized = await isAuthorizedForBooking(adminChatId, booking.client_id);
+    if (!authorized) {
+      console.warn(`[APPROVALS] UNAUTHORIZED approve attempt: chat ${adminChatId} tried to approve booking for clinic ${booking.client_id}`);
+      return { success: false, error: 'Not authorized for this clinic' };
+    }
 
     // Update to confirmed
     await db.supabase
@@ -269,6 +316,13 @@ async function handleRejectById(appointmentId, adminChatId) {
 
     if (error || !booking) {
       return { success: false, error: 'Booking not found' };
+    }
+    
+    // SECURITY: Verify user is authorized for this booking's clinic
+    const authorized = await isAuthorizedForBooking(adminChatId, booking.client_id);
+    if (!authorized) {
+      console.warn(`[APPROVALS] UNAUTHORIZED reject attempt: chat ${adminChatId} tried to reject booking for clinic ${booking.client_id}`);
+      return { success: false, error: 'Not authorized for this clinic' };
     }
 
     // Update to cancelled

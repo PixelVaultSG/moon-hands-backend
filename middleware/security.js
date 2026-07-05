@@ -100,6 +100,10 @@ function getSeverityScore(category) {
 function sanitizeInput(input) {
   if (!input || typeof input !== 'string') return '';
   
+  // SECURITY: Apply length limit FIRST to prevent ReDoS attacks
+  // via catastrophic regex backtracking on huge inputs
+  input = input.substring(0, 10000); // 10K max before any regex processing
+  
   return input
     // Remove HTML tags
     .replace(/<[^>]*>/g, '')
@@ -113,7 +117,7 @@ function sanitizeInput(input) {
     .replace(/\s+/g, ' ')
     // Trim
     .trim()
-    // Limit length (prevent DoS via huge input)
+    // Final length limit for output
     .substring(0, 4000);
 }
 

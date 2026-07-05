@@ -8,7 +8,7 @@ const cron = require('node-cron');
 const { Telegraf } = require('telegraf');
 const db = require('../supabase/client');
 const alerts = require('./alerts/templates');
-const security = require('../monitoring/security-monitor');
+const security = require('../security/monitor');
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 const ADMIN_CHAT_ID = process.env.TELEGRAM_ADMIN_CHAT_ID;

@@ -111,14 +111,16 @@ async function handleHelp(ctx) {
 
 async function handleClients(ctx) {
   try {
+    // SECURITY: Deliberately NOT selecting whatsapp_number
+    // to prevent cross-clinic PII exposure
     const { data: clients, error } = await db.supabase
       .from('clients')
-      .select('id, slug, name, status, whatsapp_number')
+      .select('id, slug, name, status')
       .order('created_at', { ascending: true });
 
     if (error) {
       console.error('[TELEGRAM /clients] DB Error:', error.message);
-      return ctx.reply(`⚠️ Database error: ${error.message}`);
+      return ctx.reply('⚠️ Unable to load clinics. Please try again later.');
     }
 
     if (!clients || clients.length === 0) {
@@ -148,8 +150,8 @@ ${clients.length} clinic(s) total`,
       Markup.inlineKeyboard(buttons)
     );
   } catch (err) {
-    console.error('[TELEGRAM /clients] DB Error:', err.message);
-    ctx.reply(`⚠️ Database error: ${err.message}`);
+    console.error('[TELEGRAM /clients] Error:', err.message);
+    ctx.reply('⚠️ Unable to process your request. Please try again later.');
   }
 }
 
@@ -190,12 +192,11 @@ async function showClinicMenu(ctx, slug) {
     ],
   ]);
 
+  // SECURITY: Do NOT expose whatsapp_number in Telegram UI
   await ctx.editMessageText(
     `${statusEmoji} *${client.name}* (${slug})
 ` +
     `Status: ${client.status}
-` +
-    `Phone: ${client.whatsapp_number || 'N/A'}
 
 ` +
     `Select an action:`,

@@ -138,23 +138,8 @@ const BACK_TO_MENU = Markup.inlineKeyboard([
   [Markup.button.callback('🔙 Back to Menu', 'menu_main')],
 ]);
 
-bot.start((ctx) => {
-  auditCommand(ctx.from.id, '/start', true);
-  ctx.reply(
-    `Moon Hands Admin Bot\n\n` +
-    `Welcome back, boss.\n\n` +
-    `Use /menu for the quick-action dashboard, or /help for full commands.`,
-    MENU_KEYBOARD
-  );
-});
-
-bot.command('menu', safeHandler('/menu', async (ctx) => {
-  await ctx.reply(
-    `📱 Moon Hands Quick Menu\n\n` +
-    `Tap any button to manage your clinics.`,
-    MENU_KEYBOARD
-  );
-}));
+// bot.start and bot.command('menu') handlers are defined below
+// alongside the clinic-linking /start handler and quick menu keyboard
 
 // ─── CALLBACK HANDLERS ───────────────────────────────────────────
 
@@ -407,7 +392,9 @@ bot.command('menu', safeHandler('/menu', async (ctx) => {
 
 bot.start(safeHandler('/start', async (ctx) => {
   const chatId = ctx.chat.id;
-  const name = ctx.from.first_name || 'there';
+  // SECURITY: Sanitize first_name to prevent Markdown injection
+  const { escapeMarkdown } = require('./booking-notifications');
+  const name = escapeMarkdown(ctx.from.first_name || 'there');
   const startParam = ctx.payload; // e.g., "GLOW001" from /start GLOW001
   
   // Import here to avoid circular deps
@@ -484,6 +471,16 @@ bot.start(safeHandler('/start', async (ctx) => {
 // Handles taps on inline buttons (e.g., "▶️ Resume Bot", "🔄 Suggest Alternative")
 
 bot.on('callback_query', safeHandler('callback_query', async (ctx) => {
+  // SECURITY: Validate callback query structure before processing
+  if (!ctx.callbackQuery || !ctx.callbackQuery.data) {
+    console.warn('[SECURITY] Invalid callback_query: missing data');
+    return;
+  }
+  if (!ctx.callbackQuery.message || !ctx.callbackQuery.message.chat) {
+    console.warn('[SECURITY] Invalid callback_query: missing message/chat');
+    return ctx.answerCbQuery('Invalid request').catch(() => {});
+  }
+  
   const data = ctx.callbackQuery.data;
   const chatId = ctx.callbackQuery.message.chat.id;
   
@@ -526,10 +523,13 @@ bot.on('callback_query', safeHandler('callback_query', async (ctx) => {
   // Step 1: Clinic taps "🔄 Suggest Alternative" on booking notification
   if (data.startsWith('suggest_alt_')) {
     const bookingId = data.replace('suggest_alt_', '');
-    // Store that this chat is now in "suggesting alternative" mode for this booking
-    // We'll use a simple in-memory map (clinic staff chat_id → booking_id)
-    const pendingAlts = require('./booking-notifications').pendingAlternatives;
-    pendingAlts.set(chatId, bookingId);
+    // Validate bookingId is a UUID-like string (prevent injection)
+    if (!bookingId || bookingId.length < 8) {
+      return ctx.answerCbQuery('Invalid booking ID');
+    }
+    // Store with size-limited, TTL-aware setter
+    const { setPendingAlternative } = require('./booking-notifications');
+    setPendingAlternative(chatId, bookingId);
     
     await ctx.answerCbQuery('Suggesting alternative time');
     await ctx.reply(

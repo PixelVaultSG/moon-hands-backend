@@ -20,8 +20,19 @@
 
 // Format: { patientPhone: { status: 'bot_active'|'staff_active'|'auto_paused', pausedAt: timestamp, staffChatId: string, reason: string, clinicId: string } }
 const takeoverState = new Map();
+const MAX_TAKEOVER_ENTRIES = 10000; // Security: prevent memory exhaustion
 const AUTO_RESUME_MS = 30 * 60 * 1000; // 30 minutes
 const CLEANUP_INTERVAL_MS = 5 * 60 * 1000; // Run cleanup every 5 minutes
+
+function setTakeoverState(patientPhone, state) {
+  // Security: enforce max size with LRU eviction
+  if (takeoverState.size >= MAX_TAKEOVER_ENTRIES) {
+    const oldestKey = takeoverState.keys().next().value;
+    takeoverState.delete(oldestKey);
+    console.warn('[STAFF_TAKEOVER] State at max size, evicted oldest entry');
+  }
+  takeoverState.set(patientPhone, state);
+}
 
 /**
  * Check if bot should be silent for this patient.
@@ -59,7 +70,7 @@ function isStaffActive(patientPhone) {
 function pauseBot(patientPhone, staffChatId, reason = 'staff_takeover', clinicId = null) {
   const existing = takeoverState.get(patientPhone);
   
-  takeoverState.set(patientPhone, {
+  setTakeoverState(patientPhone, {
     status: 'staff_active',
     pausedAt: Date.now(),
     staffChatId: staffChatId || existing?.staffChatId || null,

@@ -21,6 +21,35 @@ const { sendClinicNotification, sendAdminOnly } = require('./multi-clinic-sender
 // Used when clinic staff suggests an alternative timeslot
 const pendingAlternatives = new Map();
 const ALT_TIMEOUT_MS = 10 * 60 * 1000; // 10 minute timeout
+const MAX_PENDING_ALTS = 1000; // Security: prevent memory exhaustion
+
+function setPendingAlternative(chatId, bookingId) {
+  // Security: enforce max size with LRU eviction
+  if (pendingAlternatives.size >= MAX_PENDING_ALTS) {
+    // Evict oldest entry
+    const oldestKey = pendingAlternatives.keys().next().value;
+    pendingAlternatives.delete(oldestKey);
+    console.warn('[BOOKING_NOTIFY] pendingAlternatives at max size, evicted oldest entry');
+  }
+  pendingAlternatives.set(chatId, { bookingId, timestamp: Date.now() });
+}
+
+function cleanupExpiredAlternatives() {
+  const now = Date.now();
+  let cleaned = 0;
+  for (const [chatId, data] of pendingAlternatives) {
+    if (now - data.timestamp > ALT_TIMEOUT_MS) {
+      pendingAlternatives.delete(chatId);
+      cleaned++;
+    }
+  }
+  if (cleaned > 0) {
+    console.log(`[BOOKING_NOTIFY] Cleaned up ${cleaned} expired alternative suggestion(s)`);
+  }
+}
+
+// Run cleanup every 5 minutes
+setInterval(cleanupExpiredAlternatives, 5 * 60 * 1000);
 
 // ─── TELEGRAM SEND HELPER ────────────────────────────────────────
 
@@ -99,11 +128,12 @@ async function notifyBookingCreated(appointment, clinicConfig) {
 
 /**
  * Send notification when a booking is cancelled.
+ * SECURITY: Uses multi-clinic sender — scoped to clinic's telegram_chat_ids[]
  */
 async function notifyBookingCancelled(appointment, clinicConfig, reason = '') {
-  const chatId = clinicConfig.telegram_chat_id || ADMIN_CHAT_ID;
   const dateStr = formatDateSG(appointment.date);
   const timeStr = formatTimeSG(appointment.time);
+  const clinicId = clinicConfig.id || clinicConfig.clinic_id || null;
   
   const message = [
     `❌ *BOOKING CANCELLED*`,
@@ -116,18 +146,26 @@ async function notifyBookingCancelled(appointment, clinicConfig, reason = '') {
     `_Cancelled at: ${formatTimeSG(new Date())}_`,
   ].filter(Boolean).join('\n');
   
-  await sendTelegramMessage(message, chatId);
+  // SECURITY: Always use multi-clinic sender (never legacy direct send)
+  if (clinicId) {
+    await sendClinicNotification(clinicId, message);
+  } else {
+    // Fallback: admin-only (should never happen in production)
+    console.warn('[BOOKING_NOTIFY] notifyBookingCancelled called without clinicId — sending admin-only');
+    await sendAdminOnly(message);
+  }
 }
 
 /**
  * Send notification when a booking is rescheduled.
+ * SECURITY: Uses multi-clinic sender — scoped to clinic's telegram_chat_ids[]
  */
 async function notifyBookingRescheduled(oldAppt, newAppt, clinicConfig) {
-  const chatId = clinicConfig.telegram_chat_id || ADMIN_CHAT_ID;
   const oldDate = formatDateSG(oldAppt.date);
   const oldTime = formatTimeSG(oldAppt.time);
   const newDate = formatDateSG(newAppt.date);
   const newTime = formatTimeSG(newAppt.time);
+  const clinicId = clinicConfig.id || clinicConfig.clinic_id || null;
   
   const message = [
     `🔄 *BOOKING RESCHEDULED*`,
@@ -145,7 +183,13 @@ async function notifyBookingRescheduled(oldAppt, newAppt, clinicConfig) {
     `_Updated: ${formatTimeSG(new Date())}_`,
   ].filter(Boolean).join('\n');
   
-  await sendTelegramMessage(message, chatId);
+  // SECURITY: Always use multi-clinic sender
+  if (clinicId) {
+    await sendClinicNotification(clinicId, message);
+  } else {
+    console.warn('[BOOKING_NOTIFY] notifyBookingRescheduled called without clinicId — sending admin-only');
+    await sendAdminOnly(message);
+  }
 }
 
 // ─── WEEKLY ROUNDUP ──────────────────────────────────────────────
@@ -157,8 +201,13 @@ async function notifyBookingRescheduled(oldAppt, newAppt, clinicConfig) {
  * Shows: Monday → next open day, all confirmed + pending bookings.
  */
 async function sendWeeklyRoundup(clinicConfig, supabase) {
-  const chatId = clinicConfig.telegram_chat_id || ADMIN_CHAT_ID;
   const clinicId = clinicConfig.id;
+  
+  // SECURITY: Must have clinicId to scope notification correctly
+  if (!clinicId) {
+    console.error('[BOOKING_NOTIFY] sendWeeklyRoundup called without clinicId — aborting');
+    return;
+  }
   
   // Get today's date and the end of the week (next 7 days)
   const today = new Date();
@@ -180,11 +229,11 @@ async function sendWeeklyRoundup(clinicConfig, supabase) {
   }
   
   if (!appointments || appointments.length === 0) {
-    await sendTelegramMessage(
+    await sendClinicNotification(
+      clinicId,
       `📅 *WEEKLY ROUNDUP*\n\n` +
       `No bookings scheduled for the next 7 days.\n\n` +
-      `_Clinic: ${escapeMarkdown(clinicConfig.clinic_name || 'Unknown')}_`,
-      chatId
+      `_Clinic: ${escapeMarkdown(clinicConfig.clinic_name || 'Unknown')}_`
     );
     return;
   }
@@ -220,7 +269,8 @@ async function sendWeeklyRoundup(clinicConfig, supabase) {
   
   lines.push(`Reply /approveall to confirm all pending bookings, or /reject [ID] to cancel.`);
   
-  await sendTelegramMessage(lines.join('\n'), chatId);
+  // SECURITY: Use multi-clinic sender (scoped to clinic's telegram_chat_ids[])
+  await sendClinicNotification(clinicId, lines.join('\n'));
 }
 
 // ─── SLOT AVAILABILITY CHECK ─────────────────────────────────────
@@ -288,8 +338,13 @@ function escapeMarkdown(text) {
  *                      — 11-2pm — Alex — Botox + HIFU
  */
 async function sendDailyClosingSummary(clinicConfig, supabase) {
-  const chatId = clinicConfig.telegram_chat_id || ADMIN_CHAT_ID;
   const clinicId = clinicConfig.id;
+  
+  // SECURITY: Must have clinicId to scope notification correctly
+  if (!clinicId) {
+    console.error('[BOOKING_NOTIFY] sendDailyClosingSummary called without clinicId — aborting');
+    return;
+  }
   
   // Get tomorrow's date (Singapore time)
   const tomorrow = new Date();
@@ -362,7 +417,8 @@ async function sendDailyClosingSummary(clinicConfig, supabase) {
     message = lines.join('\n');
   }
   
-  await sendTelegramMessage(message, chatId);
+  // SECURITY: Use multi-clinic sender (scoped to clinic's telegram_chat_ids[])
+  await sendClinicNotification(clinicId, message);
 }
 
 // ─── ALTERNATIVE TIMESLOT FLOW ───────────────────────────────────
@@ -486,6 +542,8 @@ module.exports = {
   sendDailyClosingSummary,
   isSlotAvailable,
   pendingAlternatives,
+  setPendingAlternative,
   handleClinicSuggestAlternative,
   handlePatientConfirmAlternative,
+  escapeMarkdown,
 };
