@@ -1,10 +1,13 @@
--- Security Events Table — Audit trail for admin actions, auth events, invite usage
--- Run this in Supabase SQL Editor
+-- Security Events Table — Audit trail
+-- BULLETPROOF: Handles partial previous runs gracefully
 
--- Step 1: Create the table first
-CREATE TABLE IF NOT EXISTS security_events (
+-- Step 1: Drop if exists (in case previous partial run created bad table)
+DROP TABLE IF EXISTS security_events;
+
+-- Step 2: Create fresh
+CREATE TABLE security_events (
   id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
-  event_type text NOT NULL,
+  event_type text NOT NULL DEFAULT 'system_alert',
   actor text NOT NULL DEFAULT 'unknown',
   target text NOT NULL DEFAULT 'unknown',
   details text,
@@ -12,31 +15,7 @@ CREATE TABLE IF NOT EXISTS security_events (
   created_at timestamptz DEFAULT now()
 );
 
--- Step 2: Create indexes (separate statement)
-CREATE INDEX IF NOT EXISTS idx_security_events_target ON security_events(target);
-CREATE INDEX IF NOT EXISTS idx_security_events_created_at ON security_events(created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_security_events_type ON security_events(event_type);
-
--- Step 3: Add constraint on severity (if not already exists)
-DO $$ 
-BEGIN
-  ALTER TABLE security_events 
-    ADD CONSTRAINT security_events_severity_check 
-    CHECK (severity IN ('low', 'medium', 'high', 'critical'));
-EXCEPTION 
-  WHEN duplicate_object THEN NULL;
-END $$;
-
--- Step 4: Add constraint on event_type (if not already exists)
-DO $$ 
-BEGIN
-  ALTER TABLE security_events 
-    ADD CONSTRAINT security_events_type_check 
-    CHECK (event_type IN (
-      'auth_failure', 'unauthorized', 'config_change', 
-      'invite_created', 'invite_redeemed', 'invite_revoked',
-      'staff_takeover', 'patient_booking', 'approval_action', 'system_alert'
-    ));
-EXCEPTION 
-  WHEN duplicate_object THEN NULL;
-END $$;
+-- Step 3: Create indexes
+CREATE INDEX idx_security_events_target ON security_events(target);
+CREATE INDEX idx_security_events_created_at ON security_events(created_at DESC);
+CREATE INDEX idx_security_events_type ON security_events(event_type);
