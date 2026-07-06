@@ -104,7 +104,7 @@ async function sendClinicCostAlert(clinicId, type, reason, isDouble = false) {
   
   // Try to send to clinic's Telegram chat (if configured)
   try {
-    const { supabase } = require('./supabase/client');
+    const { supabase } = require('../supabase/client');
     const { data: client } = await supabase
       .from('clients')
       .select('telegram_chat_id, name')
@@ -158,7 +158,7 @@ async function notifyStaffTakeover(clinicId, patientPhone, intent, patientMessag
   
   // Send via multi-clinic sender (scopes to clinic's telegram_chat_ids + admin copy)
   try {
-    const { sendClinicNotification } = require('./telegram/multi-clinic-sender');
+    const { sendClinicNotification } = require('../telegram/multi-clinic-sender');
     await sendClinicNotification(clinicId, message, {
       replyMarkup: {
         inline_keyboard: [[

@@ -461,7 +461,7 @@ async function handleClinicSuggestAlternative(staffChatId, alternativeTimeText) 
     pendingAlternatives.delete(staffChatId);
     
     // Send alternative to patient via WhatsApp
-    const { sendWhatsAppMessage } = require('../server/whatsapp');
+    const { sendWhatsAppMessage } = require('../jobs/reminders');
     await sendWhatsAppMessage(
       booking.patient_phone,
       `📅 *Alternative Time Suggested*\n\n` +
