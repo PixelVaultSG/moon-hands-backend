@@ -1,8 +1,8 @@
 -- Security Events Table — Audit trail
--- BULLETPROOF: Handles partial previous runs gracefully
+-- BULLETPROOF: Handles partial previous runs with CASCADE
 
--- Step 1: Drop if exists (in case previous partial run created bad table)
-DROP TABLE IF EXISTS security_events;
+-- Step 1: Drop everything (table + dependent views) if exists
+DROP TABLE IF EXISTS security_events CASCADE;
 
 -- Step 2: Create fresh
 CREATE TABLE security_events (
