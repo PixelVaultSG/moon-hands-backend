@@ -167,7 +167,7 @@ bot.start(safeHandler('/start', async (ctx) => {
   // Clinic staff linking via /start GLOW001
   const startParam = ctx.payload; // e.g., "GLOW001" from /start GLOW001
   const { linkChatToClinic } = require('./multi-clinic-sender');
-  const { supabase } = require('../server/supabase/client');
+  const { supabase } = require('../supabase/client');
 
   // Check if this chat is already linked to any clinic
   const { data: linkedClinics } = await supabase

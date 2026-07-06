@@ -12,7 +12,7 @@
  * NEVER send Clinic A's data to Clinic B's chats.
  */
 
-const { supabase } = require('../server/supabase/client');
+const { supabase } = require('../supabase/client');
 
 // Cache clinic data to avoid repeated DB queries
 const clinicCache = new Map();
