@@ -1,33 +1,42 @@
 -- Security Events Table — Audit trail for admin actions, auth events, invite usage
 -- Run this in Supabase SQL Editor
 
+-- Step 1: Create the table first
 CREATE TABLE IF NOT EXISTS security_events (
   id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
-  event_type text NOT NULL CHECK (event_type IN (
-    'auth_failure', 'unauthorized', 'config_change', 
-    'invite_created', 'invite_redeemed', 'invite_revoked',
-    'staff_takeover', 'patient_booking', 'approval_action', 'system_alert'
-  )),
+  event_type text NOT NULL,
   actor text NOT NULL DEFAULT 'unknown',
   target text NOT NULL DEFAULT 'unknown',
   details text,
-  severity text NOT NULL DEFAULT 'low' CHECK (severity IN ('low', 'medium', 'high', 'critical')),
-  created_at timestamptz DEFAULT now(),
-  ip_address text
+  severity text NOT NULL DEFAULT 'low',
+  created_at timestamptz DEFAULT now()
 );
 
--- Index for fast queries by clinic and date range
+-- Step 2: Create indexes (separate statement)
 CREATE INDEX IF NOT EXISTS idx_security_events_target ON security_events(target);
 CREATE INDEX IF NOT EXISTS idx_security_events_created_at ON security_events(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_security_events_type ON security_events(event_type);
 
--- RLS: Only admin can read all events; clinics can only see their own
-ALTER TABLE security_events ENABLE ROW LEVEL SECURITY;
+-- Step 3: Add constraint on severity (if not already exists)
+DO $$ 
+BEGIN
+  ALTER TABLE security_events 
+    ADD CONSTRAINT security_events_severity_check 
+    CHECK (severity IN ('low', 'medium', 'high', 'critical'));
+EXCEPTION 
+  WHEN duplicate_object THEN NULL;
+END $$;
 
-CREATE POLICY "Admin full access" ON security_events
-  FOR ALL USING (current_user = 'admin' OR auth.role() = 'service_role');
-
--- Grant access to service role (backend API)
-GRANT ALL ON security_events TO service_role;
-
-COMMENT ON TABLE security_events IS 'Audit trail for security-relevant events across all clinics';
+-- Step 4: Add constraint on event_type (if not already exists)
+DO $$ 
+BEGIN
+  ALTER TABLE security_events 
+    ADD CONSTRAINT security_events_type_check 
+    CHECK (event_type IN (
+      'auth_failure', 'unauthorized', 'config_change', 
+      'invite_created', 'invite_redeemed', 'invite_revoked',
+      'staff_takeover', 'patient_booking', 'approval_action', 'system_alert'
+    ));
+EXCEPTION 
+  WHEN duplicate_object THEN NULL;
+END $$;

@@ -582,6 +582,45 @@ bot.on('callback_query', safeHandler('callback_query', async (ctx) => {
     await handlePatientConfirmAlternative(ctx, bookingId);
     return;
   }
+  
+  // ── Clinic menu selection ──
+  // These are handled here because this catch-all runs before bot.action()
+  // handlers registered later. Without this, clinic_menu: callbacks get lost.
+  if (data.startsWith('clinic_menu:')) {
+    const slug = data.replace('clinic_menu:', '');
+    await ctx.answerCbQuery(`Loading ${slug}...`);
+    await commands.showClinicMenu(ctx, slug);
+    return;
+  }
+  
+  // ── Clinic action buttons ──
+  if (data.startsWith('clinic_viewconfig:')) {
+    const slug = data.replace('clinic_viewconfig:', '');
+    await ctx.answerCbQuery('Loading config...');
+    await commands.handleViewConfig(ctx, slug);
+    return;
+  }
+  if (data.startsWith('clinic_usage:')) {
+    const slug = data.replace('clinic_usage:', '');
+    await ctx.answerCbQuery('Loading usage...');
+    await commands.handleUsage(ctx, slug);
+    return;
+  }
+  if (data.startsWith('clinic_pause:')) {
+    const slug = data.replace('clinic_pause:', '');
+    await ctx.answerCbQuery(`Pausing ${slug}...`);
+    await commands.handlePause(ctx, slug);
+    return;
+  }
+  if (data.startsWith('clinic_resume:')) {
+    const slug = data.replace('clinic_resume:', '');
+    await ctx.answerCbQuery(`Resuming ${slug}...`);
+    await commands.handleResume(ctx, slug);
+    return;
+  }
+  
+  // Unmatched callback — let other handlers process it
+  return;
 }));
 
 // ─── BUTTON TEXT HANDLERS ────────────────────────────────────────
