@@ -32,10 +32,10 @@ async function checkAndSendClosingSummaries() {
   }
   
   try {
-    // Get all active clinics — only select columns that exist in the table
+    // Get all active clinics with their configs (operating_hours is in client_configs)
     const { data: clinics, error } = await supabase
       .from('clients')
-      .select('id, name, status, operating_hours')
+      .select('id, name, status, client_configs(operating_hours)')
       .eq('status', 'active');
     
     if (error) {
@@ -54,8 +54,8 @@ async function checkAndSendClosingSummaries() {
         // Skip if already sent today
         if (ALREADY_SENT_TODAY.has(clinic.id)) continue;
         
-        // Parse operating hours from clinic config
-        const hours = parseOperatingHours(clinic.operating_hours);
+        // Parse operating hours from clinic config (via client_configs join)
+        const hours = parseOperatingHours(clinic.client_configs?.operating_hours);
         if (!hours || !hours[todayName]) continue; // No hours for today (closed)
         
         const todayHours = hours[todayName];

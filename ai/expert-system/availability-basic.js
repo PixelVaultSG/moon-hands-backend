@@ -34,10 +34,10 @@ const { supabase } = require('../../supabase/client');
  */
 async function getAvailableSlots(clinicId, date, durationMinutes = 60, bufferMinutes = 15) {
   try {
-    // 1. Get clinic operating hours
+    // 1. Get clinic operating hours (from client_configs)
     const { data: clinic, error: clinicError } = await supabase
       .from('clients')
-      .select('operating_hours')
+      .select('client_configs(operating_hours)')
       .eq('id', clinicId)
       .single();
 
@@ -47,7 +47,7 @@ async function getAvailableSlots(clinicId, date, durationMinutes = 60, bufferMin
     }
 
     const dayOfWeek = new Date(date).toLocaleDateString('en-US', { weekday: 'lowercase' });
-    const hours = clinic.operating_hours?.[dayOfWeek];
+    const hours = clinic.client_configs?.operating_hours?.[dayOfWeek];
 
     if (!hours || !hours.open || !hours.close) {
       console.log(`[AVAILABILITY] No hours for ${dayOfWeek}`);

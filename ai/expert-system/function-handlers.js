@@ -242,24 +242,27 @@ async function createBooking({ client_id, customer_name, customer_phone, service
     const status = 'pending';
     
     // Create appointment
+    // NOTE: Column names must match schema exactly. Valid columns:
+    // id, client_id, conversation_id, customer_name, customer_phone,
+    // service, appointment_date, appointment_time, duration, status,
+    // notes, reminder_24h_sent, reminder_1h_sent, followup_48h_sent,
+    // approval_notified, created_at, updated_at
     const { data: appointment, error: insertErr } = await supabase
       .from('appointments')
       .insert([{
         client_id,
         customer_name: name.trim(),
         customer_phone: phone.trim(),
-        service_name: service.trim(),
+        service: service.trim(),
         appointment_date: apptDate,
         appointment_time: apptTime,
+        duration: totalDuration,
         notes: notes || '',
         status,
-        source: 'whatsapp',
         reminder_24h_sent: false,
         reminder_1h_sent: false,
         followup_48h_sent: false,
         approval_notified: false,
-        clinic_reminders_sent: 0, // Track how many 30-min reminders sent (max 2)
-        clinic_first_notified_at: new Date().toISOString(),
       }])
       .select()
       .single();
@@ -280,7 +283,7 @@ async function createBooking({ client_id, customer_name, customer_phone, service
         time: appointment.appointment_time,
         patient_name: appointment.customer_name,
         patient_phone: appointment.customer_phone,
-        treatment: appointment.service_name,
+        treatment: appointment.service,
         notes: appointment.notes,
         status: appointment.status,
       }, clinic);

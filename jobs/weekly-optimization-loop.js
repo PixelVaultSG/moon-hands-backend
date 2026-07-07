@@ -66,10 +66,10 @@ async function runWeeklyOptimizationLoop() {
   console.log('[WEEKLY_LOOP] Starting weekly optimization analysis...');
   
   try {
-    // Get all active clinics on Premium plan
+    // Get all active clinics on Premium plan (operating_hours is in client_configs)
     const { data: clinics, error } = await supabase
       .from('clients')
-      .select('id, slug, name, plan, telegram_chat_id, operating_hours, status')
+      .select('id, slug, name, plan, telegram_chat_ids, status, client_configs(operating_hours)')
       .eq('status', 'active')
       .eq('plan', 'premium');
     
