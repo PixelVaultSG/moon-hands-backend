@@ -318,7 +318,7 @@ async function handleMultiIntentConfirmation(intents, message, clinicConfig, pat
     }
   });
   
-  const confirmText = `I see that you have ${intentDescriptions.join(' and ')}. Is that accurate? Anything else you'd like to ask before I provide information on those? Just reply "yes" to confirm, or let me know what else you need!`;
+  const confirmText = `I see that you have ${(intentDescriptions || []).join(' and ')}. Is that accurate? Anything else you'd like to ask before I provide information on those? Just reply "yes" to confirm, or let me know what else you need!`;
   
   return {
     text: confirmText,
@@ -381,7 +381,7 @@ function combineResponses(responses) {
     return `${responses[0]}\n\nAlso, ${responses[1].toLowerCase()}`;
   }
   const last = responses.pop();
-  const joined = responses.join('. ');
+  const joined = (responses || []).join('. ');
   return `${joined}. And ${last.toLowerCase()}`;
 }
 
@@ -652,7 +652,7 @@ async function attemptBooking(clinicConfig, patientPhone, fields, conversationHi
     if (!fields.date) missing.push('date');
     if (!fields.time) missing.push('time');
     if (!fields.treatment) missing.push('treatment');
-    return { text: `I'm missing your ${missing.join(' and ')}. Could you provide those?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+    return { text: `I'm missing your ${(missing || []).join(' and ')}. Could you provide those?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
   }
   
   // ── MATCH ALL TREATMENTS (multi-treatment support) ──
@@ -677,13 +677,13 @@ async function attemptBooking(clinicConfig, patientPhone, fields, conversationHi
   if (matchedServices.length === 0) {
     const serviceList = services.map(s => s.name).join(', ');
     setState(patientPhone, BOOKING_STATES.AWAITING_TREATMENT, { date: fields.date, time: fields.time });
-    return { text: `I couldn't find "${requestedTreatments.join(', ')}" in our services. We offer: ${serviceList}. Which one would you like?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+    return { text: `I couldn't find "${(requestedTreatments || []).join(', ')}" in our services. We offer: ${serviceList}. Which one would you like?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
   }
   
   // ── DIRECT BOOKING CREATION ──
   // Sum durations for multiple treatments
   const totalDuration = matchedServices.reduce((sum, s) => sum + (parseInt(s.duration) || 60), 0);
-  const serviceNames = matchedServices.map(s => s.name).join(' + ');
+  const serviceNames = (matchedServices || []).map(s => s.name).join(' + ');
   
   // Extract patient name from conversation history
   let patientName = fields.name || null;
@@ -709,7 +709,7 @@ async function attemptBooking(clinicConfig, patientPhone, fields, conversationHi
       service_name: serviceNames,
       appointment_date: fields.date,
       appointment_time: fields.time,
-      notes: `Total duration: ${totalDuration}mins. ${notFound.length > 0 ? 'Not found: ' + notFound.join(', ') : ''}`
+      notes: `Total duration: ${totalDuration}mins. ${notFound.length > 0 ? 'Not found: ' + (notFound || []).join(', ') : ''}`
     });
     
     resetIdle(patientPhone);
@@ -802,7 +802,7 @@ async function buildBookingSummary(clinicConfig, date, time, treatments, service
     }
   }
   
-  const serviceLines = matchedServices.map(s => {
+  const serviceLines = (matchedServices || []).map(s => {
     const price = s.price ? ` (${s.price}${s.price_unit ? '/' + s.price_unit : ''})` : '';
     const dur = s.duration ? ` — ${s.duration}mins` : '';
     return `• ${s.name}${price}${dur}`;
@@ -1002,7 +1002,7 @@ async function routeToOpenAI(message, clinicConfig, conversationHistory, matched
 async function composeResponse(responses, message, clinicConfig) {
   if (responses.length === 1) return responses[0];
   if (responses.length === 2) return `${responses[0]}\n\nAlso, ${responses[1]}`;
-  return responses.join('. ');
+  return (responses || []).join('. ');
 }
 
 module.exports = { routeMessage, composeResponse };

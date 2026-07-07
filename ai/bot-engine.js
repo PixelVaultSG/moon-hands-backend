@@ -744,7 +744,7 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
       const matchedIntents = matchIntents(messageText, conversationHistory);
       const expertKeys = classifyMessage(messageText, matchedIntents, conversationHistory);
       
-      console.log(`[BOT_ENGINE] Experts assigned: [${expertKeys.join(', ')}]`);
+      console.log(`[BOT_ENGINE] Experts assigned: [${(expertKeys || []).join(', ')}]`);
       
       const expertResult = await executeExperts(
         expertKeys, messageText, clientConfig, conversationHistory, patientPhone
@@ -753,9 +753,9 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
       if (expertResult.text) {
         // Log the expert response
         await logConversation(clientConfig.id, 'whatsapp', patientPhone, null,
-          messageText, expertResult.text, `experts:${expertResult.expertsUsed.join(',')}`);
+          messageText, expertResult.text, `experts:${(expertResult.expertsUsed || []).join(',')}`);
         
-        console.log(`[BOT_ENGINE] Experts: [${expertResult.expertsUsed.join(', ')}] — cost: $${expertResult.totalCost.toFixed(4)}`);
+        console.log(`[BOT_ENGINE] Experts: [${(expertResult.expertsUsed || []).join(', ')}] — cost: $${expertResult.totalCost.toFixed(4)}`);
         
         return {
           text: expertResult.text,

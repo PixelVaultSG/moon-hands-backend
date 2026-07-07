@@ -225,7 +225,7 @@ ${match.description || 'Would you like to book this treatment?'}`;
   // No exact match — list similar treatments
   const similar = findSimilarTreatments(requestedTreatment, services, 3);
   if (similar.length > 0) {
-    const list = similar.map(s => `• ${s.name}: ${formatPrice(s.price, s.price_unit)}`).join('\n');
+    const list = (similar || []).map(s => `• ${s.name}: ${formatPrice(s.price, s.price_unit)}`).join('\n');
     return `I don't have exact pricing for "${requestedTreatment}". Here are our similar treatments:\n\n${list}\n\nWould you like details on any of these?`;
   }
   
@@ -348,7 +348,7 @@ async function handleCancelRequest({ clinicConfig, patientPhone }) {
   }
   
   // Multiple appointments
-  const list = appointments.map((a, i) => `${i + 1}. ${formatDate(a.appointment_date)} at ${formatTime(a.appointment_time)} — ${a.service_name || 'Treatment'}`).join('\n');
+  const list = (appointments || []).map((a, i) => `${i + 1}. ${formatDate(a.appointment_date)} at ${formatTime(a.appointment_time)} — ${a.service_name || 'Treatment'}`).join('\n');
   return `I found multiple upcoming appointments:\n\n${list}\n\nWhich one would you like to cancel? (Reply with the number)`;
 }
 
@@ -377,7 +377,7 @@ async function handleRescheduleRequest({ clinicConfig, patientPhone }) {
     return `I found your appointment:\n📅 ${formatDate(appt.appointment_date)} at ${formatTime(appt.appointment_time)}\n💆 ${appt.service_name || 'Treatment'}\n\nWhat date and time would you prefer instead?`;
   }
   
-  const list = appointments.map((a, i) => `${i + 1}. ${formatDate(a.appointment_date)} at ${formatTime(a.appointment_time)} — ${a.service_name || 'Treatment'}`).join('\n');
+  const list = (appointments || []).map((a, i) => `${i + 1}. ${formatDate(a.appointment_date)} at ${formatTime(a.appointment_time)} — ${a.service_name || 'Treatment'}`).join('\n');
   return `I found multiple appointments:\n\n${list}\n\nWhich one would you like to reschedule? (Reply with the number)`;
 }
 
@@ -401,7 +401,7 @@ async function handleCheckAppointment({ clinicConfig, patientPhone }) {
     return `I don't see any upcoming appointments for ${patientPhone}. Would you like to book one?`;
   }
   
-  const list = appointments.map(a => 
+  const list = (appointments || []).map(a => 
     `📅 ${formatDate(a.appointment_date)} at ${formatTime(a.appointment_time)}\n💆 ${a.service_name || 'Treatment'}\n📍 Status: ${a.status}${a.notes ? `\n📝 Notes: ${a.notes}` : ''}`
   ).join('\n\n');
   
