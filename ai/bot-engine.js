@@ -719,10 +719,11 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
     
     if (routerResult.source === 'hardcoded' && routerResult.text) {
       // Log the hardcoded response for analytics
+      const intentsStr = (routerResult.intents || []).join(',');
       await logConversation(clientConfig.id, 'whatsapp', patientPhone, null,
-        messageText, routerResult.text, `hardcoded:${routerResult.intents.join(',')}`);
+        messageText, routerResult.text, `hardcoded:${intentsStr}`);
       
-      console.log(`[BOT_ENGINE] Smart router: ${routerResult.intents.join(',')} — cost saved: $${routerResult.cost_saved.toFixed(4)}`);
+      console.log(`[BOT_ENGINE] Smart router: ${intentsStr || 'none'} — cost saved: $${routerResult.cost_saved.toFixed(4)}`);
       
       return {
         text: routerResult.text,
@@ -734,7 +735,7 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
       };
     }
     
-    console.log(`[BOT_ENGINE] Smart router → Expert System (intents: ${routerResult.intents.join(',') || 'none'})`);
+    console.log(`[BOT_ENGINE] Smart router → Expert System (intents: ${(routerResult.intents || []).join(',') || 'none'})`);
     
     // ─── EXPERT SYSTEM: Route to specialized experts ────────────────
     // Each expert receives ONLY the context it needs — smaller prompts,
