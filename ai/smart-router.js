@@ -657,19 +657,22 @@ async function attemptBooking(clinicConfig, patientPhone, fields, conversationHi
   
   // ── MATCH ALL TREATMENTS (multi-treatment support) ──
   const services = clinicConfig.config?.services || clinicConfig.services || [];
-  const requestedTreatments = fields.treatments || [fields.treatment];
+  // DEDUPLICATE: prevent same treatment appearing twice (e.g. "Botox and botox")
+  const requestedTreatments = [...new Set(fields.treatments || [fields.treatment])];
   
   const matchedServices = [];
   const notFound = [];
+  const seenServiceIds = new Set();
   
   for (const req of requestedTreatments) {
     const matched = services.find(s => 
       s.name.toLowerCase().includes(req.toLowerCase()) ||
       req.toLowerCase().includes(s.name.toLowerCase())
     );
-    if (matched) {
+    if (matched && !seenServiceIds.has(matched.name)) {
       matchedServices.push(matched);
-    } else {
+      seenServiceIds.add(matched.name);
+    } else if (!matched) {
       notFound.push(req);
     }
   }
@@ -705,7 +708,7 @@ async function attemptBooking(clinicConfig, patientPhone, fields, conversationHi
     const result = await createBooking({
       client_id: clinicConfig.id,
       customer_name: patientName,
-      customer_phone: patientPhone,
+      customer_phone: fields.phone || patientPhone,
       service_name: serviceNames,
       appointment_date: fields.date,
       appointment_time: fields.time,
@@ -787,15 +790,20 @@ function isCalendarHealthy(clinicId) {
 // Includes: treatments, prices, total duration, date/time.
 // For clinics without Google Calendar: always shows "subject to clinic confirmation"
 
-async function buildBookingSummary(clinicConfig, date, time, treatments, services) {
+async function buildBookingSummary(clinicConfig, date, time, treatments, services, name = null, phone = null) {
   const matchedServices = [];
+  const seenNames = new Set();
   let totalPrice = 0;
   let totalDuration = 0;
   
-  for (const t of treatments) {
+  // DEDUPLICATE: prevent same treatment appearing twice
+  const uniqueTreatments = [...new Set(treatments)];
+  
+  for (const t of uniqueTreatments) {
     const svc = services.find(s => s.name.toLowerCase().includes(t.toLowerCase()) || t.toLowerCase().includes(s.name.toLowerCase()));
-    if (svc) {
+    if (svc && !seenNames.has(svc.name)) {
       matchedServices.push(svc);
+      seenNames.add(svc.name);
       totalDuration += parseInt(svc.duration) || 60;
       const priceNum = parseInt(svc.price?.replace(/[^0-9]/g, '')) || 0;
       totalPrice += priceNum;
@@ -810,6 +818,8 @@ async function buildBookingSummary(clinicConfig, date, time, treatments, service
   
   const priceLine = totalPrice > 0 ? `\n💰 Total: ~S$${totalPrice}` : '';
   const durLine = totalDuration > 0 ? `\n⏱ Total duration: ${totalDuration}mins` : '';
+  const nameLine = name ? `\n👤 Name: ${name}` : '';
+  const phoneLine = phone ? `\n📱 Contact: ${phone}` : '';
   
   // ── Calendar availability check ──
   let availabilityNote = '';
@@ -872,7 +882,7 @@ async function buildBookingSummary(clinicConfig, date, time, treatments, service
     multiNote = `\n\n⚠️ This will take ${totalDuration} minutes. Would you prefer to split into 2 separate appointments? Reply SPLIT if yes.`;
   }
   
-  return `Please confirm your booking:\n\n${serviceLines}${priceLine}${durLine}\n📅 ${date} at ${time}${availabilityNote}${confirmationNote}${multiNote}\n\nReply YES to confirm, or NO to make changes.`;
+  return `Please confirm your booking:\n\n${serviceLines}${priceLine}${durLine}${nameLine}${phoneLine}\n📅 ${date} at ${time}${availabilityNote}${confirmationNote}${multiNote}\n\nReply YES to confirm, or NO to make changes.`;
 }
 
 // ─── BOOKING CONFIRMATION HANDLER ────────────────────────────────
