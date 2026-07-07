@@ -822,6 +822,7 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
       `GREETING STYLE (FIRST MESSAGE ONLY — NOT NOW): ${(clientConfig.config.greeting || 'Hello! Welcome to {businessName}.').replace('{businessName}', clientConfig.name)}\n\n` +
       `AVAILABLE TREATMENTS (call get_pricing() when asked about services/prices):\n${services || 'Contact clinic for services'}\n\n` +
       `HOURS: ${hours || 'Please contact us for hours'}\n\n` +
+      `ADDRESS: ${clientConfig.config?.address || clientConfig.address || 'Please contact us for location details'}\n\n` +
       `${faqs ? `FAQs:\n${faqs}\n\n` : ''}` +
       `${clientConfig.config.special_notes ? `SPECIAL NOTES: ${sanitizeSpecialNotes(clientConfig.config.special_notes)}\n\n` : ''}` +
       `IMPORTANT FUNCTION RULES:\n` +

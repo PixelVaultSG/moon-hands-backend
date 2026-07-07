@@ -28,7 +28,9 @@ const {
 const AI_ONLY_INTENTS = ['complaint', 'vague_question', 'emotional_support'];
 
 // Booking-related intents
-const BOOKING_INTENTS = ['book_appointment', 'check_availability', 'reschedule'];
+// NOTE: 'booking_request' from intent-matcher.js MUST be included here
+// or the booking state machine is never entered for "Can I make a booking?"
+const BOOKING_INTENTS = ['book_appointment', 'booking_request', 'check_availability', 'reschedule'];
 
 /**
  * Main entry point
@@ -573,11 +575,64 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
       const date2 = data.date || currentState.data.date;
       const time2 = data.time || currentState.data.time;
       const treatments2 = data.treatments || [data.treatment];
-      // ── SHOW BOOKING CONFIRMATION SUMMARY ──
-      setState(patientPhone, BOOKING_STATES.AWAITING_CONFIRMATION, { date: date2, time: time2, treatment: data.treatment, treatments: treatments2 });
-      const allServices = clinicConfig.config?.services || [];
-      const summary = await buildBookingSummary(clinicConfig, date2, time2, treatments2, allServices);
-      return { text: summary, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+      // ── ASK FOR NAME ──
+      setState(patientPhone, BOOKING_STATES.AWAITING_NAME, { date: date2, time: time2, treatment: data.treatment, treatments: treatments2 });
+      return { text: `${data.treatment} — great choice! ✓\n\nMay I have your name for the booking?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+    
+    case BOOKING_STATES.AWAITING_NAME:
+      // Patient may provide name only, or name+phone together
+      let providedName = data.name;
+      // If extractBookingFields didn't find a name, try using the raw message
+      if (!providedName && message) {
+        const cleanMsg = message.trim();
+        if (cleanMsg.length > 0 && cleanMsg.length < 50) {
+          // Check "Name 90123456" format — extract name part
+          const namePhoneMatch = cleanMsg.match(/^([A-Za-z\s]+)\s+\d{6,}$/);
+          if (namePhoneMatch) {
+            providedName = namePhoneMatch[1].trim();
+          } else if (!/^\d/.test(cleanMsg)) {
+            providedName = cleanMsg;
+          }
+        }
+      }
+      if (!providedName) {
+        return { text: `I'd be happy to help with that! Could you share your name for the booking?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+      }
+      // Name collected — check if phone was also provided
+      const nameData = currentState.data;
+      let providedPhone = patientPhone;
+      const phoneMatch = message.match(/\b\d{6,}\b/);
+      if (phoneMatch) {
+        providedPhone = phoneMatch[0];
+      }
+      setState(patientPhone, BOOKING_STATES.AWAITING_PHONE, { ...nameData, name: providedName, phone: providedPhone });
+      return { text: `Thanks, ${providedName}! Just to confirm — your contact number is ${providedPhone}? (reply YES to confirm or provide a different number)`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+    
+    case BOOKING_STATES.AWAITING_PHONE:
+      // Use the patient's WhatsApp number as default, or accept a different one
+      let confirmedPhone = currentState.data.phone || patientPhone;
+      if (data.phone && data.phone !== patientPhone) {
+        confirmedPhone = data.phone;
+      }
+      if (isConfirmation(message)) {
+        const phoneData = currentState.data;
+        const finalPhone = confirmedPhone;
+        setState(patientPhone, BOOKING_STATES.AWAITING_CONFIRMATION, { ...phoneData, phone: finalPhone });
+        const allServices = clinicConfig.config?.services || [];
+        const treatments2b = phoneData.treatments || [phoneData.treatment];
+        const summary = await buildBookingSummary(clinicConfig, phoneData.date, phoneData.time, treatments2b, allServices, phoneData.name, finalPhone);
+        return { text: summary, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+      } else if (isDenial(message)) {
+        return { text: `No problem! What number should I use for the booking?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+      } else if (data.phone) {
+        const phoneData = currentState.data;
+        setState(patientPhone, BOOKING_STATES.AWAITING_CONFIRMATION, { ...phoneData, phone: data.phone });
+        const allServices = clinicConfig.config?.services || [];
+        const treatments2b = phoneData.treatments || [phoneData.treatment];
+        const summary = await buildBookingSummary(clinicConfig, phoneData.date, phoneData.time, treatments2b, allServices, phoneData.name, data.phone);
+        return { text: summary, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+      }
+      return { text: `Could you confirm your contact number? Reply YES to use ${confirmedPhone}, or send a different number.`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
     
     case BOOKING_STATES.AWAITING_CONFIRMATION:
       return await handleBookingConfirmation(message, clinicConfig, patientPhone, currentState, conversationHistory, startTime);
