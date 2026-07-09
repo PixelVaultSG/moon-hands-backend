@@ -619,6 +619,31 @@ async function handleWebhook(req, res, channel, url) {
     const clinicName = preResolvedClinicName || null;
     addTrace(message.from, 'CLIENT', clientId ? 'RESOLVED' : 'NOT_FOUND', `${clinicName || ''} ${clientId || ''}`.trim());
     
+    // ─── LAYER 9.5: "I WILL TAKE OVER" TRIGGER ─────────────────────
+    // ANY human (clinic staff, company owner, anyone) can type exactly
+    // "I WILL TAKE OVER" (case-sensitive) to immediately pause the AI.
+    // This works for ALL WhatsApp numbers including the company number.
+    // Auto-resumes after 30 minutes of inactivity (handled by staff-takeover system).
+    if (sanitizedText === 'I WILL TAKE OVER') {
+      console.log(`[STAFF_TAKEOVER] "I WILL TAKE OVER" triggered by ${message.from.slice(-4)}`);
+      pauseBot(message.from, null, 'explicit_takeover_phrase', clientId);
+      addTrace(message.from, 'STAFF_TAKEOVER', 'I_WILL_TAKE_OVER', 'Human paused AI via trigger phrase');
+      
+      // Send acknowledgment via WhatsApp
+      const ackMessage = "Got it \u2014 I'll stay quiet. The bot will auto-resume after 30 minutes of inactivity, or you can message me anytime to resume earlier.";
+      try {
+        await sendWhatsAppReply(message.from, ackMessage, message.messageId);
+        addTrace(message.from, 'WHATSAPP', 'SENT', 'I_WILL_TAKE_OVER ack');
+      } catch (sendErr) {
+        console.error(`[STAFF_TAKEOVER] Failed to send ack to ${message.from}: ${sendErr.message}`);
+      }
+      
+      return sendSecurityResponse(res, 200, 'AI paused — I WILL TAKE OVER acknowledged', {
+        processed: true,
+        aiPaused: true
+      });
+    }
+    
     // ─── LAYER 9.6: STAFF TAKEOVER CHECK ────────────────────────────
     // If clinic staff has manually taken over this conversation (via Telegram
     // /pause or auto-detection), the bot stays completely silent.
