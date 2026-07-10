@@ -37,6 +37,9 @@ async function checkAndSendClosingSummaries() {
   const sgt = toSGT(now);
   const currentHour = sgt.hour;
   const currentMin = sgt.minute;
+  const currentTimeStr = `${String(currentHour).padStart(2,'0')}:${String(currentMin).padStart(2,'0')}`;
+  
+  console.log(`[CLOSING_SUMMARY] Checking at ${currentTimeStr} SGT (day=${sgt.day})`);
   
   // Reset the sent-tracker at midnight SGT (4pm UTC)
   if (currentHour === 0 && currentMin < 15) {
@@ -45,7 +48,22 @@ async function checkAndSendClosingSummaries() {
   }
   
   try {
-    // Get all active clinics with their configs (operating_hours is in client_configs)
+    // DIAGNOSTIC: First check if client_configs join works
+    const { data: testClinics, error: testError } = await supabase
+      .from('clients')
+      .select('id, name, status, client_configs!inner(operating_hours)')
+      .eq('status', 'active')
+      .limit(1);
+    
+    if (testError) {
+      console.error('[CLOSING_SUMMARY] DIAGNOSTIC: client_configs join failed:', testError.message);
+    } else if (testClinics && testClinics.length > 0) {
+      const hasConfig = testClinics[0].client_configs && 
+                        (Array.isArray(testClinics[0].client_configs) ? testClinics[0].client_configs.length > 0 : true);
+      console.log(`[CLOSING_SUMMARY] DIAGNOSTIC: client_configs join OK. Has config=${hasConfig}`);
+    }
+    
+    // Get all active clinics with their configs
     const { data: clinics, error } = await supabase
       .from('clients')
       .select('id, name, status, client_configs(operating_hours)')
@@ -56,37 +74,68 @@ async function checkAndSendClosingSummaries() {
       return;
     }
     
-    if (!clinics || clinics.length === 0) return;
+    if (!clinics || clinics.length === 0) {
+      console.log('[CLOSING_SUMMARY] No active clinics found');
+      return;
+    }
+    
+    console.log(`[CLOSING_SUMMARY] Found ${clinics.length} active clinic(s)`);
     
     const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
     const todayName = dayNames[sgt.day];
     
     for (const clinic of clinics) {
       try {
-        // Skip if already sent today
-        if (ALREADY_SENT_TODAY.has(clinic.id)) continue;
+        console.log(`[CLOSING_SUMMARY] Checking ${clinic.name} (id=${clinic.id?.slice(0,6)})...`);
         
-        // Parse operating hours from clinic config (via client_configs join)
-        const hours = parseOperatingHours(clinic.client_configs?.operating_hours);
-        if (!hours || !hours[todayName]) continue; // No hours for today (closed)
+        // Skip if already sent today
+        if (ALREADY_SENT_TODAY.has(clinic.id)) {
+          console.log(`[CLOSING_SUMMARY]   → Already sent today, skipping`);
+          continue;
+        }
+        
+        // Parse operating hours from clinic config
+        const rawHours = clinic.client_configs;
+        // client_configs may come back as array or object depending on Supabase join
+        const configData = Array.isArray(rawHours) ? rawHours[0] : rawHours;
+        const hours = parseOperatingHours(configData?.operating_hours);
+        
+        if (!hours) {
+          console.log(`[CLOSING_SUMMARY]   → No operating_hours parsed (raw=${JSON.stringify(rawHours)?.slice(0,80)})`);
+          continue;
+        }
+        if (!hours[todayName]) {
+          console.log(`[CLOSING_SUMMARY]   → No hours for ${todayName} (days=${Object.keys(hours).join(',')})`);
+          continue;
+        }
         
         const todayHours = hours[todayName];
+        console.log(`[CLOSING_SUMMARY]   → ${todayName}: isOpen=${todayHours.isOpen}, close=${todayHours.close}`);
+        
         if (!todayHours.isOpen) {
-          // Clinic is closed today — skip
-          ALREADY_SENT_TODAY.add(clinic.id); // Mark as "sent" (nothing to send)
+          console.log(`[CLOSING_SUMMARY]   → Closed today, marking as done`);
+          ALREADY_SENT_TODAY.add(clinic.id);
           continue;
         }
         
         // ── CONDITION 1: Check if clinic has closed for the day ──
         const closingTime = todayHours.close;
-        if (!closingTime) continue;
+        if (!closingTime) {
+          console.log(`[CLOSING_SUMMARY]   → No closing time defined`);
+          continue;
+        }
         
         const [closeH, closeM] = closingTime.split(':').map(Number);
         const closeMinutes = closeH * 60 + closeM;
         const currentMinutes = currentHour * 60 + currentMin;
         
+        console.log(`[CLOSING_SUMMARY]   → Current: ${currentMinutes}min, Close: ${closeMinutes}min, Window: ${closeMinutes}-${closeMinutes+15}`);
+        
         const isAfterClosing = currentMinutes >= closeMinutes && currentMinutes < closeMinutes + 15;
-        if (!isAfterClosing) continue; // Not closing time yet — check next clinic
+        if (!isAfterClosing) {
+          console.log(`[CLOSING_SUMMARY]   → Not in closing window yet`);
+          continue;
+        }
         
         // ── CONDITION 2: All pending bookings must be cleared ──
         const { data: pendingBookings, error: pendingErr } = await supabase
@@ -103,30 +152,35 @@ async function checkAndSendClosingSummaries() {
         
         if (pendingBookings && pendingBookings.length > 0) {
           // Clinic has pending bookings — don't send summary yet
-          console.log(`[CLOSING_SUMMARY] ${clinic.name} has ${pendingBookings.length} pending booking(s). Skipping summary — will retry next cycle.`);
-          // Send a reminder instead so clinic staff know they have pending actions
-          try {
-            const { sendClinicNotification } = require('../telegram/multi-clinic-sender');
-            const pendingList = pendingBookings.map(b => 
-              `• ${b.customer_name} — ${b.service} on ${b.appointment_date} at ${b.appointment_time}`
-            ).join('\n');
-            await sendClinicNotification(clinic.id, 
-              `⏳ *Pending Bookings Need Your Action*\n\n` +
-              `You have *${pendingBookings.length} booking(s)* waiting for approval/rejection:\n\n` +
-              `${pendingList}\n\n` +
-              `Please review and action these before the end of day.\n` +
-              `Your daily closing summary will be sent once all pending bookings are cleared.`
-            );
-          } catch (notifyErr) {
-            console.error(`[CLOSING_SUMMARY] Pending reminder failed for ${clinic.name}:`, notifyErr.message);
+          console.log(`[CLOSING_SUMMARY]   → ${pendingBookings.length} pending booking(s) — skipping summary`);
+          // Only send reminder once (first time we see pending bookings)
+          const reminderKey = `pending_reminder_${clinic.id}`;
+          if (!ALREADY_SENT_TODAY.has(reminderKey)) {
+            try {
+              const { sendClinicNotification } = require('../telegram/multi-clinic-sender');
+              const pendingList = pendingBookings.map(b => 
+                `• ${b.customer_name} — ${b.service} on ${b.appointment_date} at ${b.appointment_time}`
+              ).join('\n');
+              await sendClinicNotification(clinic.id, 
+                `⏳ *Pending Bookings Need Your Action*\n\n` +
+                `You have *${pendingBookings.length} booking(s)* waiting for approval/rejection:\n\n` +
+                `${pendingList}\n\n` +
+                `Please review and action these before the end of day.\n` +
+                `Your daily closing summary will be sent once all pending bookings are cleared.`
+              );
+              ALREADY_SENT_TODAY.add(reminderKey);
+            } catch (notifyErr) {
+              console.error(`[CLOSING_SUMMARY] Pending reminder failed for ${clinic.name}:`, notifyErr.message);
+            }
           }
           continue; // Don't mark as sent — will retry next cycle
         }
         
         // ── BOTH CONDITIONS MET: Send closing summary ──
-        console.log(`[CLOSING_SUMMARY] ${clinic.name} closed at ${closingTime} SGT. All pending bookings cleared. Sending summary...`);
+        console.log(`[CLOSING_SUMMARY]   → ✓ Sending closing summary for ${clinic.name}!`);
         await sendDailyClosingSummary(clinic, supabase);
         ALREADY_SENT_TODAY.add(clinic.id);
+        console.log(`[CLOSING_SUMMARY]   → ✓ Summary sent for ${clinic.name}`);
         
       } catch (err) {
         console.error(`[CLOSING_SUMMARY] Error for clinic ${clinic.id}:`, err.message);

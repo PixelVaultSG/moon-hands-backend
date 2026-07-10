@@ -429,6 +429,26 @@ bot.command('threats', safeHandler('/threats', commands.handleThreats));
 bot.command('authlog', safeHandler('/authlog', commands.handleAuthLog));
 bot.command('debug', safeHandler('/debug', commands.handleDebug));
 
+// ─── TEST CLOSING SUMMARY ────────────────────────────────────────
+
+bot.command('testsummary', safeHandler('/testsummary', async (ctx) => {
+  const chatId = ctx.chat.id;
+  if (chatId.toString() !== ADMIN_CHAT_ID) {
+    return ctx.reply('⚠️ Admin only.');
+  }
+  
+  await ctx.reply('🧪 Triggering closing summary check...');
+  
+  try {
+    const { checkAndSendClosingSummaries } = require('../jobs/closing-summary');
+    await checkAndSendClosingSummaries();
+    await ctx.reply('✅ Closing summary check completed. Check Render logs for details.');
+  } catch (err) {
+    console.error('[TELEGRAM /testsummary] Error:', err.message);
+    await ctx.reply(`❌ Error: ${err.message}`);
+  }
+}));
+
 // ─── STAFF TAKEOVER COMMANDS ─────────────────────────────────────
 // Allow clinic staff to pause/resume bot per-patient to prevent
 // bot↔staff double-reply conflicts when staff manually replies.
