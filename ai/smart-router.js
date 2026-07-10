@@ -533,6 +533,11 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
         // Validate time against opening hours
         const v = validateBookingTime(data.date, data.time, hours);
         if (!v.isOpen) {
+          // Check if clinic is closed ALL DAY (no open/close times)
+          const isDayClosed = !v.openTime || !v.closeTime;
+          if (isDayClosed) {
+            return { text: `Sorry, we're closed on ${data.date}. ${v.reason}. Please choose a different date — what day works for you?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+          }
           return { text: `Sorry, we're not open at ${data.time} on that day. ${v.reason}. What time between ${v.openTime}–${v.closeTime} works for you?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
         }
         setState(patientPhone, BOOKING_STATES.AWAITING_TREATMENT, { date: data.date, time: data.time });
@@ -549,6 +554,10 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
       const date = data.date || currentState.data.date;
       const v = validateBookingTime(date, data.time, hours);
       if (!v.isOpen) {
+        const isDayClosed = !v.openTime || !v.closeTime;
+        if (isDayClosed) {
+          return { text: `Sorry, we're closed on ${date}. ${v.reason}. Please choose a different date — what day works for you?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+        }
         return { text: `Sorry, we're not open at ${data.time} on that day. ${v.reason}. What time between ${v.openTime}–${v.closeTime} works for you?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
       }
       if (data.treatment) {

@@ -201,6 +201,9 @@ function extractBookingFields(message, services = []) {
     /\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}\b/i,
     /\b\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b/i,
     /\d{4}-\d{2}-\d{2}/,
+    // Bare day names — handles "Maybe Friday", "How about Tuesday", "Friday at 11am"
+    // Checked LAST to avoid matching day names in unrelated contexts (e.g. "Sunday best")
+    /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i,
   ];
   for (const p of datePatterns) { const m = message.match(p); if (m) { const d = parseDatePhrase(m[0]); if (d) { fields.date = d; break; } } }
   // Time
