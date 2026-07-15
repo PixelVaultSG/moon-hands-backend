@@ -80,6 +80,20 @@ function parseDatePhrase(phrase) {
     d.setDate(d.getDate() + daysAhead);
     return formatDate(d);
   }
+  // ── BARE DAY NAMES (e.g., "Tuesday", "friday") ──
+  // Treat as "next occurrence" — if day already passed this week, go to next week
+  const bareDayMatch = expanded.match(/\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/);
+  if (bareDayMatch) {
+    const dayNames = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
+    const targetDay = dayNames.indexOf(bareDayMatch[1]);
+    if (targetDay === -1) return null;
+    const d = new Date(now);
+    let daysAhead = targetDay - d.getDay();
+    // Always go to the NEXT occurrence (same behavior as "next X")
+    if (daysAhead <= 0) daysAhead += 7;
+    d.setDate(d.getDate() + daysAhead);
+    return formatDate(d);
+  }
   try {
     const parsed = new Date(phrase + ' ' + now.getFullYear());
     if (!isNaN(parsed.getTime())) return formatDate(parsed);
@@ -121,7 +135,8 @@ function extractAllTreatments(message, services = []) {
   let remaining = lower;
   
   if (services.length > 0) {
-    const svcNames = services.map(s => s.name.toLowerCase());
+    // Sort by length (longest first) so "Laser Skin Rejuvenation" matches before "Laser"
+    const svcNames = services.map(s => s.name.toLowerCase()).sort((a, b) => b.length - a.length);
     
     // PASS 1: Exact matches ("hydrating facial" → "Hydrating Facial")
     // These take priority over partial matches
@@ -221,9 +236,24 @@ function extractBookingFields(message, services = []) {
   // Name
   const nm = message.match(/(?:my name is|i am|i'm)\s+([A-Za-z\s]+?)(?:\.|,|$|\s+(?:and|for|on|at))/i);
   if (nm) fields.name = nm[1].trim();
-  // Phone
-  const ph = message.match(/[+]?(\d{8,})/);
-  if (ph) fields.phone = ph[0];
+  // Phone — multiple patterns to handle common Singapore expressions
+  // "my Handphone number is 87111048", "HP: 91234567", "contact me at +65 9123 4567"
+  const phonePatterns = [
+    /(?:my\s+(?:new\s+)?(?:phone|contact|mobile|handphone|hp)\s+(?:number\s+)?(?:is\s+)?[:)]?\s*)(\+?\d[\d\s]{5,})/i,
+    /(?:call|reach|text|whatsapp)\s+(?:me\s+)?(?:at\s+)?(\+?\d[\d\s]{5,})/i,
+    /(?:hp|handphone|contact|whatsapp)\s*[:)]\s*(\+?\d[\d\s]{5,})/i,
+  ];
+  let foundPhone = null;
+  for (const pp of phonePatterns) {
+    const pm = message.match(pp);
+    if (pm) { foundPhone = pm[1].replace(/\s/g, ''); break; }
+  }
+  // Fallback: any 8+ digit number with optional + prefix
+  if (!foundPhone) {
+    const ph = message.match(/\+?\d{8,}/);
+    if (ph) foundPhone = ph[0];
+  }
+  if (foundPhone) fields.phone = foundPhone;
   return fields;
 }
 

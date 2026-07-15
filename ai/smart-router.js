@@ -425,7 +425,8 @@ async function startBookingFlow(message, clinicConfig, patientPhone, conversatio
   }
   
   if (fields.treatment) {
-    setState(patientPhone, BOOKING_STATES.AWAITING_DATE, { treatment: fields.treatment });
+    const treatmentsArr = fields.treatments || [fields.treatment];
+    setState(patientPhone, BOOKING_STATES.AWAITING_DATE, { treatment: fields.treatment, treatments: treatmentsArr });
     return { text: `${fields.treatment} — lovely choice! Which date works for you?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
   }
   
@@ -520,9 +521,40 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
         resetIdle(patientPhone);
         return { text: `No problem! Feel free to ask about our treatments, pricing, or anything else.`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
       } else {
-        // Patient said something else (not Yes/No) — treat as booking intent with data
-        resetIdle(patientPhone);
-        return await startBookingFlow(message, clinicConfig, patientPhone, conversationHistory, startTime);
+        // Patient said something else (not Yes/No) — e.g. "How about Tuesday at 3pm?"
+        // CRITICAL: Preserve existing offer data (date, time, treatment) and merge with new input
+        const offerData = currentState.data || {};
+        const newFields = extractBookingFields(message);
+        const merged = {
+          date: newFields.date || offerData.date,
+          time: newFields.time || offerData.time,
+          treatment: newFields.treatment || offerData.treatment,
+          treatments: newFields.treatments || offerData.treatments || (offerData.treatment ? [offerData.treatment] : []),
+          name: newFields.name || offerData.name,
+          phone: newFields.phone || offerData.phone,
+        };
+        // If we now have all required fields, go straight to booking
+        if (merged.date && merged.time && merged.treatment) {
+          return await attemptBooking(clinicConfig, patientPhone, merged, conversationHistory, startTime);
+        }
+        // If we have partial fields, advance to the appropriate state
+        if (merged.date && merged.time) {
+          setState(patientPhone, BOOKING_STATES.AWAITING_TREATMENT, { date: merged.date, time: merged.time });
+          return { text: `${merged.date} at ${merged.time} works! Which treatment would you like?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+        }
+        if (merged.date) {
+          setState(patientPhone, BOOKING_STATES.AWAITING_TIME, { date: merged.date, treatment: merged.treatment });
+          const treatmentNote = merged.treatment ? ` for ${merged.treatment}` : '';
+          return { text: `${merged.date} noted${treatmentNote}. What time works for you?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+        }
+        if (merged.time) {
+          setState(patientPhone, BOOKING_STATES.AWAITING_DATE, { time: merged.time, treatment: merged.treatment });
+          return { text: `${merged.time} works. Which date would you like?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+        }
+        // Nothing useful extracted — ask for date but preserve treatment if we have it
+        setState(patientPhone, BOOKING_STATES.AWAITING_DATE, { treatment: merged.treatment });
+        const treatmentNote = merged.treatment ? ` for ${merged.treatment}` : '';
+        return { text: `What date works for you${treatmentNote}? (e.g., 'next Tuesday' or 'July 15')`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
       }
     
     case BOOKING_STATES.AWAITING_DATE:
@@ -540,10 +572,16 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
           }
           return { text: `Sorry, we're not open at ${data.time} on that day. ${v.reason}. What time between ${v.openTime}–${v.closeTime} works for you?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
         }
+        const existingTreatment = data.treatment || currentState.data.treatment;
+        const existingTreatments = data.treatments || currentState.data.treatments || (existingTreatment ? [existingTreatment] : undefined);
+        // If user also provided treatment, go straight to booking!
+        if (existingTreatment) {
+          return await attemptBooking(clinicConfig, patientPhone, { date: data.date, time: data.time, treatment: existingTreatment, treatments: existingTreatments }, conversationHistory, startTime);
+        }
         setState(patientPhone, BOOKING_STATES.AWAITING_TREATMENT, { date: data.date, time: data.time });
         return { text: `${data.date} at ${data.time} works! Which treatment would you like?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
       }
-      setState(patientPhone, BOOKING_STATES.AWAITING_TIME, { date: data.date });
+      setState(patientPhone, BOOKING_STATES.AWAITING_TIME, { date: data.date, treatment: data.treatment || currentState.data.treatment, treatments: data.treatments || currentState.data.treatments || (currentState.data.treatment ? [currentState.data.treatment] : undefined) });
       return { text: `${data.date} works. What time would you prefer?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
     
     case BOOKING_STATES.AWAITING_TIME:
@@ -561,15 +599,31 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
         return { text: `Sorry, we're not open at ${data.time} on that day. ${v.reason}. What time between ${v.openTime}–${v.closeTime} works for you?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
       }
       if (data.treatment) {
-        return await attemptBooking(clinicConfig, patientPhone, { date, time: data.time, treatment: data.treatment }, conversationHistory, startTime);
+        const treatmentsArr = data.treatments || currentState.data.treatments || [data.treatment];
+        return await attemptBooking(clinicConfig, patientPhone, { date, time: data.time, treatment: data.treatment, treatments: treatmentsArr }, conversationHistory, startTime);
       }
-      setState(patientPhone, BOOKING_STATES.AWAITING_TREATMENT, { date, time: data.time });
+      setState(patientPhone, BOOKING_STATES.AWAITING_TREATMENT, { date, time: data.time, treatment: data.treatment || currentState.data.treatment, treatments: data.treatments || currentState.data.treatments || (currentState.data.treatment ? [currentState.data.treatment] : undefined) });
       return { text: `${date} at ${data.time} — noted ✓ Which treatment are you looking for?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
     
-    case BOOKING_STATES.AWAITING_TREATMENT:
-      if (!data.treatment) {
-        // Show the full detailed service list
-        const services = clinicConfig.config?.services || [];
+    case BOOKING_STATES.AWAITING_TREATMENT: {
+      const services = clinicConfig.config?.services || clinicConfig.services || [];
+      // ── VALIDATE: Check if requested treatment(s) match known services ──
+      const requestedTreatments = data.treatments || (data.treatment ? [data.treatment] : []);
+      const matchedServices = [];
+      const notFound = [];
+      for (const req of requestedTreatments) {
+        const matched = services.find(s =>
+          s.name.toLowerCase().includes(req.toLowerCase()) ||
+          req.toLowerCase().includes(s.name.toLowerCase())
+        );
+        if (matched && !matchedServices.some(ms => ms.name === matched.name)) {
+          matchedServices.push(matched);
+        } else if (!matched) {
+          notFound.push(req);
+        }
+      }
+      // If no treatment provided OR none matched known services → show service list
+      if (!data.treatment || matchedServices.length === 0) {
         if (services.length > 0) {
           const serviceList = services.map(s => {
             const price = s.price ? ` (${s.price}${s.price_unit ? '/' + s.price_unit : ''})` : '';
@@ -577,16 +631,21 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
             const desc = s.description ? `: ${s.description}` : '';
             return `• ${s.name}${price}${duration}${desc}`;
           }).join('\n');
-          return { text: `Here are our treatments:\n${serviceList}\n\nWhich one would you like?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+          const notFoundNote = notFound.length > 0 ? `Sorry, we don't offer "${notFound.join(', ')}". ` : '';
+          return { text: `${notFoundNote}Here are our treatments:\n${serviceList}\n\nWhich one would you like?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
         }
         return { text: `Which treatment are you looking for?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
       }
+      // Some matched, some didn't — warn about invalid ones but proceed with valid ones
       const date2 = data.date || currentState.data.date;
       const time2 = data.time || currentState.data.time;
-      const treatments2 = data.treatments || [data.treatment];
+      const validTreatmentNames = matchedServices.map(s => s.name);
+      const validTreatmentsJoined = validTreatmentNames.join(' + ');
+      const notFoundNote = notFound.length > 0 ? ` (Note: we don't offer ${notFound.join(', ')})` : '';
       // ── ASK FOR NAME ──
-      setState(patientPhone, BOOKING_STATES.AWAITING_NAME, { date: date2, time: time2, treatment: data.treatment, treatments: treatments2 });
-      return { text: `${data.treatment} — great choice! ✓\n\nMay I have your name for the booking?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+      setState(patientPhone, BOOKING_STATES.AWAITING_NAME, { date: date2, time: time2, treatment: validTreatmentNames[0], treatments: validTreatmentNames });
+      return { text: `${validTreatmentsJoined} — great choice! ✓${notFoundNote}\n\nMay I have your name for the booking?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+    }
     
     case BOOKING_STATES.AWAITING_NAME:
       // Patient may provide name only, or name+phone together
@@ -595,12 +654,14 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
       if (!providedName && message) {
         const cleanMsg = message.trim();
         if (cleanMsg.length > 0 && cleanMsg.length < 50) {
-          // Check "Name 90123456" format — extract name part
-          const namePhoneMatch = cleanMsg.match(/^([A-Za-z\s]+)\s+\d{6,}$/);
+          // Check "Name 90123456" or "Name +6590123456" format — extract name part
+          const namePhoneMatch = cleanMsg.match(/^([A-Za-z\s]+)\s+\+?\d{6,}$/);
           if (namePhoneMatch) {
             providedName = namePhoneMatch[1].trim();
           } else if (!/^\d/.test(cleanMsg)) {
-            providedName = cleanMsg;
+            // Message doesn't start with a digit — use as name (but strip any trailing phone number)
+            const trailingPhone = cleanMsg.match(/^(.*?)\s+\+?\d{6,}$/);
+            providedName = trailingPhone ? trailingPhone[1].trim() : cleanMsg;
           }
         }
       }
@@ -610,7 +671,7 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
       // Name collected — check if phone was also provided
       const nameData = currentState.data;
       let providedPhone = patientPhone;
-      const phoneMatch = message.match(/\b\d{6,}\b/);
+      const phoneMatch = message.match(/\b\+?\d{6,}\b/);
       if (phoneMatch) {
         providedPhone = phoneMatch[0];
       }
