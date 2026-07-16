@@ -111,6 +111,7 @@ function parseTimePhrase(phrase) {
   if (lower === 'morning') return '10:00';
   if (lower === 'afternoon') return '14:00';
   if (lower === 'evening') return '17:00';
+  if (lower === 'noon' || lower === 'midday') return '12:00';
   const match = phrase.match(/(\d{1,2}):?(\d{2})?\s*(am|pm)?/i);
   if (!match) return null;
   let hour = parseInt(match[1]);
@@ -131,24 +132,25 @@ function extractTreatmentName(message, services = []) {
 
 function extractAllTreatments(message, services = []) {
   const lower = message.toLowerCase();
-  const found = [];
-  let remaining = lower;
-  
+
   if (services.length > 0) {
     // Sort by length (longest first) so "Laser Skin Rejuvenation" matches before "Laser"
     const svcNames = services.map(s => s.name.toLowerCase()).sort((a, b) => b.length - a.length);
-    
+
+    // Track matches with their position in the original message to preserve input order
+    const matches = []; // { name, position }
+    let remaining = lower;
+
     // PASS 1: Exact matches ("hydrating facial" → "Hydrating Facial")
-    // These take priority over partial matches
     for (const svcName of svcNames) {
-      if (remaining.includes(svcName) && !found.includes(svcName)) {
-        found.push(svcName);
-        remaining = remaining.replace(svcName, ' ');
+      const pos = remaining.indexOf(svcName);
+      if (pos !== -1 && !matches.some(m => m.name === svcName)) {
+        matches.push({ name: svcName, position: lower.indexOf(svcName) });
+        remaining = remaining.replace(svcName, ' '.repeat(svcName.length));
       }
     }
-    
+
     // PASS 2: Partial matches ("botox" → "Botox Consultation")
-    // Sort by relevance: services with more query words come first
     const queryWords = remaining.split(' ').filter(w => w.length >= 3);
     const relevanceScore = (svcName) => {
       const svcWords = svcName.split(' ');
@@ -158,29 +160,49 @@ function extractAllTreatments(message, services = []) {
       }
       return score;
     };
-    const sorted = [...svcNames]
-      .filter(s => !found.includes(s))
-      // Sort: higher relevance first, then fewer words (more specific), then longer name
-      .sort((a, b) => relevanceScore(b) - relevanceScore(a) || a.split(' ').length - b.split(' ').length || b.length - a.length);
-    
-    for (const svcName of sorted) {
-      // Skip if already found or if remaining is too short
-      if (found.includes(svcName) || remaining.trim().length < 3) continue;
-      
-      // Check if any significant word from service name is in remaining
-      // "botox" (≥4 chars) matches "Botox Consultation"
-      // "facial" should NOT match if already exact-matched "Hydrating Facial"
+    // Position score: prefer services where the matched word appears EARLIER
+    // e.g., "laser" in "laser skin rejuvenation" (position 0) beats "picosure laser" (position 1)
+    const positionScore = (svcName) => {
       const words = svcName.split(' ').filter(w => w.length >= 4);
-      const hasMatch = words.some(word => remaining.includes(word));
-      
-      if (hasMatch) {
-        found.push(svcName);
-        // Remove matched words from remaining
-        for (const word of words) {
-          remaining = remaining.replace(word, ' ');
-        }
+      for (const word of words) {
+        if (remaining.includes(word)) return svcName.indexOf(word);
+      }
+      return Infinity;
+    };
+    const sorted = [...svcNames]
+      .filter(s => !matches.some(m => m.name === s))
+      .sort((a, b) => relevanceScore(b) - relevanceScore(a) || positionScore(a) - positionScore(b) || b.length - a.length);
+
+    // Generic words that appear in many services — require a SPECIFIC word to also match
+    // "facial" is NOT generic — it's a specific treatment category patients ask for directly
+    const GENERIC_WORDS = new Set(['treatment', 'consultation', 'service', 'therapy', 'care', 'procedure']);
+
+    for (const svcName of sorted) {
+      if (matches.some(m => m.name === svcName) || remaining.trim().length < 3) continue;
+
+      const words = svcName.split(' ').filter(w => w.length >= 4);
+      const matchedWords = words.filter(word => remaining.includes(word));
+      if (matchedWords.length === 0) continue;
+
+      const onlyGeneric = matchedWords.every(w => GENERIC_WORDS.has(w));
+      if (onlyGeneric) continue;
+
+      // Find the earliest position of any matched word in the original message
+      let earliestPos = Infinity;
+      for (const word of matchedWords) {
+        const pos = lower.indexOf(word);
+        if (pos !== -1 && pos < earliestPos) earliestPos = pos;
+      }
+      matches.push({ name: svcName, position: earliestPos === Infinity ? lower.length : earliestPos });
+
+      for (const word of words) {
+        remaining = remaining.replace(word, ' '.repeat(word.length));
       }
     }
+
+    // Sort by position in original message to preserve input order
+    matches.sort((a, b) => a.position - b.position);
+    return matches.map(m => m.name);
   } else {
     // Fallback keyword list when no services provided
     const keywords = [
@@ -188,6 +210,8 @@ function extractAllTreatments(message, services = []) {
       'laser skin rejuvenation','botox consultation','dermal filler',
       'hifu','thread lift','chemical peel','microneedling','facial','botox','filler','laser','peel'
     ];
+    const found = [];
+    let remaining = lower;
     const sorted = [...keywords].sort((a, b) => b.length - a.length);
     for (const s of sorted) {
       if (remaining.includes(s)) {
@@ -195,9 +219,8 @@ function extractAllTreatments(message, services = []) {
         remaining = remaining.replace(s, ' ');
       }
     }
+    return found;
   }
-  
-  return found;
 }
 
 function extractBookingFields(message, services = []) {
@@ -233,9 +256,16 @@ function extractBookingFields(message, services = []) {
     fields.treatment = allTreatments[0];   // primary (backward compat)
     fields.treatments = allTreatments;     // all treatments found
   }
-  // Name
-  const nm = message.match(/(?:my name is|i am|i'm)\s+([A-Za-z\s]+?)(?:\.|,|$|\s+(?:and|for|on|at))/i);
-  if (nm) fields.name = nm[1].trim();
+  // Name — multiple patterns to handle common formats
+  // "my name is John", "i am Jane", "i'm Dr. Tan", "name is Catherine", "call me David"
+  // Supports hyphens (Mary-Jane) and titles (Dr., Mr., Ms.)
+  const namePatterns = [
+    /(?:my name is|i am|i'm|name is|call me)\s+((?:Dr\.|Mr\.|Ms\.|Mrs\.|Mdm\.)?\s*[A-Za-z]+(?:[-\s][A-Za-z]+)*)/i,
+  ];
+  for (const np of namePatterns) {
+    const nm = message.match(np);
+    if (nm) { fields.name = nm[1].trim(); break; }
+  }
   // Phone — multiple patterns to handle common Singapore expressions
   // "my Handphone number is 87111048", "HP: 91234567", "contact me at +65 9123 4567"
   const phonePatterns = [
@@ -248,7 +278,12 @@ function extractBookingFields(message, services = []) {
     const pm = message.match(pp);
     if (pm) { foundPhone = pm[1].replace(/\s/g, ''); break; }
   }
-  // Fallback: any 8+ digit number with optional + prefix
+  // Fallback 1: number with spaces (e.g., "+65 9123 4567") — strip spaces
+  if (!foundPhone) {
+    const phSpaced = message.match(/(\+\d{1,3}\s+\d{4}\s*\d{4})/);
+    if (phSpaced) foundPhone = phSpaced[1].replace(/\s/g, '');
+  }
+  // Fallback 2: any 8+ digit number with optional + prefix (no spaces)
   if (!foundPhone) {
     const ph = message.match(/\+?\d{8,}/);
     if (ph) foundPhone = ph[0];
@@ -257,14 +292,29 @@ function extractBookingFields(message, services = []) {
   return fields;
 }
 
+// CRITICAL: Must be precise to avoid false positives like "not sure", "maybe yes"
 function isConfirmation(message) {
-  return ['yes','yeah','yup','correct',"that's right",'right','sure','ok','okay','yep','true','accurate']
-    .some(w => message.toLowerCase().trim().includes(w));
+  const lower = message.toLowerCase().trim();
+  // Reject common non-confirmation phrases first
+  const nonConfirmPatterns = ['not sure','maybe','perhaps','i think','possibly','probably','not really','i don\'t know','idk'];
+  if (nonConfirmPatterns.some(p => lower.includes(p))) return false;
+  // Exact matches or clear affirmatives
+  const confirmWords = ['yes','yeah','yup','correct',"that's right",'right','sure','ok','okay','yep','yah','true','accurate','definitely','absolutely','alright'];
+  return confirmWords.some(w => {
+    if (lower === w) return true;
+    // Word boundary check: " yes " or " yes!" should match, but "not sure" should NOT match "sure"
+    const regex = new RegExp(`\\b${w}\\b`);
+    return regex.test(lower);
+  });
 }
 
 function isDenial(message) {
-  return ['no','nope','nah','not','wrong','incorrect','cancel','stop']
-    .some(w => { const l = message.toLowerCase().trim(); return l === w || l.startsWith(w + ' '); });
+  const l = message.toLowerCase().trim();
+  // Exact matches
+  if (['no','nope','nah','wrong','incorrect','cancel','stop','not now','maybe later','nah i\'m good','nope sorry'].includes(l)) return true;
+  // Starts with denial word followed by space
+  return ['no ','nope ','nah ','not ','wrong ','incorrect ','cancel ','stop ']
+    .some(w => l.startsWith(w));
 }
 
 setInterval(() => {
