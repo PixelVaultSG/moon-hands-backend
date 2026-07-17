@@ -171,17 +171,25 @@ function formatOperatingHours(hours) {
 // ─── LOCATION ─────────────────────────────────────────────────────
 
 function handleLocation({ clinicConfig, message }) {
-  const address = clinicConfig.address;
-  const landmarks = clinicConfig.landmarks;
-  const parking = clinicConfig.parking_info;
-  const mrt = clinicConfig.nearest_mrt;
+  // CRITICAL FIX: Use getConfig() to read nested config (config.address) not flat (address)
+  const address = getConfig(clinicConfig, 'address');
+  const landmarks = getConfig(clinicConfig, 'landmarks');
+  const parking = getConfig(clinicConfig, 'parking_info');
+  const mrt = getConfig(clinicConfig, 'nearest_mrt');
+  const clinicName = clinicConfig.clinic_name || clinicConfig.name || 'our clinic';
   
   let response = '';
   
   if (address) {
     response += `We're located at:\n📍 ${address}`;
   } else {
-    return `I can help you find us. Would you like our address or directions from a specific location?`;
+    // CRITICAL FIX: Even without explicit address field, try to use location from config
+    const location = getConfig(clinicConfig, 'location');
+    if (location) {
+      response += `We're located at:\n📍 ${location}`;
+    } else {
+      return `I can help you find us. Would you like our address or directions from a specific location?`;
+    }
   }
   
   if (mrt) {

@@ -151,6 +151,10 @@ async function routeMessage(message, clinicConfig, patientPhone = null, conversa
     if (contextResponse) return contextResponse;
   }
 
+  // ── STEP 4c: Handle context-dependent replies (both, address, directions) ──
+  const contextReplyResponse = handleContextReply(message, clinicConfig, patientPhone, conversationHistory, startTime);
+  if (contextReplyResponse) return contextReplyResponse;
+
   // ── STEP 5: Hardcoded handler ───────────────────────────────────
   try {
     const response = await executeHandler(primaryIntent.intent, {
@@ -290,6 +294,79 @@ function handleClarification(message, clinicConfig, patientPhone, conversationHi
     cost_saved: 1,
     latency_ms: Date.now() - startTime
   };
+}
+
+/**
+ * Handle context-dependent replies that aren't clear intents:
+ * "both" → when bot asked "address or directions?"
+ * "address" / "directions" → when bot asked "address or directions?"
+ * These short replies only make sense in the context of the previous AI message.
+ */
+function handleContextReply(message, clinicConfig, patientPhone, conversationHistory, startTime) {
+  if (!conversationHistory || conversationHistory.length === 0) return null;
+  
+  const lower = message.toLowerCase().trim();
+  const lastAiMessage = conversationHistory[conversationHistory.length - 1]?.ai?.toLowerCase() || '';
+  
+  // Check if last AI message was about location (address/directions)
+  const isLocationContext = lastAiMessage.includes('address') && lastAiMessage.includes('direction');
+  if (!isLocationContext) return null;
+  
+  const address = clinicConfig.config?.address || clinicConfig.address;
+  const location = clinicConfig.config?.location || clinicConfig.location;
+  const actualAddress = address || location;
+  const nearestMrt = clinicConfig.config?.nearest_mrt || clinicConfig.nearest_mrt;
+  const landmarks = clinicConfig.config?.landmarks || clinicConfig.landmarks;
+  const parking = clinicConfig.config?.parking_info || clinicConfig.parking_info;
+  
+  let response = '';
+  
+  // "Both" → provide both address and directions info
+  if (lower === 'both' || lower.includes('both your') || lower.includes('both the')) {
+    if (actualAddress) {
+      response = `📍 Address: ${actualAddress}`;
+      if (nearestMrt) response += `\n\n🚇 Nearest MRT: ${nearestMrt}`;
+      if (landmarks) response += `\n🏢 Nearby: ${landmarks}`;
+      if (parking) response += `\n🅿️ Parking: ${parking}`;
+      response += `\n\n🗺️ For directions, you can search "${clinicConfig.name || 'our clinic'}" on Google Maps. We're happy to provide more specific directions if you let us know where you're coming from!`;
+    } else {
+      response = `I'd be happy to help you find us! Could you let me know what area you're coming from so I can give you the best directions?`;
+    }
+  }
+  // "Address" → provide just the address
+  else if (lower === 'address' || lower === 'the address') {
+    if (actualAddress) {
+      response = `📍 Our address: ${actualAddress}`;
+      if (nearestMrt) response += `\n🚇 Nearest MRT: ${nearestMrt}`;
+      if (landmarks) response += `\n🏢 Nearby: ${landmarks}`;
+      response += `\n\nNeed directions to get here?`;
+    } else {
+      response = `I'd be happy to help! Could you let me know what area you're coming from so I can give you the best directions?`;
+    }
+  }
+  // "Directions" → provide directions guidance
+  else if (lower === 'directions' || lower === 'the directions') {
+    if (actualAddress) {
+      response = `🗺️ You can search "${clinicConfig.name || 'our clinic'}" on Google Maps for turn-by-turn directions.\n\n📍 Address: ${actualAddress}`;
+      if (nearestMrt) response += `\n🚇 Nearest MRT: ${nearestMrt}`;
+      if (parking) response += `\n🅿️ Parking: ${parking}`;
+      response += `\n\nIf you tell me where you're coming from, I can give you more specific directions!`;
+    } else {
+      response = `I'd be happy to help with directions! Could you let me know where you're coming from?`;
+    }
+  }
+  
+  if (response) {
+    return {
+      text: response,
+      source: 'hardcoded',
+      intents: ['context_reply'],
+      cost_saved: 1,
+      latency_ms: Date.now() - startTime
+    };
+  }
+  
+  return null;
 }
 
 // ─── MULTI-INTENT CONFIRMATION ───────────────────────────────────
@@ -443,7 +520,11 @@ function validateBookingTime(dateStr, timeStr, operatingHours) {
   }
   
   // Get day of week from date string (YYYY-MM-DD)
-  const date = new Date(dateStr + 'T00:00:00+08:00'); // SGT
+  // CRITICAL FIX: Parse in local timezone to avoid UTC day-shift bug.
+  // new Date('2026-07-20T00:00:00+08:00').getDay() returns Sunday (UTC)
+  // when the actual day is Monday. Using Date(y, m-1, d) avoids this.
+  const [year, month, day] = dateStr.split('-').map(Number);
+  const date = new Date(year, month - 1, day);
   const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Public Holidays'];
   const dayName = dayNames[date.getDay()];
   
@@ -918,9 +999,11 @@ async function buildBookingSummary(clinicConfig, date, time, treatments, service
         // Slot is taken — find 2 alternatives (patient can wait another 15s)
         const hours = clinicConfig.config?.operating_hours || [];
         const dayEntry = hours.find(h => {
-          const d = new Date(date + 'T00:00:00+08:00');
+          // CRITICAL FIX: Same timezone-safe parsing as validateBookingTime
+          const [y, m, d] = date.split('-').map(Number);
+          const dt = new Date(y, m - 1, d);
           const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-          return h.day === dayNames[d.getDay()];
+          return h.day === dayNames[dt.getDay()];
         });
         
         if (dayEntry?.isOpen) {
