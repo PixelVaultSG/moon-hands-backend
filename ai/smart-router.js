@@ -322,7 +322,8 @@ function handleContextReply(message, clinicConfig, patientPhone, conversationHis
   let response = '';
   
   // "Both" → provide both address and directions info
-  if (lower === 'both' || lower.includes('both your') || lower.includes('both the')) {
+  // Matches: "both", "both your address and directions", "both the address and directions"
+  if (lower === 'both' || lower.includes('both your') || lower.includes('both the') || lower.includes('address and direction')) {
     if (actualAddress) {
       response = `📍 Address: ${actualAddress}`;
       if (nearestMrt) response += `\n\n🚇 Nearest MRT: ${nearestMrt}`;
@@ -651,6 +652,8 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
           if (isDayClosed) {
             return { text: `Sorry, we're closed on ${data.date}. ${v.reason}. Please choose a different date — what day works for you?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
           }
+          // CRITICAL FIX: Transition to AWAITING_TIME with date preserved
+          setState(patientPhone, BOOKING_STATES.AWAITING_TIME, { date: data.date, treatment: data.treatment || currentState.data.treatment, treatments: data.treatments || currentState.data.treatments || (currentState.data.treatment ? [currentState.data.treatment] : undefined) });
           return { text: `Sorry, we're not open at ${data.time} on that day. ${v.reason}. What time between ${v.openTime}–${v.closeTime} works for you?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
         }
         const existingTreatment = data.treatment || currentState.data.treatment;
@@ -728,8 +731,32 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
       return { text: `${validTreatmentsJoined} — great choice! ✓${notFoundNote}\n\nMay I have your name for the booking?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
     }
     
-    case BOOKING_STATES.AWAITING_NAME:
+    case BOOKING_STATES.AWAITING_NAME: {
       // Patient may provide name only, or name+phone together
+      // CRITICAL: Check if user is saying "And [treatment]" to ADD a treatment, not give name
+      const services = clinicConfig.config?.services || clinicConfig.services || [];
+      const lowerMsg = message.toLowerCase().trim();
+
+      // Detect "And [treatment]" or "Also [treatment]" or "Add [treatment]" patterns
+      const addTreatmentMatch = lowerMsg.match(/^(?:and|also|add|plus)\s+(.+)$/i);
+      if (addTreatmentMatch) {
+        const potentialTreatment = addTreatmentMatch[1].replace(/[!?.]+$/, '').trim();
+        const matchedService = services.find(s =>
+          s.name.toLowerCase().includes(potentialTreatment.toLowerCase()) ||
+          potentialTreatment.toLowerCase().includes(s.name.toLowerCase())
+        );
+        if (matchedService) {
+          // User is adding a treatment, not giving their name
+          const existingTreatments = currentState.data.treatments || (currentState.data.treatment ? [currentState.data.treatment] : []);
+          if (!existingTreatments.includes(matchedService.name)) {
+            existingTreatments.push(matchedService.name);
+          }
+          const treatmentsStr = existingTreatments.join(' + ');
+          setState(patientPhone, BOOKING_STATES.AWAITING_NAME, { ...currentState.data, treatment: existingTreatments[0], treatments: existingTreatments });
+          return { text: `${treatmentsStr} — great choices! ✓\n\nMay I have your name for the booking?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+        }
+      }
+
       let providedName = data.name;
       // If extractBookingFields didn't find a name, try using the raw message
       if (!providedName && message) {
@@ -758,6 +785,7 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
       }
       setState(patientPhone, BOOKING_STATES.AWAITING_PHONE, { ...nameData, name: providedName, phone: providedPhone });
       return { text: `Thanks, ${providedName}! Just to confirm — your contact number is ${providedPhone}? (reply YES to confirm or provide a different number)`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+    }
     
     case BOOKING_STATES.AWAITING_PHONE:
       // Use the patient's WhatsApp number as default, or accept a different one
@@ -1044,95 +1072,129 @@ async function buildBookingSummary(clinicConfig, date, time, treatments, service
 async function handleBookingConfirmation(message, clinicConfig, patientPhone, currentState, conversationHistory, startTime) {
   const lower = message.toLowerCase().trim();
   const data = currentState.data;
-  
-  // Check for "split" request (multi-treatment too long)
-  if (lower.includes('split')) {
-    resetIdle(patientPhone);
-    return {
-      text: `No problem! Let me know which treatment you'd like to book first, and we can schedule the second one separately.`,
-      source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime
-    };
-  }
-  
-  // Check for alternative slot selection ("1", "2", "first one", etc.)
-  const altMatch = lower.match(/^\s*(1|2|first|second)\s*$/i);
-  if (altMatch) {
-    // Patient selected an alternative slot — need to update the time
-    // For now, ask them to specify the time
-    return {
-      text: `Got it! What time would you prefer?`,
-      source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime
-    };
-  }
-  
-  // YES — create the booking
+  const services = clinicConfig.config?.services || clinicConfig.services || [];
+  const hours = clinicConfig.config?.operating_hours || [];
+
+  // ── CHECK 1: YES / NO ──
   if (isConfirmation(message)) {
     return await attemptBooking(clinicConfig, patientPhone, data, conversationHistory, startTime);
   }
-  
-  // NO — ask what to change
   if (isDenial(message)) {
     return {
       text: `No problem! What would you like to change? Reply with:\n• DATE — to change the date\n• TIME — to change the time\n• TREATMENT — to change the treatment\n• Or tell me what you'd prefer`,
       source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime
     };
   }
-  
-  // Check if patient specified a change (e.g. "Can I change to 3pm?", "Make it Tuesday instead")
-  const changeFields = extractBookingFields(message, clinicConfig.config?.services || []);
-  
+
+  // ── CHECK 2: NAME CORRECTION ("My name is Stephan King") ──
+  const nameCorrection = message.match(/(?:my name is|i am|i'm|name is|call me)\s+((?:Dr\.|Mr\.|Ms\.|Mrs\.)?\s*[A-Za-z]+(?:[-\s][A-Za-z]+)*)/i);
+  if (nameCorrection) {
+    const newName = nameCorrection[1].trim();
+    setState(patientPhone, BOOKING_STATES.AWAITING_CONFIRMATION, { ...data, name: newName });
+    const summary = await buildBookingSummary(clinicConfig, data.date, data.time, data.treatments || [data.treatment], services, newName, data.phone);
+    return { text: `Got it, ${newName}! I've updated your name.\n\n${summary}`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+  }
+
+  // ── CHECK 3: TREATMENT ADDITION ("You forgot to include microneedling" / "Add Botox too") ──
+  const addPatterns = [
+    /(?:forgot|missed|missing|add|include|also want|want also)\s+(?:to\s+)?(?:include\s+|add\s+)?(.+)/i,
+    /(?:and|also|plus)\s+(.+)/i,
+  ];
+  for (const pattern of addPatterns) {
+    const addMatch = message.match(pattern);
+    if (addMatch) {
+      const potentialTreatment = addMatch[1].replace(/[!.?]+$/, '').trim();
+      const allExtracted = extractAllTreatments(potentialTreatment, services);
+      if (allExtracted.length > 0) {
+        const existingTreatments = [...(data.treatments || (data.treatment ? [data.treatment] : []))];
+        let addedAny = false;
+        for (const t of allExtracted) {
+          if (!existingTreatments.includes(t)) {
+            existingTreatments.push(t);
+            addedAny = true;
+          }
+        }
+        if (addedAny) {
+          setState(patientPhone, BOOKING_STATES.AWAITING_CONFIRMATION, { ...data, treatment: existingTreatments[0], treatments: existingTreatments });
+          const summary = await buildBookingSummary(clinicConfig, data.date, data.time, existingTreatments, services, data.name, data.phone);
+          return { text: `I've added ${allExtracted.join(' + ')}! Here's your updated booking:\n\n${summary}`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+        }
+      }
+    }
+  }
+
+  // ── CHECK 4: DURATION / CLOSING TIME QUESTIONS ──
+  if (lower.includes('duration') || lower.includes('hour') || lower.includes('time') || lower.includes('long') || lower.includes('closed') || lower.includes('close') || lower.includes('open')) {
+    const treatments = data.treatments || [data.treatment];
+    const matchedServices = [];
+    for (const t of treatments) {
+      const s = services.find(svc => svc.name.toLowerCase().includes(t.toLowerCase()) || t.toLowerCase().includes(svc.name.toLowerCase()));
+      if (s) matchedServices.push(s);
+    }
+    const totalDuration = matchedServices.reduce((sum, s) => sum + (parseInt(s.duration) || 60), 0);
+    // Check if booking extends past closing
+    const v = validateBookingTime(data.date, data.time, hours);
+    const endTime = v.isOpen ? addMinutes(data.time, totalDuration) : null;
+    const pastClosing = v.closeTime && endTime && endTime > v.closeTime;
+
+    let answer = '';
+    if (matchedServices.length > 1) {
+      const durations = matchedServices.map(s => `${s.name}: ${s.duration}mins`).join(', ');
+      answer += `Each treatment has its own duration — ${durations}. The total is ${totalDuration} minutes (${Math.floor(totalDuration / 60)}h${totalDuration % 60}mins).\n`;
+    } else {
+      answer += `This treatment takes ${totalDuration} minutes.\n`;
+    }
+    if (pastClosing) {
+      answer += `⚠️ You're right to check! With ${totalDuration}mins, your appointment would end around ${endTime}, which is after our closing time (${v.closeTime}). Would you like to move it earlier?`;
+    } else if (endTime) {
+      answer += `✅ You'll be done by around ${endTime}, which is within our operating hours.\n`;
+    }
+    answer += `\nDoes the timing work for you? Reply YES to confirm or let me know what you'd like to change.`;
+    return { text: answer, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+  }
+
+  // ── CHECK 5: DATE/TIME/TREATMENT CHANGES via extractBookingFields ──
+  const changeFields = extractBookingFields(message, services);
+
   if (changeFields.date && !changeFields.time) {
-    // Only date changed
-    setState(patientPhone, BOOKING_STATES.AWAITING_TIME, { 
-      ...data, 
-      date: changeFields.date 
-    });
-    return {
-      text: `Sure, ${changeFields.date} works. What time would you prefer?`,
-      source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime
-    };
+    setState(patientPhone, BOOKING_STATES.AWAITING_TIME, { ...data, date: changeFields.date });
+    return { text: `Sure, ${changeFields.date} works. What time would you prefer?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
   }
-  
   if (changeFields.time && !changeFields.date) {
-    // Only time changed
-    setState(patientPhone, BOOKING_STATES.AWAITING_CONFIRMATION, {
-      ...data,
-      time: changeFields.time
-    });
-    const services = clinicConfig.config?.services || [];
-    const summary = await buildBookingSummary(clinicConfig, data.date, changeFields.time, data.treatments || [data.treatment], services);
+    setState(patientPhone, BOOKING_STATES.AWAITING_CONFIRMATION, { ...data, time: changeFields.time });
+    const summary = await buildBookingSummary(clinicConfig, data.date, changeFields.time, data.treatments || [data.treatment], services, data.name, data.phone);
     return { text: summary, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
   }
-  
   if (changeFields.treatment) {
-    // Treatment changed
-    setState(patientPhone, BOOKING_STATES.AWAITING_CONFIRMATION, {
-      ...data,
-      treatment: changeFields.treatment,
-      treatments: changeFields.treatments || [changeFields.treatment]
-    });
-    const services = clinicConfig.config?.services || [];
     const newTreatments = changeFields.treatments || [changeFields.treatment];
-    const summary = await buildBookingSummary(clinicConfig, data.date, data.time, newTreatments, services);
+    setState(patientPhone, BOOKING_STATES.AWAITING_CONFIRMATION, { ...data, treatment: newTreatments[0], treatments: newTreatments });
+    const summary = await buildBookingSummary(clinicConfig, data.date, data.time, newTreatments, services, data.name, data.phone);
     return { text: summary, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
   }
-  
   if (changeFields.date && changeFields.time) {
-    // Both changed
-    setState(patientPhone, BOOKING_STATES.AWAITING_CONFIRMATION, {
-      ...data,
-      date: changeFields.date,
-      time: changeFields.time
-    });
-    const services = clinicConfig.config?.services || [];
-    const summary = await buildBookingSummary(clinicConfig, changeFields.date, changeFields.time, data.treatments || [data.treatment], services);
+    setState(patientPhone, BOOKING_STATES.AWAITING_CONFIRMATION, { ...data, date: changeFields.date, time: changeFields.time });
+    const summary = await buildBookingSummary(clinicConfig, changeFields.date, changeFields.time, data.treatments || [data.treatment], services, data.name, data.phone);
     return { text: summary, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
   }
-  
-  // Ambiguous response — repeat the summary
-  const services = clinicConfig.config?.services || [];
-  const summary = await buildBookingSummary(clinicConfig, data.date, data.time, data.treatments || [data.treatment], services);
+
+  // ── CHECK 6: "SPLIT" request ──
+  if (lower.includes('split')) {
+    resetIdle(patientPhone);
+    return { text: `No problem! Let me know which treatment you'd like to book first, and we can schedule the second one separately.`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+  }
+
+  // ── FALLBACK: Repeat summary with clearer prompt ──
+  const summary = await buildBookingSummary(clinicConfig, data.date, data.time, data.treatments || [data.treatment], services, data.name, data.phone);
   return { text: `Sorry, I didn't catch that. ${summary}`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+}
+
+// Helper: add minutes to a time string (HH:MM)
+function addMinutes(timeStr, minutes) {
+  const [h, m] = timeStr.split(':').map(Number);
+  const totalMinutes = h * 60 + m + minutes;
+  const newH = Math.floor(totalMinutes / 60);
+  const newM = totalMinutes % 60;
+  return `${String(newH).padStart(2, '0')}:${String(newM).padStart(2, '0')}`;
 }
 
 // ─── OPENAI ROUTING ──────────────────────────────────────────────

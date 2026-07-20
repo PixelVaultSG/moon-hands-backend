@@ -130,8 +130,39 @@ function extractTreatmentName(message, services = []) {
   return all.length > 0 ? all[0] : null; // backward compat
 }
 
+// Common treatment name variants where patients use spaces that services don't have
+// e.g., "micro needling" → "microneedling", "thread lift" → "threadlift"
+const TREATMENT_VARIANTS = [
+  [/micro\s+needling/g, 'microneedling'],
+  [/thread\s+lift/g, 'threadlift'],
+  [/thread\s+lifting/g, 'threadlift'],
+  [/chemical\s+peel/g, 'chemicalpeel'],
+  [/laser\s+skin\s+rejuvenation/g, 'laserskinrejuvenation'],
+  [/skin\s+rejuvenation/g, 'skinrejuvenation'],
+  [/pico\s+sure/g, 'picosure'],
+  [/pico\s+laser/g, 'picosurelaser'],
+  [/dermal\s+filler/g, 'dermalfiller'],
+  [/anti\s+aging/g, 'antiaging'],
+  [/acne\s+clear/g, 'acneclear'],
+  [/hydra\s+facial/g, 'hydrafacial'],
+  [/rejuran\s+healer/g, 'rejuranhealer'],
+  [/hifu\s+face\s+lift/g, 'hifufacelift'],
+  [/face\s+lift/g, 'facelift'],
+  [/botox\s+consultation/g, 'botoxconsultation'],
+];
+
+function normalizeTreatmentNames(message) {
+  let normalized = message.toLowerCase();
+  for (const [pattern, replacement] of TREATMENT_VARIANTS) {
+    normalized = normalized.replace(pattern, replacement);
+  }
+  return normalized;
+}
+
 function extractAllTreatments(message, services = []) {
-  const lower = message.toLowerCase();
+  // CRITICAL FIX: Normalize spaced variants before matching
+  // "micro needling" → "microneedling" so it matches the service name
+  const lower = normalizeTreatmentNames(message);
 
   if (services.length > 0) {
     // Sort by length (longest first) so "Laser Skin Rejuvenation" matches before "Laser"

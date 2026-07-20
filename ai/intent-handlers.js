@@ -171,40 +171,42 @@ function formatOperatingHours(hours) {
 // ─── LOCATION ─────────────────────────────────────────────────────
 
 function handleLocation({ clinicConfig, message }) {
-  // CRITICAL FIX: Use getConfig() to read nested config (config.address) not flat (address)
+  // CRITICAL FIX: Give EVERYTHING upfront — never ask "address or directions?"
+  // Asking clarifying questions creates infinite conversation loops (screenshots 1, 7, 8, 9)
   const address = getConfig(clinicConfig, 'address');
   const landmarks = getConfig(clinicConfig, 'landmarks');
   const parking = getConfig(clinicConfig, 'parking_info');
   const mrt = getConfig(clinicConfig, 'nearest_mrt');
   const clinicName = clinicConfig.clinic_name || clinicConfig.name || 'our clinic';
-  
+
   let response = '';
-  
+
   if (address) {
-    response += `We're located at:\n📍 ${address}`;
+    response += `📍 ${address}`;
   } else {
-    // CRITICAL FIX: Even without explicit address field, try to use location from config
     const location = getConfig(clinicConfig, 'location');
     if (location) {
-      response += `We're located at:\n📍 ${location}`;
+      response += `📍 ${location}`;
     } else {
-      return `I can help you find us. Would you like our address or directions from a specific location?`;
+      return `We're located in Singapore. For our exact address, please contact us directly and our team will be happy to assist you!`;
     }
   }
-  
+
   if (mrt) {
-    response += `\n\n🚇 Nearest MRT: ${mrt}`;
+    response += `\n🚇 Nearest MRT: ${mrt}`;
   }
-  
+
   if (landmarks) {
     response += `\n🏢 Nearby: ${landmarks}`;
   }
-  
+
   if (parking) {
     response += `\n🅿️ Parking: ${parking}`;
   }
-  
-  response += `\n\nWould you like directions from a specific location?`;
+
+  // Always provide directions guidance — never ask "would you like directions?"
+  response += `\n\n🗺️ For directions, search "${clinicName}" on Google Maps. If you let me know where you're coming from, I can give you more specific directions!`;
+
   return response;
 }
 
