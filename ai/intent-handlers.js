@@ -94,8 +94,13 @@ const HANDLERS = {
   waitlist_request: handleWaitlistRequest,
 };
 
+const HANDLER_TIMEOUT_MS = 8000; // 8 seconds max — patients won't wait longer
+
 /**
  * Execute a handler by intent name.
+ * CRITICAL: Wrapped in a timeout to prevent infinite hangs.
+ * If a handler hangs (OpenAI call, DB query, etc.), we return
+ * a fallback instead of leaving the patient waiting forever.
  */
 async function executeHandler(intentName, context) {
   const handler = HANDLERS[intentName];
@@ -103,17 +108,30 @@ async function executeHandler(intentName, context) {
     console.log(`[HANDLER] No handler for intent: ${intentName}`);
     return null;
   }
-  
-  try {
-    const response = await handler(context);
-    if (response) {
-      console.log(`[HANDLER] ${intentName} → responded`);
+
+  return Promise.race([
+    (async () => {
+      try {
+        const response = await handler(context);
+        if (response) {
+          console.log(`[HANDLER] ${intentName} → responded`);
+        }
+        return response;
+      } catch (err) {
+        console.error(`[HANDLER] Error in ${intentName}:`, err.message);
+        return `Sorry, I had a temporary issue. Please try again or contact the clinic directly.`;
+      }
+    })(),
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`HANDLER_TIMEOUT:${intentName}`)), HANDLER_TIMEOUT_MS)
+    )
+  ]).catch(err => {
+    if (err.message && err.message.startsWith('HANDLER_TIMEOUT')) {
+      console.error(`[HANDLER] ${intentName} → TIMEOUT after ${HANDLER_TIMEOUT_MS}ms`);
+      return `Sorry, I'm taking longer than expected. Please try again, or contact the clinic directly if it's urgent.`;
     }
-    return response;
-  } catch (err) {
-    console.error(`[HANDLER] Error in ${intentName}:`, err.message);
-    return null;
-  }
+    throw err;
+  });
 }
 
 // ─── GREETING ─────────────────────────────────────────────────────
@@ -260,25 +278,58 @@ function handlePricingGeneral({ clinicConfig }) {
 
 // ─── SERVICE INQUIRY ─────────────────────────────────────────────
 
-function handleServiceInquiry({ clinicConfig, params }) {
-  const requestedService = params?.treatment;
+function handleServiceInquiry({ clinicConfig, params, message }) {
   const services = getConfig(clinicConfig, 'services') || [];
-  
-  if (!requestedService) {
+
+  // CRITICAL FIX: Handle MULTIPLE treatments, not just the first one.
+  // When user says "HIFU and microneedling", we must return details for BOTH
+  // immediately. If we only handle one, the other falls through to OpenAI
+  // which promises to "fetch details" but the function call can hang.
+  const { extractAllTreatments } = require('./conversation-state');
+  const allRequested = extractAllTreatments(message || '', services);
+
+  // If extractAllTreatments found nothing, fall back to params?.treatment
+  const requestedService = allRequested.length > 0 ? null : (params?.treatment || null);
+
+  if (!requestedService && allRequested.length === 0) {
     return handleServiceList({ clinicConfig });
   }
-  
-  const match = findServiceMatch(requestedService, services);
-  
-  if (match) {
+
+  // Build a list of services to describe
+  const servicesToDescribe = [];
+  if (allRequested.length > 0) {
+    for (const reqName of allRequested) {
+      const match = findServiceMatch(reqName, services);
+      if (match) servicesToDescribe.push(match);
+    }
+  } else {
+    const match = findServiceMatch(requestedService, services);
+    if (match) servicesToDescribe.push(match);
+  }
+
+  if (servicesToDescribe.length === 0) {
+    return `I don't see ${requestedService || (allRequested || []).join(', ')} in our current treatment menu. Would you like me to share what treatments we do offer?`;
+  }
+
+  // Build response for one or multiple treatments
+  if (servicesToDescribe.length === 1) {
+    const match = servicesToDescribe[0];
     const price = formatPrice(match.price, match.price_unit);
     const duration = match.duration ? `\n⏱ Duration: ${match.duration}` : '';
     const downtime = match.downtime ? `\n🩹 Downtime: ${match.downtime}` : '';
-    
     return `Yes, we offer ${match.name}!${duration}${downtime}\n💰 Price: ${price}\n\n${match.description || ''}\n\nWould you like to book a consultation or appointment?`;
   }
-  
-  return `I don't see ${requestedService} in our current treatment menu. Would you like me to share what treatments we do offer?`;
+
+  // MULTIPLE treatments — describe each with a separator
+  let response = `Yes, we offer all of those! Here are the details:\n`;
+  for (const match of servicesToDescribe) {
+    const price = formatPrice(match.price, match.price_unit);
+    const duration = match.duration ? ` — ${match.duration}` : '';
+    const downtime = match.downtime ? ` | Downtime: ${match.downtime}` : '';
+    response += `\n━━ ${match.name} ━━${duration}${downtime}\n💰 ${price}\n${match.description || ''}\n`;
+  }
+  response += `\nWould you like to book any of these treatments?`;
+  return response;
 }
 
 // ─── SERVICE LIST ─────────────────────────────────────────────────
