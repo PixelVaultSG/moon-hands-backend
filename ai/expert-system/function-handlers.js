@@ -170,7 +170,7 @@ function generateTimeSlots(openTime, closeTime, bookedTimes, serviceName, servic
  * Accepts both old param names (patient_name, patient_phone, treatment, date, time) 
  * and new (customer_name, customer_phone, service_name, appointment_date, appointment_time).
  */
-async function createBooking({ client_id, customer_name, customer_phone, service_name, appointment_date, appointment_time, notes, patient_name, patient_phone, treatment, date, time }) {
+async function createBooking({ client_id, customer_name, customer_phone, service_name, appointment_date, appointment_time, notes, patient_name, patient_phone, treatment, date, time, duration: callerDuration }) {
   const supabase = getSupabase();
   
   // Normalize parameter names (backward compatible)
@@ -247,6 +247,7 @@ async function createBooking({ client_id, customer_name, customer_phone, service
     // service, appointment_date, appointment_time, duration, status,
     // notes, reminder_24h_sent, reminder_1h_sent, followup_48h_sent,
     // approval_notified, created_at, updated_at
+    const bookingDuration = callerDuration || treatmentDuration || 60;
     const { data: appointment, error: insertErr } = await supabase
       .from('appointments')
       .insert([{
@@ -256,7 +257,7 @@ async function createBooking({ client_id, customer_name, customer_phone, service
         service: service.trim(),
         appointment_date: apptDate,
         appointment_time: apptTime,
-        duration: totalDuration,
+        duration: bookingDuration,
         notes: notes || '',
         status,
         reminder_24h_sent: false,

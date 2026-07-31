@@ -165,66 +165,68 @@ function extractAllTreatments(message, services = []) {
   const lower = normalizeTreatmentNames(message);
 
   if (services.length > 0) {
-    // Sort by length (longest first) so "Laser Skin Rejuvenation" matches before "Laser"
-    const svcNames = services.map(s => s.name.toLowerCase()).sort((a, b) => b.length - a.length);
+    // CRITICAL FIX: Normalize BOTH message AND service names.
+    // "thread lift" in message → "threadlift", and "thread lift" service → "threadlift"
+    // so they match after normalization. Without this, "thread lift" service won't match
+    // "threadlift" in the normalized message.
+    const normalizedServices = services.map(s => ({
+      original: s.name,
+      normalized: normalizeTreatmentNames(s.name.toLowerCase())
+    })).sort((a, b) => b.normalized.length - a.normalized.length);
 
     // Track matches with their position in the original message to preserve input order
-    const matches = []; // { name, position }
+    const matches = []; // { originalName, position }
     let remaining = lower;
 
-    // PASS 1: Exact matches ("hydrating facial" → "Hydrating Facial")
-    for (const svcName of svcNames) {
-      const pos = remaining.indexOf(svcName);
-      if (pos !== -1 && !matches.some(m => m.name === svcName)) {
-        matches.push({ name: svcName, position: lower.indexOf(svcName) });
-        remaining = remaining.replace(svcName, ' '.repeat(svcName.length));
+    // PASS 1: Exact matches using normalized names
+    for (const svc of normalizedServices) {
+      const pos = remaining.indexOf(svc.normalized);
+      if (pos !== -1 && !matches.some(m => m.originalName === svc.original)) {
+        matches.push({ originalName: svc.original, position: lower.indexOf(svc.normalized) });
+        remaining = remaining.replace(svc.normalized, ' '.repeat(svc.normalized.length));
       }
     }
 
-    // PASS 2: Partial matches ("botox" → "Botox Consultation")
+    // PASS 2: Partial matches using normalized names
     const queryWords = remaining.split(' ').filter(w => w.length >= 3);
-    const relevanceScore = (svcName) => {
-      const svcWords = svcName.split(' ');
+    const relevanceScore = (svcNorm) => {
+      const svcWords = svcNorm.split(' ');
       let score = 0;
       for (const qw of queryWords) {
         if (svcWords.some(sw => sw.includes(qw) || qw.includes(sw))) score++;
       }
       return score;
     };
-    // Position score: prefer services where the matched word appears EARLIER
-    // e.g., "laser" in "laser skin rejuvenation" (position 0) beats "picosure laser" (position 1)
-    const positionScore = (svcName) => {
-      const words = svcName.split(' ').filter(w => w.length >= 4);
+    const positionScore = (svcNorm) => {
+      const words = svcNorm.split(' ').filter(w => w.length >= 4);
       for (const word of words) {
-        if (remaining.includes(word)) return svcName.indexOf(word);
+        if (remaining.includes(word)) return svcNorm.indexOf(word);
       }
       return Infinity;
     };
-    const sorted = [...svcNames]
-      .filter(s => !matches.some(m => m.name === s))
-      .sort((a, b) => relevanceScore(b) - relevanceScore(a) || positionScore(a) - positionScore(b) || b.length - a.length);
+    const sorted = [...normalizedServices]
+      .filter(s => !matches.some(m => m.originalName === s.original))
+      .sort((a, b) => relevanceScore(b.normalized) - relevanceScore(a.normalized) || positionScore(a.normalized) - positionScore(b.normalized) || b.normalized.length - a.normalized.length);
 
     // Generic words that appear in many services — require a SPECIFIC word to also match
-    // "facial" is NOT generic — it's a specific treatment category patients ask for directly
     const GENERIC_WORDS = new Set(['treatment', 'consultation', 'service', 'therapy', 'care', 'procedure']);
 
-    for (const svcName of sorted) {
-      if (matches.some(m => m.name === svcName) || remaining.trim().length < 3) continue;
+    for (const svc of sorted) {
+      if (matches.some(m => m.originalName === svc.original) || remaining.trim().length < 3) continue;
 
-      const words = svcName.split(' ').filter(w => w.length >= 4);
+      const words = svc.normalized.split(' ').filter(w => w.length >= 4);
       const matchedWords = words.filter(word => remaining.includes(word));
       if (matchedWords.length === 0) continue;
 
       const onlyGeneric = matchedWords.every(w => GENERIC_WORDS.has(w));
       if (onlyGeneric) continue;
 
-      // Find the earliest position of any matched word in the original message
       let earliestPos = Infinity;
       for (const word of matchedWords) {
         const pos = lower.indexOf(word);
         if (pos !== -1 && pos < earliestPos) earliestPos = pos;
       }
-      matches.push({ name: svcName, position: earliestPos === Infinity ? lower.length : earliestPos });
+      matches.push({ originalName: svc.original, position: earliestPos === Infinity ? lower.length : earliestPos });
 
       for (const word of words) {
         remaining = remaining.replace(word, ' '.repeat(word.length));
@@ -233,7 +235,7 @@ function extractAllTreatments(message, services = []) {
 
     // Sort by position in original message to preserve input order
     matches.sort((a, b) => a.position - b.position);
-    return matches.map(m => m.name);
+    return matches.map(m => m.originalName.toLowerCase());
   } else {
     // Fallback keyword list when no services provided
     const keywords = [

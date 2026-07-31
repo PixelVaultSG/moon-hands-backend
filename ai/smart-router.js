@@ -733,28 +733,29 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
     
     case BOOKING_STATES.AWAITING_NAME: {
       // Patient may provide name only, or name+phone together
-      // CRITICAL: Check if user is saying "And [treatment]" to ADD a treatment, not give name
+      // CRITICAL: Check if user is trying to ADD a treatment instead of giving their name
+      // Patterns: "And Botox", "Also add chemical peel", "Can I also add chemical peel?",
+      //           "I want Botox too", "Add microneedling as well"
       const services = clinicConfig.config?.services || clinicConfig.services || [];
-      const lowerMsg = message.toLowerCase().trim();
+      const { extractAllTreatments } = require('./conversation-state');
+      const existingTreatments = [...(currentState.data.treatments || (currentState.data.treatment ? [currentState.data.treatment] : []))];
 
-      // Detect "And [treatment]" or "Also [treatment]" or "Add [treatment]" patterns
-      const addTreatmentMatch = lowerMsg.match(/^(?:and|also|add|plus)\s+(.+)$/i);
-      if (addTreatmentMatch) {
-        const potentialTreatment = addTreatmentMatch[1].replace(/[!?.]+$/, '').trim();
-        const matchedService = services.find(s =>
-          s.name.toLowerCase().includes(potentialTreatment.toLowerCase()) ||
-          potentialTreatment.toLowerCase().includes(s.name.toLowerCase())
-        );
-        if (matchedService) {
-          // User is adding a treatment, not giving their name
-          const existingTreatments = currentState.data.treatments || (currentState.data.treatment ? [currentState.data.treatment] : []);
-          if (!existingTreatments.includes(matchedService.name)) {
-            existingTreatments.push(matchedService.name);
+      // Try to extract ANY treatments from the message
+      const foundTreatments = extractAllTreatments(message, services);
+      const newTreatments = foundTreatments.filter(t => !existingTreatments.some(et => et.toLowerCase() === t.toLowerCase()));
+
+      if (newTreatments.length > 0) {
+        // User mentioned a treatment not already in the booking — they're adding it
+        for (const t of newTreatments) {
+          // Find the original-cased service name
+          const svc = services.find(s => s.name.toLowerCase() === t.toLowerCase());
+          if (svc && !existingTreatments.some(et => et.toLowerCase() === svc.name.toLowerCase())) {
+            existingTreatments.push(svc.name);
           }
-          const treatmentsStr = existingTreatments.join(' + ');
-          setState(patientPhone, BOOKING_STATES.AWAITING_NAME, { ...currentState.data, treatment: existingTreatments[0], treatments: existingTreatments });
-          return { text: `${treatmentsStr} — great choices! ✓\n\nMay I have your name for the booking?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
         }
+        const treatmentsStr = existingTreatments.join(' + ');
+        setState(patientPhone, BOOKING_STATES.AWAITING_NAME, { ...currentState.data, treatment: existingTreatments[0], treatments: existingTreatments });
+        return { text: `${treatmentsStr} — great choices! ✓\n\nMay I have your name for the booking?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
       }
 
       let providedName = data.name;
@@ -773,6 +774,19 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
           }
         }
       }
+      // Validate name looks like a real name, not a sentence or question
+      if (providedName) {
+        const nameLower = providedName.toLowerCase();
+        // Reject names that are clearly questions, instructions, or contain treatment words
+        const rejectPatterns = [/^can\s+i\b/, /^may\s+i\b/, /^how\s+(?:about|do|can|to)\b/, /^what\s+(?:is|about)\b/, /^i\s+(?:want|need|would|also)\b/, /^add\s+/i, /^also\s+/i];
+        const hasRejectPattern = rejectPatterns.some(p => p.test(nameLower));
+        // Also reject if name contains more than 4 words (unlikely to be a real name)
+        const wordCount = providedName.split(/\s+/).length;
+        if (hasRejectPattern || wordCount > 4) {
+          return { text: `That doesn't look like a name. Could you share your name for the booking? (e.g., 'John' or 'Sarah Tan')`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+        }
+      }
+
       if (!providedName) {
         return { text: `I'd be happy to help with that! Could you share your name for the booking?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
       }
@@ -891,6 +905,7 @@ async function attemptBooking(clinicConfig, patientPhone, fields, conversationHi
       service_name: serviceNames,
       appointment_date: fields.date,
       appointment_time: fields.time,
+      duration: totalDuration,
       notes: `Total duration: ${totalDuration}mins. ${notFound.length > 0 ? 'Not found: ' + (notFound || []).join(', ') : ''}`
     });
     
