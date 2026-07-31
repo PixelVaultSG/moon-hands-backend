@@ -10,11 +10,13 @@ const TTL_MS = 24 * 60 * 60 * 1000; // 24 hours — patients often take hours to
 const BOOKING_STATES = {
   IDLE: 'idle',
   MULTI_INTENT_CONFIRM: 'multi_intent_confirm',
-  BOOKING_OFFERED: 'booking_offered',  // Bot offered to help with booking, awaiting Yes/No
+  BOOKING_OFFERED: 'booking_offered',
   AWAITING_DATE: 'awaiting_date',
   AWAITING_TIME: 'awaiting_time',
   AWAITING_TREATMENT: 'awaiting_treatment',
+  CONFIRMING_TREATMENT: 'confirming_treatment', // Smart confirmation: "Can I confirm you want Botox?"
   AWAITING_NAME: 'awaiting_name',
+  CONFIRMING_NAME: 'confirming_name',           // Smart confirmation: "Can I confirm your name is Alex?"
   AWAITING_PHONE: 'awaiting_phone',
   AWAITING_CONFIRMATION: 'awaiting_confirmation',
   READY_TO_BOOK: 'ready_to_book',
@@ -355,8 +357,105 @@ setInterval(() => {
   for (const [k, r] of stateStore.entries()) { if (now - r.lastActivity > TTL_MS) stateStore.delete(k); }
 }, 10 * 60 * 1000);
 
+/**
+ * Smart Confirmation Parser
+ * Handles "yes AND..." patterns where users confirm AND add/correct info.
+ * Examples:
+ *   "yes"                    → { action: 'confirm' }
+ *   "yes I also want Botox"  → { action: 'confirm_add', additions: ['botox'] }
+ *   "my name is Alex Lim"    → { action: 'correct', name: 'Alex Lim' }
+ *   "actually make it HIFU"  → { action: 'correct', treatment: 'HIFU' }
+ *   "no, change to Tuesday"  → { action: 'reject', date: '2026-08-05' }
+ *   "add chemical peel too"  → { action: 'add', additions: ['chemical peel'] }
+ */
+function parseSmartConfirmation(message, services = []) {
+  const lower = message.toLowerCase().trim();
+  const result = { action: null };
+
+  // 1. Detect NO / REJECTION
+  if (isDenial(message) || lower.match(/\bno\b/) || lower.startsWith('no ')) {
+    result.action = 'reject';
+    const fields = extractBookingFields(message, services);
+    if (fields.treatment) result.treatment = fields.treatment;
+    if (fields.date) result.date = fields.date;
+    if (fields.time) result.time = fields.time;
+    if (fields.name) result.name = fields.name;
+    return result;
+  }
+
+  // 2. Detect "my name is..." / "it's..." / "call me..." — NAME CORRECTION
+  const nameMatch = message.match(/(?:my name is|it's|call me|name is|i am|i'm)\s+((?:Dr\.|Mr\.|Ms\.|Mrs\.|Mdm\.)?\s*[A-Za-z]+(?:[-\s][A-Za-z]+)*)/i);
+  if (nameMatch) {
+    result.action = 'correct';
+    result.name = nameMatch[1].trim();
+    if (lower.match(/\byes\b|\byeah\b|\byup\b/)) result.hasYes = true;
+    return result;
+  }
+
+  // 3. Detect "actually..." / "instead..." / "change to..." — CORRECTION
+  if (lower.match(/\b(actually|instead|change to|make it|switch to)\b/)) {
+    result.action = 'correct';
+    const fields = extractBookingFields(message, services);
+    if (fields.treatment) result.treatment = fields.treatment;
+    if (fields.treatments) result.treatments = fields.treatments;
+    if (fields.date) result.date = fields.date;
+    if (fields.time) result.time = fields.time;
+    if (fields.name) result.name = fields.name;
+    return result;
+  }
+
+  // 4. Detect "add..." / "also want..." / "plus..." — ADDITION
+  const addPatterns = [
+    /(?:add|also want|plus|and also|as well)\s+(.+)/i,
+    /(.+)\s+(?:too|as well)/i,
+  ];
+  for (const pattern of addPatterns) {
+    const addMatch = message.match(pattern);
+    if (addMatch) {
+      const potential = addMatch[1].replace(/[!.?]+$/, '').trim();
+      const found = extractAllTreatments(potential, services);
+      if (found.length > 0) {
+        result.action = 'confirm_add';
+        result.additions = found;
+        return result;
+      }
+    }
+  }
+
+  // 5. "yes" + standalone treatments → confirm + add
+  const foundTreatments = extractAllTreatments(message, services);
+  const hasYes = lower.match(/\b(yes|yeah|yup|yep|sure|ok|okay)\b/);
+  if (hasYes && foundTreatments.length > 0) {
+    result.action = 'confirm_add';
+    result.additions = foundTreatments;
+    return result;
+  }
+
+  // 6. Simple YES
+  if (isConfirmation(message) || hasYes) {
+    result.action = 'confirm';
+    return result;
+  }
+
+  // 7. Extract whatever they said
+  const fields = extractBookingFields(message, services);
+  if (fields.treatment || fields.name || fields.date || fields.time) {
+    result.action = 'correct';
+    if (fields.treatment) result.treatment = fields.treatment;
+    if (fields.treatments) result.treatments = fields.treatments;
+    if (fields.date) result.date = fields.date;
+    if (fields.time) result.time = fields.time;
+    if (fields.name) result.name = fields.name;
+    return result;
+  }
+
+  result.action = 'ambiguous';
+  return result;
+}
+
 module.exports = {
   BOOKING_STATES, getState, setState, resetIdle,
   extractBookingFields, extractTreatmentName, extractAllTreatments,
-  isConfirmation, isDenial, parseDatePhrase, parseTimePhrase
+  isConfirmation, isDenial, parseDatePhrase, parseTimePhrase,
+  parseSmartConfirmation,
 };

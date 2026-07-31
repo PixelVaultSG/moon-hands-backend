@@ -22,6 +22,7 @@ const {
   extractBookingFields,
   isConfirmation,
   isDenial,
+  parseSmartConfirmation,
 } = require('./conversation-state');
 
 // Intents that ALWAYS go to OpenAI
@@ -726,11 +727,66 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
       const validTreatmentNames = matchedServices.map(s => s.name);
       const validTreatmentsJoined = validTreatmentNames.join(' + ');
       const notFoundNote = notFound.length > 0 ? ` (Note: we don't offer ${notFound.join(', ')})` : '';
-      // ── ASK FOR NAME ──
-      setState(patientPhone, BOOKING_STATES.AWAITING_NAME, { date: date2, time: time2, treatment: validTreatmentNames[0], treatments: validTreatmentNames });
-      return { text: `${validTreatmentsJoined} — great choice! ✓${notFoundNote}\n\nMay I have your name for the booking?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+      // ── CONFIRMING_TREATMENT: always ask for confirmation before proceeding ──
+      setState(patientPhone, BOOKING_STATES.CONFIRMING_TREATMENT, { date: date2, time: time2, treatment: validTreatmentNames[0], treatments: validTreatmentNames });
+      return { text: `Can I confirm you want ${validTreatmentsJoined}?${notFoundNote}\n\nReply YES to proceed, or tell me if you'd like to add or change anything.`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
     }
     
+    // ── CONFIRMING_TREATMENT: smart confirmation before proceeding ──
+    case BOOKING_STATES.CONFIRMING_TREATMENT: {
+      const services = clinicConfig.config?.services || clinicConfig.services || [];
+      const currentTreatments = currentState.data.treatments || [currentState.data.treatment];
+      const sc = parseSmartConfirmation(message, services);
+
+      switch (sc.action) {
+        case 'confirm': {
+          setState(patientPhone, BOOKING_STATES.AWAITING_NAME, { ...currentState.data });
+          return { text: `Great! ${currentTreatments.join(' + ')} it is. ✓\n\nMay I have your name for the booking?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+        }
+        case 'confirm_add': {
+          const existing = [...currentTreatments];
+          for (const t of sc.additions) {
+            const svc = services.find(s => s.name.toLowerCase() === t.toLowerCase());
+            if (svc && !existing.some(e => e.toLowerCase() === svc.name.toLowerCase())) existing.push(svc.name);
+          }
+          setState(patientPhone, BOOKING_STATES.CONFIRMING_TREATMENT, { ...currentState.data, treatment: existing[0], treatments: existing });
+          return { text: `Can I confirm you want ${existing.join(' + ')}?\n\nReply YES to proceed, or tell me if you'd like to add or change anything.`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+        }
+        case 'add': {
+          const existing = [...currentTreatments];
+          for (const t of sc.additions) {
+            const svc = services.find(s => s.name.toLowerCase() === t.toLowerCase());
+            if (svc && !existing.some(e => e.toLowerCase() === svc.name.toLowerCase())) existing.push(svc.name);
+          }
+          setState(patientPhone, BOOKING_STATES.CONFIRMING_TREATMENT, { ...currentState.data, treatment: existing[0], treatments: existing });
+          return { text: `Can I confirm you want ${existing.join(' + ')}?\n\nReply YES to proceed, or tell me if you'd like to add or change anything.`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+        }
+        case 'correct': {
+          if (sc.treatment || sc.treatments) {
+            const newTreatments = sc.treatments || [sc.treatment];
+            const matched = [];
+            for (const nt of newTreatments) {
+              const svc = services.find(s => s.name.toLowerCase().includes(nt.toLowerCase()) || nt.toLowerCase().includes(s.name.toLowerCase()));
+              if (svc && !matched.some(m => m.toLowerCase() === svc.name.toLowerCase())) matched.push(svc.name);
+            }
+            if (matched.length > 0) {
+              setState(patientPhone, BOOKING_STATES.CONFIRMING_TREATMENT, { ...currentState.data, treatment: matched[0], treatments: matched });
+              return { text: `Got it. Can I confirm you want ${matched.join(' + ')} instead?\n\nReply YES to proceed.`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+            }
+          }
+          setState(patientPhone, BOOKING_STATES.AWAITING_TREATMENT, { ...currentState.data });
+          return { text: `No problem. Which treatment would you like instead?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+        }
+        case 'reject': {
+          setState(patientPhone, BOOKING_STATES.AWAITING_TREATMENT, { ...currentState.data });
+          return { text: `No problem. Which treatment would you like instead?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+        }
+        default: {
+          return { text: `Can I confirm you want ${currentTreatments.join(' + ')}?\n\nReply YES to proceed, or tell me if you'd like to add or change anything.`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+        }
+      }
+    }
+
     case BOOKING_STATES.AWAITING_NAME: {
       // Patient may provide name only, or name+phone together
       // CRITICAL: Check if user is trying to ADD a treatment instead of giving their name
@@ -797,10 +853,61 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
       if (phoneMatch) {
         providedPhone = phoneMatch[0];
       }
-      setState(patientPhone, BOOKING_STATES.AWAITING_PHONE, { ...nameData, name: providedName, phone: providedPhone });
-      return { text: `Thanks, ${providedName}! Just to confirm — your contact number is ${providedPhone}? (reply YES to confirm or provide a different number)`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+      // → CONFIRMING_NAME: always confirm before proceeding to phone
+      setState(patientPhone, BOOKING_STATES.CONFIRMING_NAME, { ...nameData, name: providedName, phone: providedPhone });
+      return { text: `Can I confirm your name is ${providedName}?\n\nReply YES to proceed, or let me know if I got it wrong.`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
     }
     
+    // ── CONFIRMING_NAME: smart confirmation before proceeding ──
+    case BOOKING_STATES.CONFIRMING_NAME: {
+      const services = clinicConfig.config?.services || clinicConfig.services || [];
+      const sc = parseSmartConfirmation(message, services);
+      const currentName = currentState.data.name;
+
+      switch (sc.action) {
+        case 'confirm': {
+          setState(patientPhone, BOOKING_STATES.AWAITING_PHONE, { ...currentState.data });
+          return { text: `Thanks, ${currentName}! Just to confirm — your contact number is ${currentState.data.phone || patientPhone}? (reply YES to confirm or provide a different number)`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+        }
+        case 'confirm_add': {
+          const existing = [...(currentState.data.treatments || [currentState.data.treatment])];
+          for (const t of sc.additions) {
+            const svc = services.find(s => s.name.toLowerCase() === t.toLowerCase());
+            if (svc && !existing.some(e => e.toLowerCase() === svc.name.toLowerCase())) existing.push(svc.name);
+          }
+          setState(patientPhone, BOOKING_STATES.CONFIRMING_NAME, { ...currentState.data, treatment: existing[0], treatments: existing });
+          return { text: `Got it — I've added ${sc.additions.join(' + ')}. Can I still confirm your name is ${currentName}?\n\nReply YES to proceed.`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+        }
+        case 'correct': {
+          if (sc.name) {
+            setState(patientPhone, BOOKING_STATES.CONFIRMING_NAME, { ...currentState.data, name: sc.name });
+            return { text: `Got it, ${sc.name}! Can I confirm that's your name?\n\nReply YES to proceed.`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+          }
+          if (sc.treatment || sc.treatments) {
+            const newTreatments = sc.treatments || [sc.treatment];
+            const matched = [];
+            for (const nt of newTreatments) {
+              const svc = services.find(s => s.name.toLowerCase().includes(nt.toLowerCase()) || nt.toLowerCase().includes(s.name.toLowerCase()));
+              if (svc && !matched.some(m => m.toLowerCase() === svc.name.toLowerCase())) matched.push(svc.name);
+            }
+            if (matched.length > 0) {
+              setState(patientPhone, BOOKING_STATES.CONFIRMING_NAME, { ...currentState.data, treatment: matched[0], treatments: matched });
+              return { text: `Got it. Can I confirm you want ${matched.join(' + ')} and your name is ${currentName}?\n\nReply YES to proceed.`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+            }
+          }
+          setState(patientPhone, BOOKING_STATES.AWAITING_NAME, { ...currentState.data });
+          return { text: `No problem. What is your name?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+        }
+        case 'reject': {
+          setState(patientPhone, BOOKING_STATES.AWAITING_NAME, { ...currentState.data });
+          return { text: `No problem. What is your correct name?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+        }
+        default: {
+          return { text: `Can I confirm your name is ${currentName}?\n\nReply YES to proceed, or let me know if I got it wrong.`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+        }
+      }
+    }
+
     case BOOKING_STATES.AWAITING_PHONE:
       // Use the patient's WhatsApp number as default, or accept a different one
       let confirmedPhone = currentState.data.phone || patientPhone;
