@@ -5,18 +5,16 @@
  */
 
 const stateStore = new Map();
-const TTL_MS = 24 * 60 * 60 * 1000; // 24 hours — patients often take hours to reply
+const TTL_MS = 60 * 60 * 1000;
 
 const BOOKING_STATES = {
   IDLE: 'idle',
   MULTI_INTENT_CONFIRM: 'multi_intent_confirm',
-  BOOKING_OFFERED: 'booking_offered',
+  BOOKING_OFFERED: 'booking_offered',  // Bot offered to help with booking, awaiting Yes/No
   AWAITING_DATE: 'awaiting_date',
   AWAITING_TIME: 'awaiting_time',
   AWAITING_TREATMENT: 'awaiting_treatment',
-  CONFIRMING_TREATMENT: 'confirming_treatment', // Smart confirmation: "Can I confirm you want Botox?"
   AWAITING_NAME: 'awaiting_name',
-  CONFIRMING_NAME: 'confirming_name',           // Smart confirmation: "Can I confirm your name is Alex?"
   AWAITING_PHONE: 'awaiting_phone',
   AWAITING_CONFIRMATION: 'awaiting_confirmation',
   READY_TO_BOOK: 'ready_to_book',
@@ -82,20 +80,6 @@ function parseDatePhrase(phrase) {
     d.setDate(d.getDate() + daysAhead);
     return formatDate(d);
   }
-  // ── BARE DAY NAMES (e.g., "Tuesday", "friday") ──
-  // Treat as "next occurrence" — if day already passed this week, go to next week
-  const bareDayMatch = expanded.match(/\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/);
-  if (bareDayMatch) {
-    const dayNames = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
-    const targetDay = dayNames.indexOf(bareDayMatch[1]);
-    if (targetDay === -1) return null;
-    const d = new Date(now);
-    let daysAhead = targetDay - d.getDay();
-    // Always go to the NEXT occurrence (same behavior as "next X")
-    if (daysAhead <= 0) daysAhead += 7;
-    d.setDate(d.getDate() + daysAhead);
-    return formatDate(d);
-  }
   try {
     const parsed = new Date(phrase + ' ' + now.getFullYear());
     if (!isNaN(parsed.getTime())) return formatDate(parsed);
@@ -113,7 +97,6 @@ function parseTimePhrase(phrase) {
   if (lower === 'morning') return '10:00';
   if (lower === 'afternoon') return '14:00';
   if (lower === 'evening') return '17:00';
-  if (lower === 'noon' || lower === 'midday') return '12:00';
   const match = phrase.match(/(\d{1,2}):?(\d{2})?\s*(am|pm)?/i);
   if (!match) return null;
   let hour = parseInt(match[1]);
@@ -132,121 +115,78 @@ function extractTreatmentName(message, services = []) {
   return all.length > 0 ? all[0] : null; // backward compat
 }
 
-// Common treatment name variants where patients use spaces that services don't have
-// e.g., "micro needling" → "microneedling", "thread lift" → "threadlift"
-const TREATMENT_VARIANTS = [
-  [/micro\s+needling/g, 'microneedling'],
-  [/thread\s+lift/g, 'threadlift'],
-  [/thread\s+lifting/g, 'threadlift'],
-  [/chemical\s+peel/g, 'chemicalpeel'],
-  [/laser\s+skin\s+rejuvenation/g, 'laserskinrejuvenation'],
-  [/skin\s+rejuvenation/g, 'skinrejuvenation'],
-  [/pico\s+sure/g, 'picosure'],
-  [/pico\s+laser/g, 'picosurelaser'],
-  [/dermal\s+filler/g, 'dermalfiller'],
-  [/anti\s+aging/g, 'antiaging'],
-  [/acne\s+clear/g, 'acneclear'],
-  [/hydra\s+facial/g, 'hydrafacial'],
-  [/rejuran\s+healer/g, 'rejuranhealer'],
-  [/hifu\s+face\s+lift/g, 'hifufacelift'],
-  [/face\s+lift/g, 'facelift'],
-  [/botox\s+consultation/g, 'botoxconsultation'],
-];
-
-function normalizeTreatmentNames(message) {
-  let normalized = message.toLowerCase();
-  for (const [pattern, replacement] of TREATMENT_VARIANTS) {
-    normalized = normalized.replace(pattern, replacement);
-  }
-  return normalized;
-}
-
 function extractAllTreatments(message, services = []) {
-  // CRITICAL FIX: Normalize spaced variants before matching
-  // "micro needling" → "microneedling" so it matches the service name
-  const lower = normalizeTreatmentNames(message);
-
+  // Normalize spaced variants first (e.g., "micro needling" → "microneedling")
+  const normalized = normalizeTreatmentNames(message);
+  const lower = normalized.toLowerCase();
+  const found = [];
+  let remaining = lower;
+  
   if (services.length > 0) {
-    // CRITICAL FIX: Normalize BOTH message AND service names.
-    // "thread lift" in message → "threadlift", and "thread lift" service → "threadlift"
-    // so they match after normalization. Without this, "thread lift" service won't match
-    // "threadlift" in the normalized message.
-    const normalizedServices = services.map(s => ({
-      original: s.name,
-      normalized: normalizeTreatmentNames(s.name.toLowerCase())
-    })).sort((a, b) => b.normalized.length - a.normalized.length);
-
-    // Track matches with their position in the original message to preserve input order
-    const matches = []; // { originalName, position }
-    let remaining = lower;
-
-    // PASS 1: Exact matches using normalized names
-    for (const svc of normalizedServices) {
-      const pos = remaining.indexOf(svc.normalized);
-      if (pos !== -1 && !matches.some(m => m.originalName === svc.original)) {
-        matches.push({ originalName: svc.original, position: lower.indexOf(svc.normalized) });
-        remaining = remaining.replace(svc.normalized, ' '.repeat(svc.normalized.length));
+    const svcNames = services.map(s => s.name.toLowerCase());
+    
+    // PASS 1: Exact matches ("hydrating facial" → "Hydrating Facial")
+    // These take priority over partial matches
+    for (const svcName of svcNames) {
+      if (remaining.includes(svcName) && !found.includes(svcName)) {
+        found.push(svcName);
+        remaining = remaining.replace(svcName, ' ');
       }
     }
-
-    // PASS 2: Partial matches using normalized names
+    
+    // PASS 2: Partial matches ("botox" → "Botox Consultation")
+    // Sort by relevance: services with more query words come first
     const queryWords = remaining.split(' ').filter(w => w.length >= 3);
-    const relevanceScore = (svcNorm) => {
-      const svcWords = svcNorm.split(' ');
+    const relevanceScore = (svcName) => {
+      const svcWords = svcName.split(' ');
       let score = 0;
       for (const qw of queryWords) {
         if (svcWords.some(sw => sw.includes(qw) || qw.includes(sw))) score++;
       }
       return score;
     };
-    const positionScore = (svcNorm) => {
-      const words = svcNorm.split(' ').filter(w => w.length >= 4);
-      for (const word of words) {
-        if (remaining.includes(word)) return svcNorm.indexOf(word);
-      }
-      return Infinity;
-    };
-    const sorted = [...normalizedServices]
-      .filter(s => !matches.some(m => m.originalName === s.original))
-      .sort((a, b) => relevanceScore(b.normalized) - relevanceScore(a.normalized) || positionScore(a.normalized) - positionScore(b.normalized) || b.normalized.length - a.normalized.length);
-
-    // Generic words that appear in many services — require a SPECIFIC word to also match
-    const GENERIC_WORDS = new Set(['treatment', 'consultation', 'service', 'therapy', 'care', 'procedure']);
-
-    for (const svc of sorted) {
-      if (matches.some(m => m.originalName === svc.original) || remaining.trim().length < 3) continue;
-
-      const words = svc.normalized.split(' ').filter(w => w.length >= 4);
-      const matchedWords = words.filter(word => remaining.includes(word));
-      if (matchedWords.length === 0) continue;
-
-      const onlyGeneric = matchedWords.every(w => GENERIC_WORDS.has(w));
-      if (onlyGeneric) continue;
-
-      let earliestPos = Infinity;
-      for (const word of matchedWords) {
-        const pos = lower.indexOf(word);
-        if (pos !== -1 && pos < earliestPos) earliestPos = pos;
-      }
-      matches.push({ originalName: svc.original, position: earliestPos === Infinity ? lower.length : earliestPos });
-
-      for (const word of words) {
-        remaining = remaining.replace(word, ' '.repeat(word.length));
+    const sorted = [...svcNames]
+      .filter(s => !found.includes(s))
+      // Sort: higher relevance first, then fewer words (more specific), then longer name
+      .sort((a, b) => relevanceScore(b) - relevanceScore(a) || a.split(' ').length - b.split(' ').length || b.length - a.length);
+    
+    for (const svcName of sorted) {
+      // Skip if already found or if remaining is too short
+      if (found.includes(svcName) || remaining.trim().length < 3) continue;
+      
+      // Check if any significant word from service name is in remaining
+      // "botox" (≥4 chars) matches "Botox Consultation"
+      // "facial" should NOT match if already exact-matched "Hydrating Facial"
+      // Also check abbreviations: "pico" matches "picosure", "rf" matches "rf skin tightening"
+      const words = svcName.split(' ').filter(w => w.length >= 3);
+      const hasMatch = words.some(word => {
+        if (remaining.includes(word)) return true;
+        // Fuzzy: "pico" matches "picosure" (prefix match for ≥4 char queries)
+        if (word.length >= 5) {
+          const prefix = word.substring(0, 4);
+          if (remaining.includes(prefix) && !['this','that','with','from'].includes(prefix)) return true;
+        }
+        return false;
+      });
+      
+      if (hasMatch) {
+        found.push(svcName);
+        // Remove matched words from remaining
+        for (const word of words) {
+          remaining = remaining.replace(word, ' ');
+        }
       }
     }
-
-    // Sort by position in original message to preserve input order
-    matches.sort((a, b) => a.position - b.position);
-    return matches.map(m => m.originalName.toLowerCase());
   } else {
     // Fallback keyword list when no services provided
     const keywords = [
       'hydrating facial','anti-aging treatment','acne clear facial',
       'laser skin rejuvenation','botox consultation','dermal filler',
-      'hifu','thread lift','chemical peel','microneedling','facial','botox','filler','laser','peel'
+      'hifu','thread lift','chemical peel','microneedling','facial','botox','filler','laser','peel',
+      'rejuran healer','picosure laser','picosure','pico laser','rejuran','dermal fillers',
+      'ultherapy','rf skin tightening','rf tightening','prp treatment','coolsculpting',
+      'led light therapy','oxygen facial','skin rejuvenation','threadlift'
     ];
-    const found = [];
-    let remaining = lower;
     const sorted = [...keywords].sort((a, b) => b.length - a.length);
     for (const s of sorted) {
       if (remaining.includes(s)) {
@@ -254,8 +194,9 @@ function extractAllTreatments(message, services = []) {
         remaining = remaining.replace(s, ' ');
       }
     }
-    return found;
   }
+  
+  return found;
 }
 
 function extractBookingFields(message, services = []) {
@@ -274,9 +215,6 @@ function extractBookingFields(message, services = []) {
     /\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}\b/i,
     /\b\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b/i,
     /\d{4}-\d{2}-\d{2}/,
-    // Bare day names — handles "Maybe Friday", "How about Tuesday", "Friday at 11am"
-    // Checked LAST to avoid matching day names in unrelated contexts (e.g. "Sunday best")
-    /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i,
   ];
   for (const p of datePatterns) { const m = message.match(p); if (m) { const d = parseDatePhrase(m[0]); if (d) { fields.date = d; break; } } }
   // Time
@@ -291,65 +229,156 @@ function extractBookingFields(message, services = []) {
     fields.treatment = allTreatments[0];   // primary (backward compat)
     fields.treatments = allTreatments;     // all treatments found
   }
-  // Name — multiple patterns to handle common formats
-  // "my name is John", "i am Jane", "i'm Dr. Tan", "name is Catherine", "call me David"
-  // Supports hyphens (Mary-Jane) and titles (Dr., Mr., Ms.)
-  const namePatterns = [
-    /(?:my name is|i am|i'm|name is|call me)\s+((?:Dr\.|Mr\.|Ms\.|Mrs\.|Mdm\.)?\s*[A-Za-z]+(?:[-\s][A-Za-z]+)*)/i,
-  ];
-  for (const np of namePatterns) {
-    const nm = message.match(np);
-    if (nm) { fields.name = nm[1].trim(); break; }
-  }
-  // Phone — multiple patterns to handle common Singapore expressions
-  // "my Handphone number is 87111048", "HP: 91234567", "contact me at +65 9123 4567"
-  const phonePatterns = [
-    /(?:my\s+(?:new\s+)?(?:phone|contact|mobile|handphone|hp)\s+(?:number\s+)?(?:is\s+)?[:)]?\s*)(\+?\d[\d\s]{5,})/i,
-    /(?:call|reach|text|whatsapp)\s+(?:me\s+)?(?:at\s+)?(\+?\d[\d\s]{5,})/i,
-    /(?:hp|handphone|contact|whatsapp)\s*[:)]\s*(\+?\d[\d\s]{5,})/i,
-  ];
-  let foundPhone = null;
-  for (const pp of phonePatterns) {
-    const pm = message.match(pp);
-    if (pm) { foundPhone = pm[1].replace(/\s/g, ''); break; }
-  }
-  // Fallback 1: number with spaces (e.g., "+65 9123 4567") — strip spaces
-  if (!foundPhone) {
-    const phSpaced = message.match(/(\+\d{1,3}\s+\d{4}\s*\d{4})/);
-    if (phSpaced) foundPhone = phSpaced[1].replace(/\s/g, '');
-  }
-  // Fallback 2: any 8+ digit number with optional + prefix (no spaces)
-  if (!foundPhone) {
-    const ph = message.match(/\+?\d{8,}/);
-    if (ph) foundPhone = ph[0];
-  }
-  if (foundPhone) fields.phone = foundPhone;
+  // Name
+  const nm = message.match(/(?:my name is|i am|i'm)\s+([A-Za-z\s]+?)(?:\.|,|$|\s+(?:and|for|on|at))/i);
+  if (nm) fields.name = nm[1].trim();
+  // Phone
+  const ph = message.match(/[+]?(\d{8,})/);
+  if (ph) fields.phone = ph[0];
   return fields;
 }
 
-// CRITICAL: Must be precise to avoid false positives like "not sure", "maybe yes"
 function isConfirmation(message) {
-  const lower = message.toLowerCase().trim();
-  // Reject common non-confirmation phrases first
-  const nonConfirmPatterns = ['not sure','maybe','perhaps','i think','possibly','probably','not really','i don\'t know','idk'];
-  if (nonConfirmPatterns.some(p => lower.includes(p))) return false;
-  // Exact matches or clear affirmatives
-  const confirmWords = ['yes','yeah','yup','correct',"that's right",'right','sure','ok','okay','yep','yah','true','accurate','definitely','absolutely','alright'];
-  return confirmWords.some(w => {
-    if (lower === w) return true;
-    // Word boundary check: " yes " or " yes!" should match, but "not sure" should NOT match "sure"
-    const regex = new RegExp(`\\b${w}\\b`);
-    return regex.test(lower);
-  });
+  return ['yes','yeah','yup','correct',"that's right",'right','sure','ok','okay','yep','true','accurate','both','go ahead','fine','proceed','confirm','confirmed','mhm','alright','definitely','of course','absolutely','certainly','gladly','happily','by all means','very well']
+    .some(w => message.toLowerCase().trim().includes(w));
 }
 
 function isDenial(message) {
-  const l = message.toLowerCase().trim();
-  // Exact matches
-  if (['no','nope','nah','wrong','incorrect','cancel','stop','not now','maybe later','nah i\'m good','nope sorry'].includes(l)) return true;
-  // Starts with denial word followed by space
-  return ['no ','nope ','nah ','not ','wrong ','incorrect ','cancel ','stop ']
-    .some(w => l.startsWith(w));
+  return ['no','nope','nah','not','wrong','incorrect','cancel','stop']
+    .some(w => { const l = message.toLowerCase().trim(); return l === w || l.startsWith(w + ' '); });
+}
+
+// ─── TREATMENT NAME NORMALIZATION ─────────────────────────────────
+// Converts spaced variants: "micro needling" → "microneedling"
+
+function normalizeTreatmentNames(message) {
+  const SPACED_VARIANTS = {
+    'micro needling': 'microneedling',
+    'pico sure laser': 'picosure laser',
+    'pico sure': 'picosure',
+    'laser skin rejuvenation': 'laser skin rejuvenation',
+    'bot ox': 'botox',
+    'thread lift': 'thread lift',
+    'chemical peel': 'chemical peel',
+    'rejuran healer': 'rejuran healer',
+    'dermal fillers': 'dermal fillers',
+    'skin rejuvenation': 'skin rejuvenation',
+    'anti aging': 'anti-aging',
+    'acne clear': 'acne clear'
+  };
+
+  let normalized = message.toLowerCase();
+  for (const [spaced, compact] of Object.entries(SPACED_VARIANTS)) {
+    normalized = normalized.replace(new RegExp(spaced, 'gi'), compact);
+  }
+  return normalized;
+}
+
+// ─── SMART CONFIRMATION PARSER ────────────────────────────────────
+// Parses user replies during CONFIRMING_TREATMENT and CONFIRMING_NAME states
+// Returns { action, treatment, treatments, name, additions, ... }
+//
+// Actions: confirm, confirm_add, add, correct, reject, ambiguous
+
+function parseSmartConfirmation(message, services = []) {
+  const lower = message.toLowerCase().trim();
+  const result = { action: null };
+
+  // Normalize message for treatment matching
+  const normalizedMsg = normalizeTreatmentNames(message);
+
+  // 1. Detect NO / REJECTION first (strongest signal)
+  if (isDenial(message) || lower.match(/\bno\b/) || lower.startsWith('no ')) {
+    result.action = 'reject';
+    const fields = extractBookingFields(message, services);
+    if (fields.treatment) result.treatment = fields.treatment;
+    if (fields.treatments) result.treatments = fields.treatments;
+    if (fields.date) result.date = fields.date;
+    if (fields.time) result.time = fields.time;
+    if (fields.name) result.name = fields.name;
+    return result;
+  }
+
+  // 2. "my name is..." / "call me..." → NAME CORRECTION
+  const nameMatch = message.match(/(?:my name is|it's|call me|name is|i am|i'm)\s+((?:Dr\.|Mr\.|Ms\.|Mrs\.|Mdm\.)?\s*[A-Za-z]+(?:[-\s][A-Za-z]+)*)/i);
+  if (nameMatch) {
+    result.action = 'correct';
+    result.name = nameMatch[1].trim();
+    return result;
+  }
+
+  // 3. "actually..." / "change to..." / "instead..." / "switch to..." → CORRECTION
+  if (lower.match(/\b(actually|instead|change to|make it|switch to|i meant|i want)\b/)) {
+    const fields = extractBookingFields(normalizedMsg, services);
+    if (fields.treatment || fields.treatments) {
+      result.action = 'correct';
+      if (fields.treatments) result.treatments = fields.treatments;
+      if (fields.treatment) result.treatment = fields.treatment;
+      return result;
+    }
+  }
+
+  // 4. "add..." / "also want..." / "plus..." / "and..." (without yes) → ADDITION
+  const addPatterns = [
+    /\b(?:add|also|plus|include)\s+(.+)/i,
+    /\band\s+([a-z\s]+(?:laser|lift|peel|botox|hifu|facial|therapy|treatment|needling|healer|rejuvenation|filler|clear))/i,
+    /\b([a-z\s]+(?:laser|lift|peel|botox|hifu|facial|therapy|treatment|needling|healer|rejuvenation|filler|clear))\s+(?:too|as well|also)/i,
+    /\bi\s+(?:also|too|as well)\s+(?:want|need|like)\s+(.+)/i,
+    /\bdon'?t\s+forget\s+(.+)/i,
+    /\bforget\s+to\s+include\s+(.+)/i,
+    /\b(?:and\s+)?([a-z\s]+(?:laser|lift|peel|botox|hifu|facial|therapy|treatment|needling|healer|rejuvenation|filler|clear))(?:\s+(?:too|as well|also|please))?/i
+  ];
+  for (const pattern of addPatterns) {
+    const addMatch = message.match(pattern);
+    if (addMatch) {
+      const potential = normalizeTreatmentNames(addMatch[1].replace(/[!.?]+$/, '').trim());
+      const extracted = extractAllTreatments(potential, services);
+      if (extracted.length > 0) {
+        result.action = 'add';
+        result.additions = extracted;
+        return result;
+      }
+    }
+  }
+
+  // 5. "yes" + standalone treatments → CONFIRM + ADD
+  const yesPatterns = [
+    /\b(?:yes|yeah|sure|ok|okay|yup)\b.*\b(botox|hifu|thread lift|microneedling|chemical peel|picosure|rejuran|laser|facial|filler|peel)\b/i,
+    /\b(botox|hifu|thread lift|microneedling|chemical peel|picosure|rejuran|laser|facial|filler|peel)\b.*\b(?:yes|yeah|sure|ok|okay|yup)\b/i
+  ];
+  for (const pattern of yesPatterns) {
+    const yesAddMatch = normalizedMsg.match(pattern);
+    if (yesAddMatch) {
+      const extracted = extractAllTreatments(normalizedMsg, services);
+      if (extracted.length > 0) {
+        result.action = 'confirm_add';
+        result.additions = extracted;
+        return result;
+      }
+    }
+  }
+
+  // 6. Simple YES → CONFIRM
+  if (isConfirmation(message) && !lower.match(/\b(add|also|plus|and\s+[a-z]+)\b/)) {
+    result.action = 'confirm';
+    return result;
+  }
+
+  // 7. Extract whatever they said → CORRECTION (fallback)
+  const fields = extractBookingFields(normalizedMsg, services);
+  if (fields.treatment || fields.treatments || fields.name || fields.date || fields.time) {
+    result.action = 'correct';
+    if (fields.treatment) result.treatment = fields.treatment;
+    if (fields.treatments) result.treatments = fields.treatments;
+    if (fields.name) result.name = fields.name;
+    if (fields.date) result.date = fields.date;
+    if (fields.time) result.time = fields.time;
+    return result;
+  }
+
+  // 8. Fallback → AMBIGUOUS
+  result.action = 'ambiguous';
+  return result;
 }
 
 setInterval(() => {
@@ -357,105 +386,9 @@ setInterval(() => {
   for (const [k, r] of stateStore.entries()) { if (now - r.lastActivity > TTL_MS) stateStore.delete(k); }
 }, 10 * 60 * 1000);
 
-/**
- * Smart Confirmation Parser
- * Handles "yes AND..." patterns where users confirm AND add/correct info.
- * Examples:
- *   "yes"                    → { action: 'confirm' }
- *   "yes I also want Botox"  → { action: 'confirm_add', additions: ['botox'] }
- *   "my name is Alex Lim"    → { action: 'correct', name: 'Alex Lim' }
- *   "actually make it HIFU"  → { action: 'correct', treatment: 'HIFU' }
- *   "no, change to Tuesday"  → { action: 'reject', date: '2026-08-05' }
- *   "add chemical peel too"  → { action: 'add', additions: ['chemical peel'] }
- */
-function parseSmartConfirmation(message, services = []) {
-  const lower = message.toLowerCase().trim();
-  const result = { action: null };
-
-  // 1. Detect NO / REJECTION
-  if (isDenial(message) || lower.match(/\bno\b/) || lower.startsWith('no ')) {
-    result.action = 'reject';
-    const fields = extractBookingFields(message, services);
-    if (fields.treatment) result.treatment = fields.treatment;
-    if (fields.date) result.date = fields.date;
-    if (fields.time) result.time = fields.time;
-    if (fields.name) result.name = fields.name;
-    return result;
-  }
-
-  // 2. Detect "my name is..." / "it's..." / "call me..." — NAME CORRECTION
-  const nameMatch = message.match(/(?:my name is|it's|call me|name is|i am|i'm)\s+((?:Dr\.|Mr\.|Ms\.|Mrs\.|Mdm\.)?\s*[A-Za-z]+(?:[-\s][A-Za-z]+)*)/i);
-  if (nameMatch) {
-    result.action = 'correct';
-    result.name = nameMatch[1].trim();
-    if (lower.match(/\byes\b|\byeah\b|\byup\b/)) result.hasYes = true;
-    return result;
-  }
-
-  // 3. Detect "actually..." / "instead..." / "change to..." — CORRECTION
-  if (lower.match(/\b(actually|instead|change to|make it|switch to)\b/)) {
-    result.action = 'correct';
-    const fields = extractBookingFields(message, services);
-    if (fields.treatment) result.treatment = fields.treatment;
-    if (fields.treatments) result.treatments = fields.treatments;
-    if (fields.date) result.date = fields.date;
-    if (fields.time) result.time = fields.time;
-    if (fields.name) result.name = fields.name;
-    return result;
-  }
-
-  // 4. Detect "add..." / "also want..." / "plus..." — ADDITION
-  const addPatterns = [
-    /(?:add|also want|plus|and also|as well)\s+(.+)/i,
-    /(.+)\s+(?:too|as well)/i,
-  ];
-  for (const pattern of addPatterns) {
-    const addMatch = message.match(pattern);
-    if (addMatch) {
-      const potential = addMatch[1].replace(/[!.?]+$/, '').trim();
-      const found = extractAllTreatments(potential, services);
-      if (found.length > 0) {
-        result.action = 'confirm_add';
-        result.additions = found;
-        return result;
-      }
-    }
-  }
-
-  // 5. "yes" + standalone treatments → confirm + add
-  const foundTreatments = extractAllTreatments(message, services);
-  const hasYes = lower.match(/\b(yes|yeah|yup|yep|sure|ok|okay)\b/);
-  if (hasYes && foundTreatments.length > 0) {
-    result.action = 'confirm_add';
-    result.additions = foundTreatments;
-    return result;
-  }
-
-  // 6. Simple YES
-  if (isConfirmation(message) || hasYes) {
-    result.action = 'confirm';
-    return result;
-  }
-
-  // 7. Extract whatever they said
-  const fields = extractBookingFields(message, services);
-  if (fields.treatment || fields.name || fields.date || fields.time) {
-    result.action = 'correct';
-    if (fields.treatment) result.treatment = fields.treatment;
-    if (fields.treatments) result.treatments = fields.treatments;
-    if (fields.date) result.date = fields.date;
-    if (fields.time) result.time = fields.time;
-    if (fields.name) result.name = fields.name;
-    return result;
-  }
-
-  result.action = 'ambiguous';
-  return result;
-}
-
 module.exports = {
   BOOKING_STATES, getState, setState, resetIdle,
   extractBookingFields, extractTreatmentName, extractAllTreatments,
   isConfirmation, isDenial, parseDatePhrase, parseTimePhrase,
-  parseSmartConfirmation,
+  parseSmartConfirmation, normalizeTreatmentNames
 };
