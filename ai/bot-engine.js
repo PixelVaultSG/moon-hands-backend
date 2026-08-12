@@ -762,7 +762,8 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
         model: 'hardcoded',
         cost_saved: routerResult.cost_saved,
         intents: routerResult.intents,
-        latency_ms: routerResult.latency_ms
+        latency_ms: routerResult.latency_ms,
+        whatsappInteractive: routerResult.whatsappInteractive
       };
     }
     
