@@ -32,32 +32,28 @@ const INTENT_PATTERNS = {
   },
   
   operating_hours: {
-    // Added: "closed on" (are you closed on sunday), "last appointment/slot",
-    // "what time start/end", "your hours", "opening time", "closing time"
-    regex: /(?:what\s+(?:time|hours)|when\s+(?:do\s+you\s+open|are\s+you\s+open|do\s+you\s+close|is\s+the\s+last)|opening\s+(?:hours|time)|closing\s+(?:hours|time)|are\s+you\s+(?:open|closed)\s+(?:today|tomorrow|on\s+\w+)|business\s+hours|last\s+(?:appointment|slot)|what\s+time\s+(?:start|end|open|close)|your\s+hours)/i,
+    regex: /(?:what\s+(?:time|hours)|when\s+(?:do\s+you\s+open|are\s+you\s+open|do\s+you\s+close|is\s+the\s+last)|opening\s+(?:hours|time)|closing\s+(?:hours|time)|are\s+you\s+open\s+(?:today|tomorrow|on\s+\w+)|business\s+hours)/i,
     keywords: ['hours', 'open', 'close', 'what time', 'opening', 'closing', 'business hours'],
     weight: 0.9,
   },
   
   location: {
-    // Added: "how to go" (Singlish), "how do i get there", "direction to clinic", "ur location"
-    regex: /(?:where\s+(?:are\s+you|is\s+(?:the\s+)?clinic|are\s+you\s+located|do\s+i\s+find)|address|location|how\s+(?:(?:do\s+i|to)\s+get\s+(?:there|to)|to\s+go)|direction\s+(?:to\s+(?:the\s+)?clinic)?|(?:clinic|shop)\s+near|nearest\s+(?:mrt|bus|mrt\s+station)|parking|your\s+(?:place|location|address|clinic))/i,
+    regex: /(?:where\s+(?:are\s+you|is\s+(?:the\s+)?clinic|are\s+you\s+located|do\s+i\s+find)|address|location|how\s+to\s+get\s+(?:there|to)|(?:clinic|shop)\s+near|nearest\s+(?:mrt|bus|mrt\s+station)|parking)/i,
     keywords: ['where', 'address', 'location', 'how to get', 'find you', 'parking', 'nearby', 'near'],
     weight: 0.9,
   },
   
   pricing_specific: {
     // Handles: "how much is botox", "price of hifu", "botox how much", "hifu price?"
-    // Also: "botox pricing" (treatment name + pricing)
-    // The reversed form (.+?)\s+(?:how\s+much|price|cost|pricing) catches "botox how much" and "botox pricing"
-    regex: /(?:how\s+much(?:\s+(?:is|for|does))?|what\s+(?:is\s+the\s+price|does\s+it\s+cost)|price\s+(?:of|for))\s+(.+?)(?:\?|$|\s+(?:cost|price))|(.+?)\s+(?:how\s+much|price|cost|pricing)[?\s]*$/i,
+    // The reversed form (.+?)\s+(?:how\s+much|price|cost) catches "botox how much"
+    regex: /(?:how\s+much(?:\s+(?:is|for|does))?|what\s+(?:is\s+the\s+price|does\s+it\s+cost)|price\s+(?:of|for))\s+(.+?)(?:\?|$|\s+(?:cost|price))|(.+?)\s+(?:how\s+much|price|cost)[?\s]*$/i,
     keywords: ['how much is', 'price of', 'cost of', 'what is the price'],
     weight: 0.95,
     extract: (match) => {
       const treatment = (match[1] || match[2])?.trim().toLowerCase();
       if (!treatment) return {};
       // Reject garbage captures that aren't treatment names
-      const garbageWords = ['are your', 'roughly', 'about', 'around', 'please', 'pls', 'thank', 'thanks', 'in general', 'general'];
+      const garbageWords = ['are your', 'roughly', 'about', 'around', 'please', 'pls', 'thank', 'thanks'];
       if (garbageWords.some(g => treatment.includes(g))) return {};
       // Reject captures that are too short or too generic
       if (treatment.length < 3) return {};
@@ -68,8 +64,7 @@ const INTENT_PATTERNS = {
   },
   
   pricing_general: {
-    // Added: "how much in general", "price range", "general pricing"
-    regex: /(?:how\s+much\s+(?:are\s+the\s+prices|in\s+general)|what\s+(?:are\s+the\s+prices|is\s+the\s+pricing)|price\s+(?:list|range)|general\s+pricing|pricing|cost\s+list|do\s+you\s+have\s+a\s+price|are\s+the\s+(?:prices|rates))/i,
+    regex: /(?:how\s+much|what\s+(?:are\s+the\s+prices|is\s+the\s+pricing)|price\s+list|pricing|cost\s+list|do\s+you\s+have\s+a\s+price|are\s+the\s+(?:prices|rates))/i,
     exclude: /(?:how\s+much\s+(?:is|for|does)\s+\w+)/i, // Exclude specific treatment pricing
     keywords: ['how much', 'pricing', 'price list', 'cost'],
     weight: 0.85,
@@ -103,11 +98,9 @@ const INTENT_PATTERNS = {
     // "show me your treatments", "what can you do?", "list of services"
     // CRITICAL: "treatment" and "service" are INTERCHANGEABLE — patients use both.
     // Both singular and plural forms must match. "treatment info" also included.
-    // FIXED: Made "do" optional so "what treatment you offer" matches (not just "what treatment do you offer")
-    // Added "provide" as an alternative to "offer/have"
-    // Added "procedure/procedures", "you all" (Singlish), "can i get done", "procedures available"
-    regex: /(?:what|wat|which)\s+(?:services?|treatments?|procedures?)\s+(?:(?:do\s+)?(?:you|u)\s+(?:offer|have|provide)|are\s+(?:available|there|offered)|info)|what\s+(?:do\s+(?:you|u|you\s+all)\s+(?:do|offer|have)|can\s+(?:you|u)\s+do|can\s+i\s+get\s+done)|list\s+(?:of\s+)?(?:services?|treatments?|procedures?)|(?:show|give|tell)\s+me\s+(?:the\s+)?(?:services?|treatments?|menu|list|options)|(?:what|wat)\s+(?:do\s+(?:you|u)\s+)?have[?\s]*$|(?:treatment|service|procedure)\s+(?:list|menu|info)|(?:procedures?|treatments?)\s+(?:available|offered)/i,
-    keywords: ['what services', 'what treatments', 'what treatment', 'treatment info', 'what do you offer', 'what do you have', 'list of services', 'list of treatments', 'wat services', 'show me', 'what can you do', 'treatment list', 'service list'],
+    // Also handles: "what services and treatments do you offer" (compound form)
+    regex: /(?:what|wat|which)\s+(?:services?|treatments?)\s+(?:do\s+(?:you|u)\s+(?:offer|have)|are\s+(?:available|there|offered)|info)|what\s+(?:do\s+(?:you|u)\s+(?:do|offer|have)|can\s+(?:you|u)\s+do)|list\s+(?:of\s+)?(?:services?|treatments?|procedures)|(?:show|give|tell)\s+me\s+(?:the\s+)?(?:services?|treatments?|menu|list|options)|(?:what|wat)\s+(?:do\s+(?:you|u)\s+)?have[?\s]*$|(?:treatment|service)\s+(?:list|menu|info)|(?:what|wat|which)\s+(?:services?|treatments?)\s+(?:and|&)\s+(?:services?|treatments?)\s+(?:do\s+(?:you|u)\s+(?:offer|have)|are\s+(?:available|there|offered))/i,
+    keywords: ['what services', 'what treatments', 'what treatment', 'treatment info', 'what do you offer', 'what do you have', 'list of services', 'list of treatments', 'wat services', 'show me', 'what can you do', 'treatment list', 'service list', 'services and treatments', 'treatments and services'],
     weight: 0.9,
   },
   
@@ -164,8 +157,7 @@ const INTENT_PATTERNS = {
   reschedule_request: {
     // Handles: "reschedule my appointment", "change my booking", "shift my appt"
     // "appt" is common abbreviation for appointment. "change my slot" also included.
-    // Added: "change the date of my booking" (date-specific reschedule)
-    regex: /(?:reschedule|change|move|shift)\s+(?:my\s+)?(?:appointment|booking|appt|slot)|(?:can\s+i|i\s+want\s+to)\s+(?:change|move)\s+(?:my\s+)?(?:appointment|booking|date|time|slot)|different\s+(?:date|time|day)|change\s+the\s+date\s+of\s+(?:my\s+)?(?:appointment|booking)/i,
+    regex: /(?:reschedule|change|move|shift)\s+(?:my\s+)?(?:appointment|booking|appt|slot)|(?:can\s+i|i\s+want\s+to)\s+(?:change|move)\s+(?:my\s+)?(?:appointment|booking|date|time|slot)|different\s+(?:date|time|day)/i,
     keywords: ['reschedule', 'change appointment', 'change my slot', 'move booking', 'shift my'],
     weight: 0.95,
   },
@@ -209,8 +201,7 @@ const INTENT_PATTERNS = {
   
   human_handoff: {
     // "speak to someone", "talk to a person", "real person please", "i want a human"
-    // Added: "connect me to a person", "can i talk to the receptionist"
-    regex: /(?:speak|talk)\s+(?:to\s+(?:a\s+)?)?(?:human|person|staff|doctor|nurse|receptionist|someone)|real\s+(?:person|human)|i\s+want\s+(?:a\s+)?(?:human|person|real\s+person|staff)|(?:transfer|connect)\s+(?:me\s+)?to\s+(?:a\s+)?(?:human|staff|person|receptionist)|can\s+i\s+(?:speak\s+to|talk\s+to\s+(?:the\s+)?(?:a\s+)?(?:human|person|staff|receptionist))|call\s+me/i,
+    regex: /(?:speak|talk)\s+(?:to\s+(?:a\s+)?)?(?:human|person|staff|doctor|nurse|receptionist|someone)|real\s+(?:person|human)|i\s+want\s+(?:a\s+)?(?:human|person|real\s+person|staff)|transfer\s+(?:me\s+)?to\s+(?:a\s+)?(?:human|staff|person)|can\s+i\s+speak\s+to|call\s+me/i,
     keywords: ['human', 'staff', 'doctor', 'speak to someone', 'talk to someone', 'real person', 'transfer'],
     weight: 0.9,
   },
@@ -224,8 +215,7 @@ const INTENT_PATTERNS = {
   waitlist_request: {
     // "no slots available", "fully booked", "all appointments taken"
     // Higher weight (0.95) than booking_request (0.9) to win when both match
-    // Added: "no availability", "nothing available" (vague but implies fully booked)
-    regex: /(?:waitlist|waiting\s+list|add\s+me\s+(?:to\s+)?(?:the\s+)?wait|no\s+(?:slot|appointment|space|availability)\s+(?:available)?|fully\s+booked|all\s+(?:slot|appointment|appt)s?\s+(?:are\s+)?taken|put\s+me\s+on\s+(?:the\s+)?wait|(?:no|nothing)\s+(?:availability|available))/i,
+    regex: /(?:waitlist|waiting\s+list|add\s+me\s+(?:to\s+)?(?:the\s+)?wait|no\s+(?:slot|appointment|space|availability)\s+(?:available)?|fully\s+booked|all\s+(?:slot|appointment|appt)s?\s+(?:are\s+)?taken|put\s+me\s+on\s+(?:the\s+)?wait)/i,
     keywords: ['waitlist', 'no slot', 'no slots', 'fully booked', 'waiting list', 'all taken'],
     weight: 0.95,
   },
@@ -420,9 +410,6 @@ const CHINESE_INTENTS = {
   greeting: /^(你好|您好|嗨|哈啰|在吗|有人在吗|你好呀)[!！]?$/,
   goodbye: /^(谢谢|感谢|拜拜|再见|好的谢谢|知道了)[!！]?$/,
   operating_hours: /(?:营业时间|几点开门|几点关门|什么时候营业|开到几点|几点到几点|周末开吗)/,
-  // booking_request BEFORE location — "有位置吗" (have slots?) is booking, not location
-  // Added: "有位置吗" (any slots?), "有空位吗" (any openings?), "要预约" (want to book)
-  booking_request: /(?:我要预约|想预约|可以预约吗|有(?:位置|空位)吗|要预约|想book|可以book吗|要booking)/,
   location: /(?:地址|在哪里|怎么去|位置|靠近哪里|附近有什么)/,
   // pricing_specific: treatment name + price question (mixed Chinese-English OK)
   pricing_specific: /(?:botox|filler|hifu|laser|facial|thread|rejuran|皮秒|水光针|玻尿酸|肉毒素|热玛吉|[a-z]+).*?(?:多少钱|怎么收费|价格)/i,
@@ -432,6 +419,8 @@ const CHINESE_INTENTS = {
   cancel_request: /(?:取消预约|我要取消|取消我的|删掉预约|想取消)/,
   // check_appointment BEFORE booking_request
   check_appointment: /(?:我的预约|查询预约|查我的|我的booking|我预约了什么时候|我book了)/,
+  // booking_request comes after more specific intents
+  booking_request: /(?:我要预约|想预约|可以预约吗|有位置吗|有空位吗)/,
   human_handoff: /(?:人工|真人|客服|工作人员|找医生)/,
   language_switch: /(?:可以说中文吗|中文|华文|会说中文吗)/,
 };
