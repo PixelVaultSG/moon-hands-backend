@@ -201,6 +201,9 @@ function extractAllTreatments(message, services = []) {
 
 function extractBookingFields(message, services = []) {
   const lower = message.toLowerCase();
+  // Strip softener prefixes that don't change intent: "maybe", "perhaps", "possibly"
+  // e.g., "Maybe tomorrow at 9pm?" → "tomorrow at 9pm?"
+  message = message.replace(/^(maybe|perhaps|possibly)[,\s]+/i, '');
   const fields = {};
   // Date patterns — must include short forms (tmr, nxt, sat) because
   // parseDatePhrase only receives the matched text, not the full message
