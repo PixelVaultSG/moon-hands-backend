@@ -104,7 +104,7 @@ async function sendClinicCostAlert(clinicId, type, reason, isDouble = false) {
   
   // Try to send to clinic's Telegram chat (if configured)
   try {
-    const { supabase } = require('../supabase/client');
+    const { supabase } = require('./supabase/client');
     const { data: client } = await supabase
       .from('clients')
       .select('telegram_chat_id, name')
@@ -158,7 +158,7 @@ async function notifyStaffTakeover(clinicId, patientPhone, intent, patientMessag
   
   // Send via multi-clinic sender (scopes to clinic's telegram_chat_ids + admin copy)
   try {
-    const { sendClinicNotification } = require('../telegram/multi-clinic-sender');
+    const { sendClinicNotification } = require('./telegram/multi-clinic-sender');
     await sendClinicNotification(clinicId, message, {
       replyMarkup: {
         inline_keyboard: [[
@@ -619,31 +619,6 @@ async function handleWebhook(req, res, channel, url) {
     const clinicName = preResolvedClinicName || null;
     addTrace(message.from, 'CLIENT', clientId ? 'RESOLVED' : 'NOT_FOUND', `${clinicName || ''} ${clientId || ''}`.trim());
     
-    // ─── LAYER 9.5: "I WILL TAKE OVER" TRIGGER ─────────────────────
-    // ANY human (clinic staff, company owner, anyone) can type exactly
-    // "I WILL TAKE OVER" (case-sensitive) to immediately pause the AI.
-    // This works for ALL WhatsApp numbers including the company number.
-    // Auto-resumes after 30 minutes of inactivity (handled by staff-takeover system).
-    if (sanitizedText === 'I WILL TAKE OVER') {
-      console.log(`[STAFF_TAKEOVER] "I WILL TAKE OVER" triggered by ${message.from.slice(-4)}`);
-      pauseBot(message.from, null, 'explicit_takeover_phrase', clientId);
-      addTrace(message.from, 'STAFF_TAKEOVER', 'I_WILL_TAKE_OVER', 'Human paused AI via trigger phrase');
-      
-      // Send acknowledgment via WhatsApp
-      const ackMessage = "Got it \u2014 I'll stay quiet. The bot will auto-resume after 30 minutes of inactivity, or you can message me anytime to resume earlier.";
-      try {
-        await sendWhatsAppReply(message.from, ackMessage, message.messageId);
-        addTrace(message.from, 'WHATSAPP', 'SENT', 'I_WILL_TAKE_OVER ack');
-      } catch (sendErr) {
-        console.error(`[STAFF_TAKEOVER] Failed to send ack to ${message.from}: ${sendErr.message}`);
-      }
-      
-      return sendSecurityResponse(res, 200, 'AI paused — I WILL TAKE OVER acknowledged', {
-        processed: true,
-        aiPaused: true
-      });
-    }
-    
     // ─── LAYER 9.6: STAFF TAKEOVER CHECK ────────────────────────────
     // If clinic staff has manually taken over this conversation (via Telegram
     // /pause or auto-detection), the bot stays completely silent.
@@ -712,8 +687,8 @@ async function handleWebhook(req, res, channel, url) {
       }
       
       try {
-        addTrace(message.from, 'WHATSAPP', 'SENDING', `text=${response.text?.slice(0,50)}`);
-        const sendResult = await sendWhatsAppReply(message.from, response.text, message.messageId);
+        addTrace(message.from, 'WHATSAPP', 'SENDING', `text=${response.text?.slice(0,50)}, interactive=${!!response.whatsappInteractive}`);
+        const sendResult = await sendWhatsAppReply(message.from, response.text, message.messageId, response.whatsappInteractive);
         replySent = sendResult.success;
         if (replySent) {
           trackSpend(clientId, 0.007);
@@ -732,7 +707,7 @@ async function handleWebhook(req, res, channel, url) {
       console.warn('[WEBHOOK] No clientId resolved — cannot track cost, but attempting to send reply anyway');
       addTrace(message.from, 'WHATSAPP', 'NO_CLIENTID_TRYING');
       try {
-        const sendResult = await sendWhatsAppReply(message.from, response.text, message.messageId);
+        const sendResult = await sendWhatsAppReply(message.from, response.text, message.messageId, response.whatsappInteractive);
         replySent = sendResult.success;
         addTrace(message.from, 'WHATSAPP', replySent ? 'SENT' : 'FAILED', sendResult.error);
       } catch (sendErr) {
@@ -767,8 +742,24 @@ function extractMessage(body, channel) {
       const value = body.entry?.[0]?.changes?.[0]?.value || body;
       const msg = value.messages?.[0];
       if (!msg) return null;
+      
+      // Handle interactive messages (button taps, list selections)
+      let text = msg.text?.body || msg.body || '';
+      let interactiveId = null;
+      
+      if (msg.type === 'interactive' && msg.interactive) {
+        if (msg.interactive.type === 'button_reply' && msg.interactive.button_reply) {
+          interactiveId = msg.interactive.button_reply.id;
+          text = msg.interactive.button_reply.title || text;
+        } else if (msg.interactive.type === 'list_reply' && msg.interactive.list_reply) {
+          interactiveId = msg.interactive.list_reply.id;
+          text = msg.interactive.list_reply.title || text;
+        }
+      }
+      
       return {
-        text: msg.text?.body || msg.body || '',
+        text,
+        interactiveId,
         from: msg.from,
         to: value.metadata?.phone_number_id || msg.to || '',
         timestamp: msg.timestamp,
@@ -970,7 +961,7 @@ async function routeToAI(text, message, channel, preResolvedClientId = null) {
     
     const history = getConversationHistory(message.from);
     const startMs = Date.now();
-    const result = await processMessage(text, clientId, history, message.from);
+    const result = await processMessage(text, clientId, history, message.from, message.interactiveId);
     const elapsedMs = Date.now() - startMs;
     
     // Track estimated spend ($0.005 base + ~$0.003 per 1K tokens)
@@ -1055,12 +1046,12 @@ function getRateLimitResponse(reason) {
 // - Auto-retry with alternative endpoints on 401
 // Returns { success: boolean, messageId?: string, error?: string }
 
-async function sendWhatsAppReply(toPhone, text, replyToMessageId = null) {
+async function sendWhatsAppReply(toPhone, text, replyToMessageId = null, interactivePayload = null) {
   const TRACE_ID = Math.random().toString(36).substring(2, 8);
   const d360Key = process.env.D360_API_KEY;
   
   console.log(`[360DIALOG:${TRACE_ID}] ══════════════════════════════════════`);
-  console.log(`[360DIALOG:${TRACE_ID}] SEND called to=${toPhone}, text_len=${text?.length}`);
+  console.log(`[360DIALOG:${TRACE_ID}] SEND called to=${toPhone}, text_len=${text?.length}, interactive=${!!interactivePayload}`);
   console.log(`[360DIALOG:${TRACE_ID}] D360_API_KEY present=${!!d360Key}, len=${d360Key?.length}`);
   
   // ── Validation ───────────────────────────────────────────────────
@@ -1083,8 +1074,6 @@ async function sendWhatsAppReply(toPhone, text, replyToMessageId = null) {
   }
   
   // ── Endpoint Selection ──
-  // 360dialog API endpoint is /messages (NOT /v1/messages).
-  // Per official docs: https://docs.360dialog.com/docs/guides/send-and-receive-messages
   const BASE_ENDPOINT = '/messages';
   const explicitUrl = process.env.D360_API_URL;
   const isSandboxKey = d360Key.length === 32 && /^[A-Z0-9]+$/.test(d360Key);
@@ -1111,20 +1100,32 @@ async function sendWhatsAppReply(toPhone, text, replyToMessageId = null) {
   console.log(`[360DIALOG:${TRACE_ID}] Will try ${ENDPOINTS.length} endpoint(s): ${ENDPOINTS.map(e => e.url.replace(BASE_ENDPOINT, '')).join(', ')}`);
   
   // ── Build Payload ────────────────────────────────────────────────
-  // Per official 360dialog docs: recipient_type is REQUIRED.
-  const payload = {
-    messaging_product: 'whatsapp',
-    recipient_type: 'individual',
-    to: toPhone,
-    type: 'text',
-    text: { body: text.substring(0, 4096) }
-  };
+  // If interactivePayload is provided, send interactive message.
+  // Otherwise send standard text.
+  let payload;
+  if (interactivePayload) {
+    payload = {
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: toPhone,
+      type: 'interactive',
+      interactive: interactivePayload.interactive
+    };
+    console.log(`[360DIALOG:${TRACE_ID}] Payload: to=${toPhone}, type=interactive, subtype=${interactivePayload.interactive.type}`);
+  } else {
+    payload = {
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: toPhone,
+      type: 'text',
+      text: { body: text.substring(0, 4096) }
+    };
+    console.log(`[360DIALOG:${TRACE_ID}] Payload: to=${toPhone}, type=text, body_len=${payload.text.body.length}`);
+  }
   
   if (replyToMessageId) {
     payload.context = { message_id: replyToMessageId };
   }
-  
-  console.log(`[360DIALOG:${TRACE_ID}] Payload: to=${toPhone}, type=text, body_len=${payload.text.body.length}`);
   
   // ── Try Each Endpoint ────────────────────────────────────────────
   for (let i = 0; i < ENDPOINTS.length; i++) {
