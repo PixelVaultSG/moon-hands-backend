@@ -123,6 +123,14 @@ async function routeMessage(message, clinicConfig, patientPhone = null, conversa
       console.log(`[SMART_ROUTER] Message has booking fields (date+${fields.time ? 'time' : 'treatment'}) but intent was '${primaryIntent.intent}' — routing to booking flow`);
       return await startBookingFlow(message, clinicConfig, patientPhone, conversationHistory, startTime);
     }
+    // NEW: If message contains treatment + soft booking words ("would like", "want to", "like to do", "do a"), 
+    // route to booking even without a date. e.g., "I would like do a chemical peel"
+    const lowerMsg = message.toLowerCase();
+    const softBookingWords = ['would like', 'want to', 'wanna', 'like to', 'interested in', 'thinking of', 'planning to', 'do a', 'get a', 'have a', 'do some', 'get some'];
+    if (fields.treatment && softBookingWords.some(w => lowerMsg.includes(w))) {
+      console.log(`[SMART_ROUTER] Message has treatment + soft booking words but intent was '${primaryIntent.intent}' — routing to booking flow`);
+      return await startBookingFlow(message, clinicConfig, patientPhone, conversationHistory, startTime);
+    }
     return await routeToOpenAI(message, clinicConfig, conversationHistory, matchedIntents, startTime);
   }
   
