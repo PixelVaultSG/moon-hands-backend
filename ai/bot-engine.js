@@ -707,23 +707,54 @@ function getNextBusinessDay(dateStr) {
 
 // ─── MAIN BOT INTERFACE ───────────────────────────────────────────
 
-async function processMessage(messageText, clientId, conversationHistory = [], patientPhone = null) {
+async function processMessage(messageText, clientId, conversationHistory = [], patientPhone = null, interactiveId = null) {
   const startTime = Date.now();
   try {
     const clientConfig = await loadClientConfig(clientId);
     
+    // ─── INTERACTIVE ID ROUTING ─────────────────────────────────────
+    // If user tapped a button/list item, map the ID directly to an intent
+    // This bypasses NLP entirely for structured interactions — 100% accuracy.
+    const INTERACTIVE_INTENT_MAP = {
+      // Welcome menu
+      'services': { intent: 'service_list', text: 'What services do you offer?' },
+      'location': { intent: 'location_inquiry', text: 'Where are you located?' },
+      'book': { intent: 'booking_request', text: 'I want to book an appointment' },
+      'pricing': { intent: 'pricing_inquiry', text: 'What are your prices?' },
+      'faq': { intent: 'faq', text: 'I have a question' },
+      // Confirmation buttons
+      'confirm_yes': { intent: 'confirmation_yes', text: 'Yes' },
+      'yes': { intent: 'confirmation_yes', text: 'Yes' },
+      'confirm_no': { intent: 'confirmation_no', text: 'No' },
+      'no': { intent: 'confirmation_no', text: 'No' },
+      'confirm_change': { intent: 'correction', text: 'I want to change something' },
+      // Service list selections
+      'service_0': { intent: 'booking_request', text: 'I want this treatment' },
+      'service_1': { intent: 'booking_request', text: 'I want this treatment' },
+      'service_2': { intent: 'booking_request', text: 'I want this treatment' },
+      'service_3': { intent: 'booking_request', text: 'I want this treatment' },
+      'service_4': { intent: 'booking_request', text: 'I want this treatment' },
+    };
+    
+    let effectiveText = messageText;
+    let forcedIntents = null;
+    
+    if (interactiveId && INTERACTIVE_INTENT_MAP[interactiveId]) {
+      const mapped = INTERACTIVE_INTENT_MAP[interactiveId];
+      effectiveText = mapped.text;
+      forcedIntents = [mapped.intent];
+      console.log(`[BOT_ENGINE] Interactive ID "${interactiveId}" → intent: ${mapped.intent}`);
+    }
+    
     // ─── SMART ROUTER: Try hardcoded responses first ($0) ───────────
-    // ~60-70% of common queries (hours, pricing, services, greetings)
-    // are answered without calling OpenAI, saving ~$2-4 per clinic per month.
-    const routerResult = await routeMessage(messageText, clientConfig, patientPhone, conversationHistory);
+    const routerResult = await routeMessage(effectiveText, clientConfig, patientPhone, conversationHistory, forcedIntents);
     
     if (routerResult.source === 'hardcoded' && routerResult.text) {
       // Log the hardcoded response for analytics
-      const intentsStr = (routerResult.intents || []).join(',');
       await logConversation(clientConfig.id, 'whatsapp', patientPhone, null,
-        messageText, routerResult.text, `hardcoded:${intentsStr}`);
+        messageText, routerResult.text, `hardcoded:${routerResult.intents.join(',')}`);
       
-      console.log(`[BOT_ENGINE] Smart router: ${intentsStr || 'none'} — cost saved: $${routerResult.cost_saved.toFixed(4)}`);
+      console.log(`[BOT_ENGINE] Smart router: ${routerResult.intents.join(',')} — cost saved: $${routerResult.cost_saved.toFixed(4)}`);
       
       return {
         text: routerResult.text,
@@ -735,7 +766,7 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
       };
     }
     
-    console.log(`[BOT_ENGINE] Smart router → Expert System (intents: ${(routerResult.intents || []).join(',') || 'none'})`);
+    console.log(`[BOT_ENGINE] Smart router → Expert System (intents: ${routerResult.intents.join(',') || 'none'})`);
     
     // ─── EXPERT SYSTEM: Route to specialized experts ────────────────
     // Each expert receives ONLY the context it needs — smaller prompts,
@@ -744,7 +775,7 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
       const matchedIntents = matchIntents(messageText, conversationHistory);
       const expertKeys = classifyMessage(messageText, matchedIntents, conversationHistory);
       
-      console.log(`[BOT_ENGINE] Experts assigned: [${(expertKeys || []).join(', ')}]`);
+      console.log(`[BOT_ENGINE] Experts assigned: [${expertKeys.join(', ')}]`);
       
       const expertResult = await executeExperts(
         expertKeys, messageText, clientConfig, conversationHistory, patientPhone
@@ -753,9 +784,9 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
       if (expertResult.text) {
         // Log the expert response
         await logConversation(clientConfig.id, 'whatsapp', patientPhone, null,
-          messageText, expertResult.text, `experts:${(expertResult.expertsUsed || []).join(',')}`);
+          messageText, expertResult.text, `experts:${expertResult.expertsUsed.join(',')}`);
         
-        console.log(`[BOT_ENGINE] Experts: [${(expertResult.expertsUsed || []).join(', ')}] — cost: $${expertResult.totalCost.toFixed(4)}`);
+        console.log(`[BOT_ENGINE] Experts: [${expertResult.expertsUsed.join(', ')}] — cost: $${expertResult.totalCost.toFixed(4)}`);
         
         return {
           text: expertResult.text,
@@ -823,7 +854,6 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
       `GREETING STYLE (FIRST MESSAGE ONLY — NOT NOW): ${(clientConfig.config.greeting || 'Hello! Welcome to {businessName}.').replace('{businessName}', clientConfig.name)}\n\n` +
       `AVAILABLE TREATMENTS (call get_pricing() when asked about services/prices):\n${services || 'Contact clinic for services'}\n\n` +
       `HOURS: ${hours || 'Please contact us for hours'}\n\n` +
-      `ADDRESS: ${clientConfig.config?.address || clientConfig.address || 'Please contact us for location details'}\n\n` +
       `${faqs ? `FAQs:\n${faqs}\n\n` : ''}` +
       `${clientConfig.config.special_notes ? `SPECIAL NOTES: ${sanitizeSpecialNotes(clientConfig.config.special_notes)}\n\n` : ''}` +
       `IMPORTANT FUNCTION RULES:\n` +
