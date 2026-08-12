@@ -28,12 +28,12 @@ const {
 const AI_ONLY_INTENTS = ['complaint', 'vague_question', 'emotional_support'];
 
 // Booking-related intents
-const BOOKING_INTENTS = ['book_appointment', 'check_availability', 'reschedule'];
+const BOOKING_INTENTS = ['book_appointment', 'check_availability', 'reschedule', 'booking_request'];
 
 /**
  * Main entry point
  */
-async function routeMessage(message, clinicConfig, patientPhone = null, conversationHistory = []) {
+async function routeMessage(message, clinicConfig, patientPhone = null, conversationHistory = [], forcedIntents = null) {
   const startTime = Date.now();
   const phone = patientPhone || 'unknown';
   
@@ -86,7 +86,15 @@ async function routeMessage(message, clinicConfig, patientPhone = null, conversa
   }
   
   // ── STEP 2: Detect intents ──────────────────────────────────────
-  const matchedIntents = matchIntents(message, conversationHistory, shouldGreet);
+  // If forcedIntents provided (from interactive button taps), use them directly
+  // This bypasses NLP entirely — 100% accuracy for structured interactions.
+  let matchedIntents;
+  if (forcedIntents) {
+    matchedIntents = forcedIntents.map(intent => ({ intent, confidence: 1.0, weight: 1.0 }));
+    console.log(`[SMART_ROUTER] Using forced intents from interactive: [${forcedIntents.join(', ')}]`);
+  } else {
+    matchedIntents = matchIntents(message, conversationHistory, shouldGreet);
+  }
   
   // ── STEP 3: Multi-intent handling ───────────────────────────────
   // Only trigger multi-intent confirmation when 2+ HIGH-confidence
@@ -168,6 +176,10 @@ async function routeMessage(message, clinicConfig, patientPhone = null, conversa
     });
     
     if (response) {
+      // Handle both string responses and object responses (with whatsappInteractive)
+      const responseText = typeof response === 'string' ? response : (response.text || '');
+      const whatsappInteractive = typeof response === 'object' ? response.whatsappInteractive : null;
+      
       // Check if the response offers booking assistance — if so, set BOOKING_OFFERED state
       // so a subsequent "Yes" from the patient enters the booking flow instead of resetting
       const bookingOfferPhrases = [
@@ -179,7 +191,7 @@ async function routeMessage(message, clinicConfig, patientPhone = null, conversa
         'would you like me to check availability',
         'would you like to make a booking'
       ];
-      const lowerResponse = response.toLowerCase();
+      const lowerResponse = responseText.toLowerCase();
       if (bookingOfferPhrases.some(phrase => lowerResponse.includes(phrase))) {
         // Extract any booking data from the conversation that we might need
         const existingData = getState(patientPhone).data || {};
@@ -187,13 +199,17 @@ async function routeMessage(message, clinicConfig, patientPhone = null, conversa
         console.log(`[SMART_ROUTER] Set BOOKING_OFFERED state for ${patientPhone.slice(-4)} (response contained booking offer)`);
       }
       
-      return {
-        text: response,
+      const result = {
+        text: responseText,
         source: 'hardcoded',
         intents: [primaryIntent.intent],
         cost_saved: 1,
         latency_ms: Date.now() - startTime
       };
+      if (whatsappInteractive) {
+        result.whatsappInteractive = whatsappInteractive;
+      }
+      return result;
     }
   } catch (err) {
     console.error(`[SMART_ROUTER] Handler error for ${primaryIntent.intent}:`, err.message);
@@ -409,30 +425,52 @@ function isBookingState(state) {
 async function startBookingFlow(message, clinicConfig, patientPhone, conversationHistory, startTime) {
   // Try to extract all booking fields from the initial message
   const fields = extractBookingFields(message);
+  const services = clinicConfig.config?.services || [];
   
-  if (fields.date && fields.time && fields.treatment) {
+  // Normalize treatments: use treatments array if available, fallback to single
+  const treatments = fields.treatments || (fields.treatment ? [fields.treatment] : []);
+  const treatmentNames = treatments.map(t => {
+    const svc = services.find(s => s.name.toLowerCase() === t.toLowerCase());
+    return svc ? svc.name : t;
+  });
+  const primaryTreatment = treatmentNames[0] || fields.treatment;
+  
+  if (fields.date && fields.time && primaryTreatment) {
     // All fields provided in first message!
-    return await attemptBooking(clinicConfig, patientPhone, fields, conversationHistory, startTime);
+    return await attemptBooking(clinicConfig, patientPhone, { ...fields, treatments: treatmentNames }, conversationHistory, startTime);
   }
   
   // Start state machine
   if (fields.date) {
     if (fields.time) {
+      if (primaryTreatment) {
+        // Treatment already known + date + time = go straight to confirmation
+        return await attemptBooking(clinicConfig, patientPhone, { date: fields.date, time: fields.time, treatment: primaryTreatment, treatments: treatmentNames }, conversationHistory, startTime);
+      }
       setState(patientPhone, BOOKING_STATES.AWAITING_TREATMENT, { date: fields.date, time: fields.time });
       return { text: `Great, ${fields.date} at ${fields.time} works. Which treatment are you looking for?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+    }
+    if (primaryTreatment) {
+      setState(patientPhone, BOOKING_STATES.AWAITING_TIME, { date: fields.date, treatment: primaryTreatment, treatments: treatmentNames });
+      return { text: `${fields.date} noted ✓ What time would you prefer?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
     }
     setState(patientPhone, BOOKING_STATES.AWAITING_TIME, { date: fields.date });
     return { text: `${fields.date} noted ✓ What time would you prefer?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
   }
   
   if (fields.time) {
+    if (primaryTreatment) {
+      setState(patientPhone, BOOKING_STATES.AWAITING_DATE, { time: fields.time, treatment: primaryTreatment, treatments: treatmentNames });
+      return { text: `${fields.time} works. Which date would you like?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+    }
     setState(patientPhone, BOOKING_STATES.AWAITING_DATE, { time: fields.time });
     return { text: `${fields.time} works. Which date would you like?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
   }
   
-  if (fields.treatment) {
-    setState(patientPhone, BOOKING_STATES.AWAITING_DATE, { treatment: fields.treatment });
-    return { text: `${fields.treatment} — lovely choice! Which date works for you?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+  if (primaryTreatment) {
+    setState(patientPhone, BOOKING_STATES.AWAITING_DATE, { treatment: primaryTreatment, treatments: treatmentNames });
+    const displayName = treatmentNames.length > 1 ? treatmentNames.join(' + ') : primaryTreatment;
+    return { text: `${displayName} — lovely choice! Which date works for you?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
   }
   
   // No fields extracted — ask for date
@@ -539,12 +577,26 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
         // Validate time against opening hours
         const v = validateBookingTime(data.date, data.time, hours);
         if (!v.isOpen) {
+          // Time is invalid — preserve the date, move to AWAITING_TIME so next message is treated as time
+          setState(patientPhone, BOOKING_STATES.AWAITING_TIME, { date: data.date, treatment: currentState.data?.treatment, treatments: currentState.data?.treatments });
           return { text: `Sorry, we're not open at ${data.time} on that day. ${v.reason}. What time between ${v.openTime}–${v.closeTime} works for you?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+        }
+        // CRITICAL: If treatment is ALREADY known from previous turn, skip AWAITING_TREATMENT
+        // and go straight to confirmation. Prevents asking for treatment twice.
+        const existingTreatment = currentState.data?.treatment || currentState.data?.treatments?.[0];
+        const existingTreatments = currentState.data?.treatments || (existingTreatment ? [existingTreatment] : []);
+        if (existingTreatment) {
+          return await attemptBooking(clinicConfig, patientPhone, { date: data.date, time: data.time, treatment: existingTreatment, treatments: existingTreatments }, conversationHistory, startTime);
         }
         setState(patientPhone, BOOKING_STATES.AWAITING_TREATMENT, { date: data.date, time: data.time });
         return { text: `${data.date} at ${data.time} works! Which treatment would you like?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
       }
-      setState(patientPhone, BOOKING_STATES.AWAITING_TIME, { date: data.date });
+      // If treatment already known, preserve it when moving to AWAITING_TIME
+      if (currentState.data?.treatment || currentState.data?.treatments) {
+        setState(patientPhone, BOOKING_STATES.AWAITING_TIME, { date: data.date, treatment: currentState.data.treatment, treatments: currentState.data.treatments });
+      } else {
+        setState(patientPhone, BOOKING_STATES.AWAITING_TIME, { date: data.date });
+      }
       return { text: `${data.date} works. What time would you prefer?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
     
     case BOOKING_STATES.AWAITING_TIME:
@@ -556,6 +608,12 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
       const v = validateBookingTime(date, data.time, hours);
       if (!v.isOpen) {
         return { text: `Sorry, we're not open at ${data.time} on that day. ${v.reason}. What time between ${v.openTime}–${v.closeTime} works for you?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+      }
+      // CRITICAL: If treatment is ALREADY known from previous turn, skip AWAITING_TREATMENT
+      const existingTreatment2 = currentState.data?.treatment || currentState.data?.treatments?.[0];
+      const existingTreatments2 = currentState.data?.treatments || (existingTreatment2 ? [existingTreatment2] : []);
+      if (existingTreatment2) {
+        return await attemptBooking(clinicConfig, patientPhone, { date, time: data.time, treatment: existingTreatment2, treatments: existingTreatments2 }, conversationHistory, startTime);
       }
       if (data.treatment) {
         return await attemptBooking(clinicConfig, patientPhone, { date, time: data.time, treatment: data.treatment }, conversationHistory, startTime);
