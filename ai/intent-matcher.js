@@ -99,8 +99,9 @@ const INTENT_PATTERNS = {
     // CRITICAL: "treatment" and "service" are INTERCHANGEABLE — patients use both.
     // Both singular and plural forms must match. "treatment info" also included.
     // Also handles: "what services and treatments do you offer" (compound form)
-    regex: /(?:what|wat|which)\s+(?:services?|treatments?)\s+(?:do\s+(?:you|u)\s+(?:offer|have)|are\s+(?:available|there|offered)|info)|what\s+(?:do\s+(?:you|u)\s+(?:do|offer|have)|can\s+(?:you|u)\s+do)|list\s+(?:of\s+)?(?:services?|treatments?|procedures)|(?:show|give|tell)\s+me\s+(?:the\s+)?(?:services?|treatments?|menu|list|options)|(?:what|wat)\s+(?:do\s+(?:you|u)\s+)?have[?\s]*$|(?:treatment|service)\s+(?:list|menu|info)|(?:what|wat|which)\s+(?:services?|treatments?)\s+(?:and|&)\s+(?:services?|treatments?)\s+(?:do\s+(?:you|u)\s+(?:offer|have)|are\s+(?:available|there|offered))/i,
-    keywords: ['what services', 'what treatments', 'what treatment', 'treatment info', 'what do you offer', 'what do you have', 'list of services', 'list of treatments', 'wat services', 'show me', 'what can you do', 'treatment list', 'service list', 'services and treatments', 'treatments and services'],
+    // TOLERANT: Leading words can be typos/gibberish — we look for "services/treatments" + "offer/have/available"
+    regex: /(?:what|wat|which|hat|hot|how)\s+(?:services?|treatments?)\s+(?:do\s+(?:you|u)\s+(?:offer|have)|are\s+(?:available|there|offered)|info)|what\s+(?:do\s+(?:you|u)\s+(?:do|offer|have)|can\s+(?:you|u)\s+do)|list\s+(?:of\s+)?(?:services?|treatments?|procedures)|(?:show|give|tell)\s+me\s+(?:the\s+)?(?:services?|treatments?|menu|list|options)|(?:what|wat)\s+(?:do\s+(?:you|u)\s+)?have[?\s]*$|(?:treatment|service)\s+(?:list|menu|info)|(?:what|wat|which)\s+(?:services?|treatments?)\s+(?:and|&)\s+(?:services?|treatments?)\s+(?:do\s+(?:you|u)\s+(?:offer|have)|are\s+(?:available|there|offered))|(?:^|\s)(?:services?|treatments?)\s+(?:do\s+(?:you|u)\s+(?:offer|have)|are\s+(?:available|there|offered))/i,
+    keywords: ['what services', 'what treatments', 'what treatment', 'treatment info', 'what do you offer', 'what do you have', 'list of services', 'list of treatments', 'wat services', 'show me', 'what can you do', 'treatment list', 'service list', 'services and treatments', 'treatments and services', 'services do you', 'treatments do you'],
     weight: 0.9,
   },
   
@@ -129,21 +130,23 @@ const INTENT_PATTERNS = {
   
   booking_request: {
     // Handles: "can I book?", "I want to make a booking", "can I come tomorrow"
-    // Note: "no slots available" conflicts with waitlist_request — waitlist wins (0.95 > 0.9)
     // "i want hifu" — treatment name after "i want" implies booking intent
-    // The last alt matches: "i want botox", "i wanna hifu", etc.
-    regex: /(?:i\s+(?:want|would\s+like|wanna)\s+(?:to\s+)?(?:book|make|schedule)|can\s+i\s+(?:book|make|schedule|come)|(?:book|schedule|make)\s+(?:an?\s+)?(?:appointment|booking|slot)|(?:i\s+want|looking\s+for)\s+(?:an?\s+)?(?:slot|appointment)|when\s+(?:can|is)\s+i\s+(?:book|come)|next\s+available|earliest\s+(?:slot|appointment)|i\s+(?:want|wanna)\s+(?:to\s+)?(?:botox|filler|hifu|laser|facial|rejuran|thread|peel|microneedling)|i\s+(?:want|would\s+like|wanna)\s+(?:to\s+)?(?:do|get|have)\s+(?:a\s+)?(?:chemical\s+peel|botox|filler|hifu|laser|facial|rejuran|thread|peel|microneedling|treatment|service))/i,
-    keywords: ['book', 'appointment', 'schedule', 'slot', 'booking', 'i want to come', 'available slots'],
+    // CRITICAL: "I would like do a chemical peel" (no "to") must match — patients drop "to"
+    // Also: "I'd like to get Botox", "I wanna do microneedling"
+    regex: /(?:i\s+(?:want|would\s+like|wanna)\s+(?:to\s+)?(?:book|make|schedule)|can\s+i\s+(?:book|make|schedule|come)|(?:book|schedule|make)\s+(?:an?\s+)?(?:appointment|booking|slot)|(?:i\s+want|looking\s+for)\s+(?:an?\s+)?(?:slot|appointment)|when\s+(?:can|is)\s+i\s+(?:book|come)|next\s+available|earliest\s+(?:slot|appointment)|i\s+(?:want|wanna)\s+(?:to\s+)?(?:botox|filler|hifu|laser|facial|rejuran|thread|peel|microneedling)|i\s+(?:want|would\s+like|wanna)\s+(?:to\s+)?(?:do|get|have)\s+(?:a\s+)?(?:chemical\s+peel|botox|filler|hifu|laser|facial|rejuran|thread|peel|microneedling|treatment|service)|i\s+(?:want|would\s+like|wanna)\s+(?:to\s+)?do\s+(?:a\s+)?(?:chemical\s+peel|botox|filler|hifu|laser|facial|rejuran|thread|peel|microneedling|treatment|service)|i\s+(?:want|would\s+like|wanna)\s+do\s+(?:a\s+)?(?:chemical\s+peel|botox|filler|hifu|laser|facial|rejuran|thread|peel|microneedling|treatment|service))/i,
+    keywords: ['book', 'appointment', 'schedule', 'slot', 'booking', 'i want to come', 'available slots', 'i would like', 'i want to do', 'i would like to do', 'i wanna do'],
     weight: 0.9,
     extract: (match, msg) => {
       // Try to extract date preference
       const dateMatch = msg.match(/(?:next\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday|today|tomorrow|this\s+week|next\s+week)/i);
-      // Try to extract treatments mentioned
-      const knownTreatments = ['botox', 'filler', 'hifu', 'rejuran', 'thread', 'laser', 'facial', 'chemical peel', 'peel', 'microneedling', 'picosure'];
+      // Try to extract treatments mentioned — include spaced variants
+      const knownTreatments = ['botox', 'filler', 'hifu', 'rejuran', 'thread', 'laser', 'facial', 'chemical peel', 'peel', 'microneedling', 'micro needling', 'picosure'];
       const foundTreatments = knownTreatments.filter(t => msg.toLowerCase().includes(t));
+      // Normalize: micro needling → microneedling
+      const normalized = foundTreatments.map(t => t === 'micro needling' ? 'microneedling' : t);
       const result = {};
       if (dateMatch) result.preferred_day = dateMatch[1];
-      if (foundTreatments.length > 0) result.treatments = foundTreatments;
+      if (normalized.length > 0) result.treatments = [...new Set(normalized)];
       return result;
     }
   },
