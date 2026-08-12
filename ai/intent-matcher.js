@@ -114,12 +114,12 @@ const INTENT_PATTERNS = {
   
   confirmation_yes: {
     // Short affirmative in conversation context: "Yes", "Yeah", "Sure", "Okay", "Ok"
-    // Must be short (1-2 words) to avoid matching sentences containing "yes"
-    regex: /^(?:yes|yeah|yup|sure|okay|ok|ok[ay]|yep|yah|alright|definitely|absolutely)[!\.\s]*$/i,
-    keywords: ['yes', 'yeah', 'sure', 'okay', 'ok'],
+    // Also handles: "Yes please", "Yes sure", "Yes thanks", "Yes of course"
+    // Must start with confirmation word but can have trailing polite words
+    regex: /^(?:yes|yeah|yup|sure|okay|ok|ok[ay]|yep|yah|alright|definitely|absolutely|of\s+course)(?:\s+(?:please|sure|thank\s+you|thanks|of\s+course|why\s+not|i\s+do))?[!.\s]*$/i,
+    keywords: ['yes', 'yeah', 'sure', 'okay', 'ok', 'yes please', 'yes sure', 'definitely', 'absolutely', 'of course'],
     weight: 0.8, // Needs conversation context to be meaningful
   },
-  
   confirmation_no: {
     // Short negative in conversation context
     regex: /^(?:no|nah|nope|not\s+(?:now|really)|maybe\s+(?:later|another\s+time))[!\.\s]*$/i,
@@ -132,14 +132,14 @@ const INTENT_PATTERNS = {
     // Note: "no slots available" conflicts with waitlist_request — waitlist wins (0.95 > 0.9)
     // "i want hifu" — treatment name after "i want" implies booking intent
     // The last alt matches: "i want botox", "i wanna hifu", etc.
-    regex: /(?:i\s+(?:want|would\s+like|wanna)\s+(?:to\s+)?(?:book|make|schedule)|can\s+i\s+(?:book|make|schedule|come)|(?:book|schedule|make)\s+(?:an?\s+)?(?:appointment|booking|slot)|(?:i\s+want|looking\s+for)\s+(?:an?\s+)?(?:slot|appointment)|when\s+(?:can|is)\s+i\s+(?:book|come)|next\s+available|earliest\s+(?:slot|appointment)|i\s+(?:want|wanna)\s+(?:to\s+)?(?:botox|filler|hifu|laser|facial|rejuran|thread|peel|microneedling))/i,
+    regex: /(?:i\s+(?:want|would\s+like|wanna)\s+(?:to\s+)?(?:book|make|schedule)|can\s+i\s+(?:book|make|schedule|come)|(?:book|schedule|make)\s+(?:an?\s+)?(?:appointment|booking|slot)|(?:i\s+want|looking\s+for)\s+(?:an?\s+)?(?:slot|appointment)|when\s+(?:can|is)\s+i\s+(?:book|come)|next\s+available|earliest\s+(?:slot|appointment)|i\s+(?:want|wanna)\s+(?:to\s+)?(?:botox|filler|hifu|laser|facial|rejuran|thread|peel|microneedling)|i\s+(?:want|would\s+like|wanna)\s+(?:to\s+)?(?:do|get|have)\s+(?:a\s+)?(?:chemical\s+peel|botox|filler|hifu|laser|facial|rejuran|thread|peel|microneedling|treatment|service))/i,
     keywords: ['book', 'appointment', 'schedule', 'slot', 'booking', 'i want to come', 'available slots'],
     weight: 0.9,
     extract: (match, msg) => {
       // Try to extract date preference
       const dateMatch = msg.match(/(?:next\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday|today|tomorrow|this\s+week|next\s+week)/i);
       // Try to extract treatments mentioned
-      const knownTreatments = ['botox', 'filler', 'hifu', 'rejuran', 'thread', 'laser', 'facial', 'peel', 'microneedling', 'picosure'];
+      const knownTreatments = ['botox', 'filler', 'hifu', 'rejuran', 'thread', 'laser', 'facial', 'chemical peel', 'peel', 'microneedling', 'picosure'];
       const foundTreatments = knownTreatments.filter(t => msg.toLowerCase().includes(t));
       const result = {};
       if (dateMatch) result.preferred_day = dateMatch[1];
