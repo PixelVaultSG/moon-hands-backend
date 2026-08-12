@@ -94,13 +94,8 @@ const HANDLERS = {
   waitlist_request: handleWaitlistRequest,
 };
 
-const HANDLER_TIMEOUT_MS = 8000; // 8 seconds max — patients won't wait longer
-
 /**
  * Execute a handler by intent name.
- * CRITICAL: Wrapped in a timeout to prevent infinite hangs.
- * If a handler hangs (OpenAI call, DB query, etc.), we return
- * a fallback instead of leaving the patient waiting forever.
  */
 async function executeHandler(intentName, context) {
   const handler = HANDLERS[intentName];
@@ -108,30 +103,17 @@ async function executeHandler(intentName, context) {
     console.log(`[HANDLER] No handler for intent: ${intentName}`);
     return null;
   }
-
-  return Promise.race([
-    (async () => {
-      try {
-        const response = await handler(context);
-        if (response) {
-          console.log(`[HANDLER] ${intentName} → responded`);
-        }
-        return response;
-      } catch (err) {
-        console.error(`[HANDLER] Error in ${intentName}:`, err.message);
-        return `Sorry, I had a temporary issue. Please try again or contact the clinic directly.`;
-      }
-    })(),
-    new Promise((_, reject) =>
-      setTimeout(() => reject(new Error(`HANDLER_TIMEOUT:${intentName}`)), HANDLER_TIMEOUT_MS)
-    )
-  ]).catch(err => {
-    if (err.message && err.message.startsWith('HANDLER_TIMEOUT')) {
-      console.error(`[HANDLER] ${intentName} → TIMEOUT after ${HANDLER_TIMEOUT_MS}ms`);
-      return `Sorry, I'm taking longer than expected. Please try again, or contact the clinic directly if it's urgent.`;
+  
+  try {
+    const response = await handler(context);
+    if (response) {
+      console.log(`[HANDLER] ${intentName} → responded`);
     }
-    throw err;
-  });
+    return response;
+  } catch (err) {
+    console.error(`[HANDLER] Error in ${intentName}:`, err.message);
+    return null;
+  }
 }
 
 // ─── GREETING ─────────────────────────────────────────────────────
@@ -146,13 +128,18 @@ function handleGreeting({ clinicConfig }) {
     return customGreeting.replace(/{businessName}/g, name);
   }
   
-  // Fallback: generate a simple greeting
+  // Fallback: generate a simple greeting with interactive menu
   const treatments = getTopTreatments(clinicConfig, 3);
-  if (treatments) {
-    return `Hey there! Welcome to ${name} ✨ I'm ${agentName}, your virtual receptionist. I can help you book appointments, check prices, or answer questions about our treatments like ${treatments}. What brings you in today?`;
-  }
+  const text = treatments 
+    ? `Hey there! Welcome to ${name} ✨ I'm ${agentName}, your virtual receptionist. I can help you book appointments, check prices, or answer questions about our treatments like ${treatments}. What brings you in today?`
+    : `Hey there! Welcome to ${name} ✨ I'm ${agentName}, your virtual receptionist. I can help you with bookings, treatment info, or pricing. What can I do for you?`;
   
-  return `Hey there! Welcome to ${name} ✨ I'm ${agentName}, your virtual receptionist. I can help you with bookings, treatment info, or pricing. What can I do for you?`;
+  // Return with interactive WhatsApp list menu for guided UX
+  const { getWelcomeList } = require('./whatsapp-interactive');
+  return {
+    text,
+    whatsappInteractive: getWelcomeList(name, agentName)
+  };
 }
 
 // ─── GOODBYE ──────────────────────────────────────────────────────
@@ -189,42 +176,32 @@ function formatOperatingHours(hours) {
 // ─── LOCATION ─────────────────────────────────────────────────────
 
 function handleLocation({ clinicConfig, message }) {
-  // CRITICAL FIX: Give EVERYTHING upfront — never ask "address or directions?"
-  // Asking clarifying questions creates infinite conversation loops (screenshots 1, 7, 8, 9)
-  const address = getConfig(clinicConfig, 'address');
-  const landmarks = getConfig(clinicConfig, 'landmarks');
-  const parking = getConfig(clinicConfig, 'parking_info');
-  const mrt = getConfig(clinicConfig, 'nearest_mrt');
-  const clinicName = clinicConfig.clinic_name || clinicConfig.name || 'our clinic';
-
+  const address = clinicConfig.address;
+  const landmarks = clinicConfig.landmarks;
+  const parking = clinicConfig.parking_info;
+  const mrt = clinicConfig.nearest_mrt;
+  
   let response = '';
-
+  
   if (address) {
-    response += `📍 ${address}`;
+    response += `We're located at:\n📍 ${address}`;
   } else {
-    const location = getConfig(clinicConfig, 'location');
-    if (location) {
-      response += `📍 ${location}`;
-    } else {
-      return `We're located in Singapore. For our exact address, please contact us directly and our team will be happy to assist you!`;
-    }
+    return `I can help you find us. Would you like our address or directions from a specific location?`;
   }
-
+  
   if (mrt) {
-    response += `\n🚇 Nearest MRT: ${mrt}`;
+    response += `\n\n🚇 Nearest MRT: ${mrt}`;
   }
-
+  
   if (landmarks) {
     response += `\n🏢 Nearby: ${landmarks}`;
   }
-
+  
   if (parking) {
     response += `\n🅿️ Parking: ${parking}`;
   }
-
-  // Always provide directions guidance — never ask "would you like directions?"
-  response += `\n\n🗺️ For directions, search "${clinicName}" on Google Maps. If you let me know where you're coming from, I can give you more specific directions!`;
-
+  
+  response += `\n\nWould you like directions from a specific location?`;
   return response;
 }
 
@@ -253,7 +230,7 @@ ${match.description || 'Would you like to book this treatment?'}`;
   // No exact match — list similar treatments
   const similar = findSimilarTreatments(requestedTreatment, services, 3);
   if (similar.length > 0) {
-    const list = (similar || []).map(s => `• ${s.name}: ${formatPrice(s.price, s.price_unit)}`).join('\n');
+    const list = similar.map(s => `• ${s.name}: ${formatPrice(s.price, s.price_unit)}`).join('\n');
     return `I don't have exact pricing for "${requestedTreatment}". Here are our similar treatments:\n\n${list}\n\nWould you like details on any of these?`;
   }
   
@@ -278,58 +255,25 @@ function handlePricingGeneral({ clinicConfig }) {
 
 // ─── SERVICE INQUIRY ─────────────────────────────────────────────
 
-function handleServiceInquiry({ clinicConfig, params, message }) {
+function handleServiceInquiry({ clinicConfig, params }) {
+  const requestedService = params?.treatment;
   const services = getConfig(clinicConfig, 'services') || [];
-
-  // CRITICAL FIX: Handle MULTIPLE treatments, not just the first one.
-  // When user says "HIFU and microneedling", we must return details for BOTH
-  // immediately. If we only handle one, the other falls through to OpenAI
-  // which promises to "fetch details" but the function call can hang.
-  const { extractAllTreatments } = require('./conversation-state');
-  const allRequested = extractAllTreatments(message || '', services);
-
-  // If extractAllTreatments found nothing, fall back to params?.treatment
-  const requestedService = allRequested.length > 0 ? null : (params?.treatment || null);
-
-  if (!requestedService && allRequested.length === 0) {
+  
+  if (!requestedService) {
     return handleServiceList({ clinicConfig });
   }
-
-  // Build a list of services to describe
-  const servicesToDescribe = [];
-  if (allRequested.length > 0) {
-    for (const reqName of allRequested) {
-      const match = findServiceMatch(reqName, services);
-      if (match) servicesToDescribe.push(match);
-    }
-  } else {
-    const match = findServiceMatch(requestedService, services);
-    if (match) servicesToDescribe.push(match);
-  }
-
-  if (servicesToDescribe.length === 0) {
-    return `I don't see ${requestedService || (allRequested || []).join(', ')} in our current treatment menu. Would you like me to share what treatments we do offer?`;
-  }
-
-  // Build response for one or multiple treatments
-  if (servicesToDescribe.length === 1) {
-    const match = servicesToDescribe[0];
+  
+  const match = findServiceMatch(requestedService, services);
+  
+  if (match) {
     const price = formatPrice(match.price, match.price_unit);
     const duration = match.duration ? `\n⏱ Duration: ${match.duration}` : '';
     const downtime = match.downtime ? `\n🩹 Downtime: ${match.downtime}` : '';
+    
     return `Yes, we offer ${match.name}!${duration}${downtime}\n💰 Price: ${price}\n\n${match.description || ''}\n\nWould you like to book a consultation or appointment?`;
   }
-
-  // MULTIPLE treatments — describe each with a separator
-  let response = `Yes, we offer all of those! Here are the details:\n`;
-  for (const match of servicesToDescribe) {
-    const price = formatPrice(match.price, match.price_unit);
-    const duration = match.duration ? ` — ${match.duration}` : '';
-    const downtime = match.downtime ? ` | Downtime: ${match.downtime}` : '';
-    response += `\n━━ ${match.name} ━━${duration}${downtime}\n💰 ${price}\n${match.description || ''}\n`;
-  }
-  response += `\nWould you like to book any of these treatments?`;
-  return response;
+  
+  return `I don't see ${requestedService} in our current treatment menu. Would you like me to share what treatments we do offer?`;
 }
 
 // ─── SERVICE LIST ─────────────────────────────────────────────────
@@ -409,7 +353,7 @@ async function handleCancelRequest({ clinicConfig, patientPhone }) {
   }
   
   // Multiple appointments
-  const list = (appointments || []).map((a, i) => `${i + 1}. ${formatDate(a.appointment_date)} at ${formatTime(a.appointment_time)} — ${a.service_name || 'Treatment'}`).join('\n');
+  const list = appointments.map((a, i) => `${i + 1}. ${formatDate(a.appointment_date)} at ${formatTime(a.appointment_time)} — ${a.service_name || 'Treatment'}`).join('\n');
   return `I found multiple upcoming appointments:\n\n${list}\n\nWhich one would you like to cancel? (Reply with the number)`;
 }
 
@@ -438,7 +382,7 @@ async function handleRescheduleRequest({ clinicConfig, patientPhone }) {
     return `I found your appointment:\n📅 ${formatDate(appt.appointment_date)} at ${formatTime(appt.appointment_time)}\n💆 ${appt.service_name || 'Treatment'}\n\nWhat date and time would you prefer instead?`;
   }
   
-  const list = (appointments || []).map((a, i) => `${i + 1}. ${formatDate(a.appointment_date)} at ${formatTime(a.appointment_time)} — ${a.service_name || 'Treatment'}`).join('\n');
+  const list = appointments.map((a, i) => `${i + 1}. ${formatDate(a.appointment_date)} at ${formatTime(a.appointment_time)} — ${a.service_name || 'Treatment'}`).join('\n');
   return `I found multiple appointments:\n\n${list}\n\nWhich one would you like to reschedule? (Reply with the number)`;
 }
 
@@ -462,7 +406,7 @@ async function handleCheckAppointment({ clinicConfig, patientPhone }) {
     return `I don't see any upcoming appointments for ${patientPhone}. Would you like to book one?`;
   }
   
-  const list = (appointments || []).map(a => 
+  const list = appointments.map(a => 
     `📅 ${formatDate(a.appointment_date)} at ${formatTime(a.appointment_time)}\n💆 ${a.service_name || 'Treatment'}\n📍 Status: ${a.status}${a.notes ? `\n📝 Notes: ${a.notes}` : ''}`
   ).join('\n\n');
   
