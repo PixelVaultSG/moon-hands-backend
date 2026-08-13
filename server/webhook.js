@@ -496,8 +496,9 @@ async function handleWebhook(req, res, channel, url) {
     
     // Layer 5: Extract and validate message
     const message = extractMessage(body, channel);
-    console.log(`[WEBHOOK:${channel}] Extracted message: from=${message?.from?.slice(-4)}, text="${message?.text?.substring(0, 50)}", id=${message?.messageId?.slice(-8)}`);
-    if (!message || !message.text) {
+    console.log(`[WEBHOOK:${channel}] Extracted message: from=${message?.from?.slice(-4)}, text="${message?.text?.substring(0, 50)}", interactiveId=${message?.interactiveId}, id=${message?.messageId?.slice(-8)}`);
+    // Accept: text messages OR interactive button/list taps (even with empty text)
+    if (!message || (!message.text && !message.interactiveId)) {
       console.log(`[WEBHOOK:${channel}] No text message to process — returning 200`);
       return sendSecurityResponse(res, 200, 'No message to process');
     }
