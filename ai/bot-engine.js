@@ -754,7 +754,7 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
       await logConversation(clientConfig.id, 'whatsapp', patientPhone, null,
         messageText, routerResult.text, `hardcoded:${routerResult.intents.join(',')}`);
       
-      console.log(`[BOT_ENGINE] Smart router: ${routerResult.intents.join(',')} — cost saved: $${routerResult.cost_saved.toFixed(4)}`);
+      console.log(`[BOT_ENGINE] Smart router: ${routerResult.intents.join(',')} — cost saved: $${routerResult.cost_saved.toFixed(4)}, hasInteractive=${!!routerResult.whatsappInteractive}`);
       
       return {
         text: routerResult.text,
