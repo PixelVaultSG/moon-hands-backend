@@ -179,6 +179,7 @@ async function routeMessage(message, clinicConfig, patientPhone = null, conversa
       // Handle both string responses and object responses (with whatsappInteractive)
       const responseText = typeof response === 'string' ? response : (response.text || '');
       const whatsappInteractive = typeof response === 'object' ? response.whatsappInteractive : null;
+      console.log(`[SMART_ROUTER] Handler response type=${typeof response}, hasText=${!!responseText}, hasInteractive=${!!whatsappInteractive}`);
       
       // Check if the response offers booking assistance — if so, set BOOKING_OFFERED state
       // so a subsequent "Yes" from the patient enters the booking flow instead of resetting
