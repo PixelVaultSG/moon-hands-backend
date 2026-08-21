@@ -666,6 +666,8 @@ async function handleWebhook(req, res, channel, url) {
     // Record outgoing message for loop detection (tracks our responses)
     loopDetector.recordOutgoing(message.to, message.from, response.text);
     
+    console.log(`[WEBHOOK:whatsapp] Before sanitization: hasInteractive=${!!response.whatsappInteractive}`);
+    
     // Layer 11: SEND REPLY BACK TO WHATSAPP (360dialog API)
     // CRITICAL: The webhook receives messages from 360dialog, but we must explicitly
     // call their /messages API to send replies back to the user.
@@ -987,7 +989,8 @@ async function routeToAI(text, message, channel, preResolvedClientId = null) {
       channel: channel,
       ai_processed: true,
       function_called: result.function_called || null,
-      model: result.model || 'gpt-4o-mini'
+      model: result.model || 'gpt-4o-mini',
+      whatsappInteractive: result.whatsappInteractive || null
     };
   } catch (err) {
     console.error('[AI_ROUTING] Bot engine error:', err.message);
