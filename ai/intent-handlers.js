@@ -125,14 +125,17 @@ function handleGreeting({ clinicConfig }) {
   // Build interactive list menu (always included — even with custom greeting)
   const { getWelcomeList } = require('./whatsapp-interactive');
   const welcomeList = getWelcomeList(name, agentName);
+  console.log(`[HANDLER:greeting] Built welcomeList, type=${welcomeList?.type}, interactive=${welcomeList?.interactive?.type}`);
   
   // If clinic has a custom greeting, use it but still attach interactive menu
   const customGreeting = getConfig(clinicConfig, 'greeting');
   if (customGreeting) {
-    return {
+    const result = {
       text: customGreeting.replace(/{businessName}/g, name),
       whatsappInteractive: welcomeList
     };
+    console.log(`[HANDLER:greeting] Returning object with text_len=${result.text.length}, hasInteractive=${!!result.whatsappInteractive}`);
+    return result;
   }
   
   // Fallback: generate a simple greeting with interactive menu
@@ -141,10 +144,9 @@ function handleGreeting({ clinicConfig }) {
     ? `Hey there! Welcome to ${name} ✨ I'm ${agentName}, your virtual receptionist. I can help you book appointments, check prices, or answer questions about our treatments like ${treatments}. What brings you in today?`
     : `Hey there! Welcome to ${name} ✨ I'm ${agentName}, your virtual receptionist. I can help you with bookings, treatment info, or pricing. What can I do for you?`;
   
-  return {
-    text,
-    whatsappInteractive: welcomeList
-  };
+  const result = { text, whatsappInteractive: welcomeList };
+  console.log(`[HANDLER:greeting] Returning fallback object with hasInteractive=${!!result.whatsappInteractive}`);
+  return result;
 }
 
 // ─── GOODBYE ──────────────────────────────────────────────────────
