@@ -129,6 +129,83 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // ─── CALENDAR EVENT (.ics) ENDPOINT ──────────────────────────────
+  // Generates a downloadable .ics file for any booking.
+  // Compatible with Apple Calendar, Google Calendar, Outlook.
+  // URL format: /calendar-event/{bookingRef}?date=YYYY-MM-DD&time=HH:MM&treatment=...&clinic=...&duration=60
+  //
+  if (url.pathname.startsWith('/calendar-event/') && req.method === 'GET') {
+    try {
+      const parts = url.pathname.split('/');
+      const bookingRef = parts[2] || 'unknown';
+      const date = url.searchParams.get('date');
+      const time = url.searchParams.get('time');
+      const treatment = url.searchParams.get('treatment') || 'Appointment';
+      const clinic = url.searchParams.get('clinic') || 'Pixel Vault';
+      const duration = parseInt(url.searchParams.get('duration')) || 60;
+      const address = url.searchParams.get('address') || '';
+      
+      if (!date || !time) {
+        res.writeHead(400, { 'Content-Type': 'text/plain' });
+        res.end('Missing date or time parameter');
+        return;
+      }
+      
+      // Parse date & time to create start/end datetime
+      const [year, month, day] = date.split('-').map(Number);
+      const [hour, minute] = time.split(':').map(Number);
+      const startDate = new Date(Date.UTC(year, month - 1, day, hour - 8, minute)); // SGT to UTC
+      const endDate = new Date(startDate.getTime() + duration * 60000);
+      
+      const formatICSDate = (d) => {
+        return d.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+      };
+      
+      const uid = `${bookingRef}@moonhands.sg`;
+      const dtStamp = formatICSDate(new Date());
+      const dtStart = formatICSDate(startDate);
+      const dtEnd = formatICSDate(endDate);
+      
+      const icsContent = [
+        'BEGIN:VCALENDAR',
+        'VERSION:2.0',
+        'PRODID:-//Moon Hands//Pixel Vault//EN',
+        'CALSCALE:GREGORIAN',
+        'METHOD:PUBLISH',
+        'BEGIN:VEVENT',
+        `UID:${uid}`,
+        `DTSTAMP:${dtStamp}`,
+        `DTSTART:${dtStart}`,
+        `DTEND:${dtEnd}`,
+        `SUMMARY:${treatment} at ${clinic}`,
+        `DESCRIPTION:Booking Reference: ${bookingRef}\\nTreatment: ${treatment}\\nClinic: ${clinic}`,
+        address ? `LOCATION:${address}` : '',
+        'STATUS:CONFIRMED',
+        'SEQUENCE:0',
+        'BEGIN:VALARM',
+        'ACTION:DISPLAY',
+        'DESCRIPTION:Reminder',
+        'TRIGGER:-PT15M',
+        'END:VALARM',
+        'END:VEVENT',
+        'END:VCALENDAR'
+      ].filter(Boolean).join('\r\n');
+      
+      res.writeHead(200, {
+        'Content-Type': 'text/calendar; charset=utf-8',
+        'Content-Disposition': `attachment; filename="${bookingRef}.ics"`,
+        'Content-Length': Buffer.byteLength(icsContent)
+      });
+      res.end(icsContent);
+      return;
+    } catch (err) {
+      console.error(`[CALENDAR] Error generating .ics: ${err.message}`);
+      res.writeHead(500, { 'Content-Type': 'text/plain' });
+      res.end('Error generating calendar event');
+      return;
+    }
+  }
+
   // Debug endpoint — requires API key authentication
   // Prevents information leakage about system configuration
   if (url.pathname === '/debug' && req.method === 'GET') {
