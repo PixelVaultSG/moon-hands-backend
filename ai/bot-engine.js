@@ -129,13 +129,47 @@ async function loadClientConfig(clientId) {
       console.log(`[BOT_ENGINE] Client ${clientId} not found in Supabase — using demo config`);
       return getDemoConfig();
     }
-    
+
+    // client_configs is returned as the joined row (or array with 1 element)
+    const clientConfigRow = Array.isArray(data.client_configs)
+      ? (data.client_configs[0] || {})
+      : (data.client_configs || {});
+
+    // The nested config JSONB is inside clientConfigRow.config
+    const nestedConfig = clientConfigRow.config || {};
+
+    // Build a flattened config that getConfig can read properly
+    // Priority: nested config JSONB (has categories from migration) → direct columns → defaults
+    // We check nested config first because the migration puts categorized data in config.services.
+    // The direct columns (services, operating_hours) are fallbacks for custom overrides.
+    const services = (nestedConfig.services && nestedConfig.services.length > 0)
+      ? nestedConfig.services
+      : (clientConfigRow.services || []);
+    const operating_hours = (nestedConfig.operating_hours && nestedConfig.operating_hours.length > 0)
+      ? nestedConfig.operating_hours
+      : (clientConfigRow.operating_hours || []);
+    const faqs = (nestedConfig.faqs && nestedConfig.faqs.length > 0)
+      ? nestedConfig.faqs
+      : (clientConfigRow.faqs || []);
+
     return {
       id: data.id,
       name: data.name,
       slug: data.slug,
       googleCalendarId: data.google_calendar_id,
-      config: data.client_configs || {}
+      // Flattened properties for direct access
+      services,
+      operating_hours,
+      faqs,
+      // Copy any other properties from nested config
+      ...nestedConfig,
+      // Keep merged config object for backward compatibility
+      config: {
+        ...nestedConfig,
+        services,
+        operating_hours,
+        faqs
+      }
     };
   } catch (err) {
     console.log(`[BOT_ENGINE] Supabase error loading client ${clientId} — using demo config: ${err.message}`);
