@@ -72,8 +72,7 @@ function getWelcomeList(clinicName, agentName) {
       { id: 'services', title: '1. Treatments & Services', description: 'Browse our aesthetic treatments and pricing' },
       { id: 'location', title: '2. Location & Contact', description: 'Address, directions, phone number, hours' },
       { id: 'book', title: '3. Book Appointment', description: 'Schedule your visit with us' },
-      { id: 'pricing', title: '4. Pricing', description: 'View treatment prices and packages' },
-      { id: 'faq', title: '5. Common Questions', description: 'Answers to frequently asked questions' }
+      { id: 'faq', title: '4. Common Questions', description: 'Answers to frequently asked questions' }
     ]
   });
 }
