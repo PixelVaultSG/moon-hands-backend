@@ -342,7 +342,7 @@ async function validateClinicWebhook(url) {
   const cacheKey = `${clinicId}:${token}`;
   const cached = clinicTokenCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) {
-    return { valid: true, clientId: cached.clientId, clinicName: cached.clinicName, error: null };
+    return { valid: true, clientId: cached.clientId, clinicName: cached.clinicName, whatsappNumber: cached.whatsappNumber, error: null };
   }
 
   try {
@@ -350,7 +350,7 @@ async function validateClinicWebhook(url) {
     // clinic_id in URL is the slug (e.g., 'pixellvault'), not the UUID
     const { data, error } = await supabase
       .from('clients')
-      .select('id, name, webhook_token, status')
+      .select('id, name, webhook_token, status, whatsapp_number')
       .eq('slug', clinicId)
       .single();
 
@@ -378,10 +378,11 @@ async function validateClinicWebhook(url) {
     clinicTokenCache.set(cacheKey, {
       clientId: data.id,
       clinicName: data.name,
+      whatsappNumber: data.whatsapp_number,
       expiresAt: Date.now() + TOKEN_CACHE_TTL
     });
 
-    return { valid: true, clientId: data.id, clinicName: data.name, error: null };
+    return { valid: true, clientId: data.id, clinicName: data.name, whatsappNumber: data.whatsapp_number, error: null };
 
   } catch (err) {
     console.error('[WEBHOOK_AUTH] Validation error:', err.message);
@@ -458,6 +459,7 @@ async function handleWebhook(req, res, channel, url) {
     // We validate the token against the clinic's stored webhook_token in Supabase.
     let preResolvedClientId = null;
     let preResolvedClinicName = null;
+    let clinicWhatsappNumber = null;
 
     if (channel === 'whatsapp') {
       const auth = await validateClinicWebhook(url);
@@ -476,6 +478,7 @@ async function handleWebhook(req, res, channel, url) {
       }
       preResolvedClientId = auth.clientId;
       preResolvedClinicName = auth.clinicName;
+      clinicWhatsappNumber = auth.whatsappNumber;
       addTrace(null, 'AUTH', 'CLINIC_TOKEN_VALID', `${auth.clinicName} (${auth.clientId.slice(0, 8)})`);
       console.log(`[WEBHOOK] Auth OK: ${auth.clinicName} (${auth.clientId})`);
     } else {
@@ -513,6 +516,24 @@ async function handleWebhook(req, res, channel, url) {
     // Layer 5: Extract and validate message
     const message = extractMessage(body, channel);
     console.log(`[WEBHOOK:${channel}] Extracted message: from=${message?.from?.slice(-4)}, text="${message?.text?.substring(0, 50)}", interactiveId=${message?.interactiveId}, id=${message?.messageId?.slice(-8)}`);
+    
+    // ── STAFF REPLY DETECTION ─────────────────────────────────────
+    // When clinic staff reply from the WhatsApp Business app, 360dialog sends
+    // a webhook where message.from == clinic's WABA number. We detect this
+    // and auto-pause the bot for that patient so staff can take over.
+    if (channel === 'whatsapp' && message && message.from && clinicWhatsappNumber) {
+      const senderClean = message.from.replace(/\D/g, '');
+      const clinicWabaClean = clinicWhatsappNumber.replace(/\D/g, '');
+      if (senderClean === clinicWabaClean && message.to) {
+        // This is a staff reply — auto-pause bot for the patient
+        const patientPhone = message.to;
+        const { pauseBot } = require('../middleware/staff-takeover');
+        pauseBot(patientPhone, 'staff_waba_reply', preResolvedClientId);
+        console.log(`[STAFF_TAKEOVER] Staff replied from WABA. Auto-paused bot for patient ${patientPhone.slice(-4)}`);
+        return sendSecurityResponse(res, 200, 'Staff reply detected — bot paused');
+      }
+    }
+    
     // Accept: text messages OR interactive button/list taps (even with empty text)
     if (!message || (!message.text && !message.interactiveId)) {
       console.log(`[WEBHOOK:${channel}] No text message to process — returning 200`);
