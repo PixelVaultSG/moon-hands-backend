@@ -734,6 +734,10 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
       'service_2': { intent: 'booking_request', text: 'I want this treatment' },
       'service_3': { intent: 'booking_request', text: 'I want this treatment' },
       'service_4': { intent: 'booking_request', text: 'I want this treatment' },
+      // Treatment info buttons
+      'book_this': { intent: 'booking_request', text: 'I want to book this treatment' },
+      'ask_more': { intent: 'question', text: 'Tell me more' },
+      'back_menu': { intent: 'greeting', text: 'Hi' },
     };
     
     let effectiveText = messageText;
