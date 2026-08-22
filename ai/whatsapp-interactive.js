@@ -140,6 +140,130 @@ function getTreatmentInfoButtons(treatmentName) {
   });
 }
 
+/**
+ * Build date selection buttons (Quick Reply)
+ * Shows up to 3 date options + "Other" as quick reply buttons.
+ * Each button ID encodes the actual date: `date_YYYY-MM-DD`
+ */
+function getDateButtonOptions(dateOptions) {
+  const buttons = dateOptions.map(d => ({
+    id: `date_${d.date}`,
+    title: d.label.length > 20 ? d.label.substring(0, 20) : d.label
+  }));
+  if (buttons.length < 3) {
+    buttons.push({ id: 'date_other', title: '📅 Other Date' });
+  }
+  return buildQuickReplyButtons({
+    body: 'When would you like to come in?',
+    footer: 'Tap a date to see available times',
+    buttons: buttons.slice(0, 3)
+  });
+}
+
+/**
+ * Build time slot buttons (Quick Reply)
+ * Shows up to 3 time slots + "Other" as quick reply buttons.
+ * Each button ID encodes the actual time: `time_HH:MM`
+ */
+function getTimeSlotButtons(timeSlots, operatingHours) {
+  const buttons = timeSlots.map(t => ({
+    id: `time_${t.replace(/:/g, '-')}`,
+    title: formatDisplayTime(t)
+  }));
+  if (buttons.length < 3) {
+    buttons.push({ id: 'time_other', title: '⏰ Other Time' });
+  }
+  return buildQuickReplyButtons({
+    body: `Here are available time slots:\n🕐 ${operatingHours || 'During operating hours'}`,
+    footer: 'Tap a time to select it',
+    buttons: buttons.slice(0, 3)
+  });
+}
+
+function formatDisplayTime(timeStr) {
+  const [h, m] = timeStr.split(':').map(Number);
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  const dh = h > 12 ? h - 12 : (h === 0 ? 12 : h);
+  return `${dh}:${String(m).padStart(2,'0')} ${ampm}`;
+}
+
+/**
+ * Build category selection list
+ * Groups services by their category field.
+ */
+function getCategoryListMessage(categories) {
+  const rows = categories.map((c, i) => ({
+    id: `cat_${c.id}`,
+    title: c.name,
+    description: c.description || `${c.count || 0} treatment(s)`
+  }));
+  return buildListMessage({
+    header: 'Treatment Categories',
+    body: 'What type of treatment are you looking for?',
+    footer: 'Tap a category to browse',
+    buttonText: 'Browse Categories',
+    rows
+  });
+}
+
+/**
+ * Build treatment list for a specific category
+ */
+function getTreatmentsByCategoryMessage(categoryName, services) {
+  const rows = services.slice(0, 10).map((s, i) => ({
+    id: `svc_${s.name.toLowerCase().replace(/\s+/g, '_')}`,
+    title: s.name,
+    description: `${s.price || ''} ${s.duration ? '— ' + s.duration + 'min' : ''}`.trim()
+  }));
+  return buildListMessage({
+    header: categoryName,
+    body: `Here are our ${categoryName.toLowerCase()} treatments. Tap one to learn more or book.`,
+    footer: `${services.length} option(s)`,
+    buttonText: 'View Treatments',
+    rows
+  });
+}
+
+/**
+ * Rich booking confirmation card with summary details
+ */
+function getConfirmationCard({ date, time, treatments, totalDuration, totalPrice, clinicName }) {
+  const treatmentText = Array.isArray(treatments) ? treatments.join(' + ') : treatments;
+  const durText = totalDuration ? `⏱️ ${totalDuration} mins` : '';
+  const priceText = totalPrice ? `💰 ${totalPrice}` : '';
+  
+  return buildQuickReplyButtons({
+    body: `✅ *Booking Summary*\n\n📅 ${date}\n🕐 ${time}\n💆 ${treatmentText}\n${durText}\n${priceText}\n\nEverything look correct?`,
+    footer: clinicName ? `${clinicName}` : 'Tap to confirm',
+    buttons: [
+      { id: 'confirm_yes', title: '✅ Confirm' },
+      { id: 'confirm_change', title: '📝 Edit' },
+      { id: 'confirm_cancel', title: '❌ Cancel' }
+    ]
+  });
+}
+
+/**
+ * Calendar CTA buttons — links to .ics endpoint for both Android & iPhone
+ */
+function getCalendarCTAButtons(bookingRef, icsUrl) {
+  return {
+    type: 'interactive',
+    interactive: {
+      type: 'cta_url',
+      body: { text: 'Add this appointment to your calendar so you don\'t forget!' },
+      footer: { text: 'Works with Apple, Google & Outlook calendars' },
+      action: {
+        name: 'cta_url',
+        parameters: {
+          display_text: '📅 Add to Calendar',
+          url: icsUrl
+        }
+      }
+    }
+  };
+}
+
 module.exports = {
   buildListMessage,
   buildQuickReplyButtons,
@@ -148,5 +272,11 @@ module.exports = {
   getYesNoButtons,
   getServiceListMessage,
   getTreatmentInfoButtons,
+  getDateButtonOptions,
+  getTimeSlotButtons,
+  getCategoryListMessage,
+  getTreatmentsByCategoryMessage,
+  getConfirmationCard,
+  getCalendarCTAButtons,
   withInteractive
 };
