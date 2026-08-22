@@ -112,18 +112,88 @@ async function getNextAvailableDates(clientId, treatmentNames, clientConfig, cou
   const results = [];
   const today = new Date();
   
-  for (let i = 0; i < 14 && results.length < count; i++) {
+  for (let i = 0; i < 21 && results.length < count; i++) {
     const d = new Date(today);
     d.setDate(d.getDate() + i);
     const dateStr = formatDate(d);
     
     const avail = await getAvailableSlots(clientId, dateStr, treatmentNames, clientConfig);
     if (avail.available) {
-      results.push({ date: dateStr, label: getDateLabel(d, i), slots: avail.slots });
+      results.push({ date: dateStr, label: getDateLabel(d, i), slots: avail.slots, operatingHours: avail.operatingHours });
     }
   }
   
   return results;
+}
+
+/**
+ * Get the next available slots starting from a specific date.
+ * When a user picks a date that has no slots, this finds the earliest
+ * alternatives and presents them as buttons — no guessing required.
+ * 
+ * @param {string} clientId - Clinic/client ID
+ * @param {Array<string>} treatmentNames - Names of selected treatments
+ * @param {Object} clientConfig - Full client config
+ * @param {string} fromDateStr - The date the user already tried (YYYY-MM-DD)
+ * @param {number} daysToSearch - How many days ahead to search (default 14)
+ * @returns {Promise<{found: boolean, nextDate: string|null, nextSlots: string[], label: string, allDates: Array}>}
+ */
+async function findNextAvailableAfter(clientId, treatmentNames, clientConfig, fromDateStr, daysToSearch = 21) {
+  const fromDate = new Date(fromDateStr + 'T00:00:00+08:00');
+  const allDates = [];
+  
+  for (let i = 1; i <= daysToSearch && allDates.length < 3; i++) {
+    const d = new Date(fromDate);
+    d.setDate(d.getDate() + i);
+    const dateStr = formatDate(d);
+    
+    const avail = await getAvailableSlots(clientId, dateStr, treatmentNames, clientConfig);
+    if (avail.available && avail.slots.length > 0) {
+      const offset = Math.floor((d - new Date()) / (1000 * 60 * 60 * 24));
+      allDates.push({
+        date: dateStr,
+        label: getDateLabel(d, offset),
+        slots: avail.slots,
+        operatingHours: avail.operatingHours
+      });
+    }
+  }
+  
+  if (allDates.length === 0) {
+    return { found: false, nextDate: null, nextSlots: [], label: null, allDates: [] };
+  }
+  
+  return {
+    found: true,
+    nextDate: allDates[0].date,
+    nextSlots: allDates[0].slots,
+    label: allDates[0].label,
+    allDates
+  };
+}
+
+/**
+ * Get the next available time slots on the SAME date, starting after a given time.
+ * Used when a user requests a time that's already booked or outside hours.
+ */
+async function findNextSlotsOnDate(clientId, dateStr, treatmentNames, clientConfig, afterTimeStr = null) {
+  const avail = await getAvailableSlots(clientId, dateStr, treatmentNames, clientConfig);
+  if (!avail.available) {
+    return { found: false, slots: [] };
+  }
+  
+  if (!afterTimeStr) {
+    return { found: true, slots: avail.slots.slice(0, 6) };
+  }
+  
+  const afterMin = minutesFromTime(afterTimeStr);
+  const laterSlots = avail.slots.filter(t => minutesFromTime(t) > afterMin);
+  
+  if (laterSlots.length === 0) {
+    return { found: false, slots: [] };
+  }
+  
+  return { found: true, slots: laterSlots.slice(0, 6) };
 }
 
 // ─── HELPERS ──────────────────────────────────────────────────────
@@ -168,6 +238,8 @@ function mergeBusyPeriods(periods) {
 module.exports = {
   getAvailableSlots,
   getNextAvailableDates,
+  findNextAvailableAfter,
+  findNextSlotsOnDate,
   formatTime,
   formatDate
 };
