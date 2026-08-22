@@ -22,9 +22,9 @@ function buildListMessage({ header, body, footer, buttonText, rows }) {
       body: { text: body },
       footer: footer ? { text: footer } : undefined,
       action: {
-        button: buttonText || 'View Options',
+        button: buttonText || 'View Menu',
         sections: [{
-          title: 'Options',
+          title: 'Menu',
           rows: rows.map(r => ({
             id: r.id,
             title: r.title,
@@ -128,6 +128,18 @@ function withInteractive(baseResponse, interactivePayload) {
   };
 }
 
+function getTreatmentInfoButtons(treatmentName) {
+  return buildQuickReplyButtons({
+    body: `Would you like to book ${treatmentName}?`,
+    footer: 'Tap an option',
+    buttons: [
+      { id: 'book_this', title: '📅 Book Now' },
+      { id: 'ask_more', title: '❓ Ask More' },
+      { id: 'back_menu', title: '🏠 Main Menu' }
+    ]
+  });
+}
+
 module.exports = {
   buildListMessage,
   buildQuickReplyButtons,
@@ -135,5 +147,6 @@ module.exports = {
   getBookingConfirmationButtons,
   getYesNoButtons,
   getServiceListMessage,
+  getTreatmentInfoButtons,
   withInteractive
 };
