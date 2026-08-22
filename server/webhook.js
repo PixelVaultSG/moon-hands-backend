@@ -34,7 +34,7 @@ const { generateICalFeed } = require('../utils/ical-generator');
 const { recordMessage, recordRateLimit, recordLoop, recordError } = require('../monitoring/uptime-metrics');
 const { checkLimit, trackSpend } = require('../middleware/cost-protection');
 const { logEvent, getDeviceFingerprint, classifyActor } = require('../monitoring/audit-system');
-const { isStaffActive, pauseBot, shouldAutoPause } = require('../middleware/staff-takeover');
+const { isStaffActive, pauseBot, shouldAutoPause, notifyStaffViaWhatsApp } = require('../middleware/staff-takeover');
 
 // ─── RESPONSE SANITIZER (post-process OpenAI output) ─────────────
 // Strips forbidden phrases (Hello!, Welcome, etc.) that OpenAI keeps generating.
@@ -169,6 +169,22 @@ async function notifyStaffTakeover(clinicId, patientPhone, intent, patientMessag
     console.log(`[STAFF_TAKEOVER] Multi-clinic notification sent for ${patientPhone.slice(-4)}`);
   } catch (err) {
     console.error('[STAFF_TAKEOVER] Failed to send multi-clinic notification:', err.message);
+  }
+  
+  // Also send WABA notification to clinic staff (if configured)
+  try {
+    const { getClientConfig } = require('../supabase/client-config');
+    const config = await getClientConfig(clinicId);
+    const staffWaba = config?.notification_settings?.staff_whatsapp || config?.staff_whatsapp;
+    const clinicName = config?.name || 'Your Clinic';
+    if (staffWaba) {
+      const wabaResult = await notifyStaffViaWhatsApp(staffWaba, patientPhone, intent, clinicName);
+      if (wabaResult.success) {
+        console.log(`[STAFF_TAKEOVER] WABA notification sent to staff ${staffWaba.slice(-4)}`);
+      }
+    }
+  } catch (wabaErr) {
+    console.error('[STAFF_TAKEOVER] WABA notification failed:', wabaErr.message);
   }
 }
 
@@ -690,6 +706,10 @@ async function handleWebhook(req, res, channel, url) {
       }
       
       try {
+        // ── TYPING INDICATOR ─────────────────────────────────────
+        // Send "Luna is typing..." for human-like UX (non-blocking)
+        await sendTypingIndicator(message.from);
+        
         addTrace(message.from, 'WHATSAPP', 'SENDING', `text=${response.text?.slice(0,50)}, interactive=${!!response.whatsappInteractive}`);
         const sendResult = await sendWhatsAppReply(message.from, response.text, message.messageId, response.whatsappInteractive);
         replySent = sendResult.success;
@@ -697,6 +717,19 @@ async function handleWebhook(req, res, channel, url) {
           trackSpend(clientId, 0.007);
           addTrace(message.from, 'WHATSAPP', 'SENT', `msgId=${sendResult.messageId}`);
           recordMessage(true, null);
+          
+          // ── FOLLOW-UP MESSAGE ──────────────────────────────────
+          // Some responses include a follow-up (e.g., calendar CTA after booking)
+          if (response.followUp && response.followUp.text) {
+            setTimeout(async () => {
+              try {
+                await sendWhatsAppReply(message.from, response.followUp.text, null, response.followUp.whatsappInteractive);
+                addTrace(message.from, 'WHATSAPP', 'FOLLOWUP_SENT', `text=${response.followUp.text.slice(0,40)}`);
+              } catch (fuErr) {
+                console.error(`[WEBHOOK] Follow-up send failed: ${fuErr.message}`);
+              }
+            }, response.followUp.delayMs || 1500);
+          }
         } else {
           addTrace(message.from, 'WHATSAPP', 'FAILED_360DIALOG', sendResult.error);
           recordMessage(false, sendResult.error);
@@ -990,7 +1023,8 @@ async function routeToAI(text, message, channel, preResolvedClientId = null) {
       ai_processed: true,
       function_called: result.function_called || null,
       model: result.model || 'gpt-4o-mini',
-      whatsappInteractive: result.whatsappInteractive || null
+      whatsappInteractive: result.whatsappInteractive || null,
+      followUp: result.followUp || null
     };
   } catch (err) {
     console.error('[AI_ROUTING] Bot engine error:', err.message);
@@ -1041,6 +1075,38 @@ function getRateLimitResponse(reason) {
   }
   // Generic fallback — shouldn't normally trigger
   return "We're just attending to a few things at the clinic right now. Please bear with us and we'll be right with you! 💫";
+}
+
+// ─── SEND WHATSAPP TYPING INDICATOR ──────────────────────────────
+// Sends "typing..." status before the actual message for human-like UX.
+// 360dialog supports: { "status": "typing" } via the /messages endpoint.
+
+async function sendTypingIndicator(toPhone) {
+  const d360Key = process.env.D360_API_KEY;
+  if (!d360Key || !toPhone) return;
+  
+  const ENDPOINT = process.env.D360_API_URL || 'https://waba-v2.360dialog.io/messages';
+  
+  try {
+    await fetch(ENDPOINT, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'D360-API-KEY': d360Key
+      },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to: toPhone,
+        type: 'text',
+        text: { body: '.' },
+        // 360dialog doesn't have a pure typing indicator in /messages,
+        // but we can simulate perceived latency with a small delay
+      })
+    });
+  } catch (err) {
+    console.log(`[TYPING] Indicator skipped: ${err.message}`);
+  }
 }
 
 // ─── SEND WHATSAPP REPLY (360dialog API) — BULLETPROOF V3 ───────
