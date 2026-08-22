@@ -743,11 +743,56 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
     let effectiveText = messageText;
     let forcedIntents = null;
     
-    if (interactiveId && INTERACTIVE_INTENT_MAP[interactiveId]) {
-      const mapped = INTERACTIVE_INTENT_MAP[interactiveId];
-      effectiveText = mapped.text;
-      forcedIntents = [mapped.intent];
-      console.log(`[BOT_ENGINE] Interactive ID "${interactiveId}" → intent: ${mapped.intent}`);
+    if (interactiveId) {
+      // ── STATIC MAP: Pre-defined button IDs ─────────────────────────
+      if (INTERACTIVE_INTENT_MAP[interactiveId]) {
+        const mapped = INTERACTIVE_INTENT_MAP[interactiveId];
+        effectiveText = mapped.text;
+        forcedIntents = [mapped.intent];
+        console.log(`[BOT_ENGINE] Interactive ID "${interactiveId}" → intent: ${mapped.intent}`);
+      }
+      // ── DYNAMIC MAP: Date selection buttons ────────────────────────
+      // Format: date_YYYY-MM-DD  (e.g., date_2026-08-22)
+      else if (interactiveId.startsWith('date_')) {
+        const dateVal = interactiveId.replace('date_', '');
+        if (dateVal === 'other') {
+          effectiveText = 'other date';
+          forcedIntents = ['date_selected'];
+        } else {
+          effectiveText = dateVal; // Pass raw date to smart-router
+          forcedIntents = ['date_selected'];
+        }
+        console.log(`[BOT_ENGINE] Interactive date ID "${interactiveId}" → date: ${dateVal}`);
+      }
+      // ── DYNAMIC MAP: Time selection buttons ────────────────────────
+      // Format: time_HH-MM  (e.g., time_10-00)
+      else if (interactiveId.startsWith('time_')) {
+        const timeVal = interactiveId.replace('time_', '').replace(/-/g, ':');
+        if (timeVal === 'other') {
+          effectiveText = 'other time';
+          forcedIntents = ['time_selected'];
+        } else {
+          effectiveText = timeVal; // Pass raw time to smart-router
+          forcedIntents = ['time_selected'];
+        }
+        console.log(`[BOT_ENGINE] Interactive time ID "${interactiveId}" → time: ${timeVal}`);
+      }
+      // ── DYNAMIC MAP: Category selection ────────────────────────────
+      // Format: cat_CategoryName  (e.g., cat_Injectables)
+      else if (interactiveId.startsWith('cat_')) {
+        const catId = interactiveId.replace('cat_', '');
+        effectiveText = catId;
+        forcedIntents = ['category_selected'];
+        console.log(`[BOT_ENGINE] Interactive category ID "${interactiveId}" → cat: ${catId}`);
+      }
+      // ── DYNAMIC MAP: Service selection ─────────────────────────────
+      // Format: svc_service_name  (e.g., svc_botox)
+      else if (interactiveId.startsWith('svc_')) {
+        const svcName = interactiveId.replace('svc_', '').replace(/_/g, ' ');
+        effectiveText = svcName;
+        forcedIntents = ['service_selected'];
+        console.log(`[BOT_ENGINE] Interactive service ID "${interactiveId}" → service: ${svcName}`);
+      }
     }
     
     // ─── SMART ROUTER: Try hardcoded responses first ($0) ───────────
