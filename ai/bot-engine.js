@@ -720,7 +720,6 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
       'services': { intent: 'service_list', text: 'What services do you offer?' },
       'location': { intent: 'location_inquiry', text: 'Where are you located?' },
       'book': { intent: 'booking_request', text: 'I want to book an appointment' },
-      'pricing': { intent: 'pricing_inquiry', text: 'What are your prices?' },
       'faq': { intent: 'faq', text: 'I have a question' },
       // Confirmation buttons
       'confirm_yes': { intent: 'confirmation_yes', text: 'Yes' },
