@@ -190,7 +190,14 @@ async function routeMessage(message, clinicConfig, patientPhone = null, conversa
         'shall i help you book',
         'would you like to schedule',
         'would you like me to check availability',
-        'would you like to make a booking'
+        'would you like to make a booking',
+        'i can help you book',
+        'i can help you schedule',
+        'book a consultation',
+        'book an appointment',
+        'interested in booking',
+        'help you book',
+        'help you schedule'
       ];
       const lowerResponse = responseText.toLowerCase();
       if (bookingOfferPhrases.some(phrase => lowerResponse.includes(phrase))) {
