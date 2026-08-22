@@ -77,6 +77,7 @@ const HANDLERS = {
   goodbye: handleGoodbye,
   operating_hours: handleOperatingHours,
   location: handleLocation,
+  location_inquiry: handleLocation,                // "Where are you located?" → same as location
   pricing_specific: handlePricingSpecific,
   pricing_general: handlePricingGeneral,
   pricing_inquiry: handlePricingGeneral,        // "What are your prices?" → same as pricing_general
@@ -90,6 +91,7 @@ const HANDLERS = {
   check_appointment: handleCheckAppointment,
   faq_prep: handleFaqPrep,
   faq_aftercare: handleFaqAftercare,
+  faq: handleFaqPrep,                               // "Common Questions" button → general FAQ
   language_switch: handleLanguageSwitch,
   human_handoff: handleHumanHandoff,
   waitlist_request: handleWaitlistRequest,
@@ -296,14 +298,20 @@ function handleServiceInquiry({ clinicConfig, params }) {
     const price = formatPrice(match.price, match.price_unit);
     const duration = match.duration ? `\n⏱ Duration: ${match.duration}` : '';
     const downtime = match.downtime ? `\n🩹 Downtime: ${match.downtime}` : '';
+    const { getTreatmentInfoButtons } = require('./whatsapp-interactive');
     
-    return `Yes, we offer ${match.name}!${duration}${downtime}\n💰 Price: ${price}\n\n${match.description || ''}\n\nWould you like to book a consultation or appointment?`;
+    return {
+      text: `Yes, we offer ${match.name}!${duration}${downtime}\n💰 Price: ${price}\n\n${match.description || ''}`,
+      whatsappInteractive: getTreatmentInfoButtons(match.name)
+    };
   }
   
   return `I don't see ${requestedService} in our current treatment menu. Would you like me to share what treatments we do offer?`;
 }
 
-// ─── SERVICE LIST ─────────────────────────────────────────────────
+// ─── SERVICE LIST — CATEGORY FILTERING ────────────────────────────
+// Instead of dumping 15 treatments as a wall of text, group by category
+// and present as an interactive List Message (up to 10 categories).
 
 function handleServiceList({ clinicConfig }) {
   const services = getConfig(clinicConfig, 'services') || [];
@@ -312,15 +320,25 @@ function handleServiceList({ clinicConfig }) {
     return `We offer a range of aesthetic treatments. Let me know what you're interested in!`;
   }
   
-  // Full detailed list with price, duration, and description
-  const list = services.map(s => {
-    const price = s.price ? ` (${s.price}${s.price_unit ? '/' + s.price_unit : ''})` : '';
-    const duration = s.duration ? ` — ${s.duration}min${s.duration > 1 ? 's' : ''}` : '';
-    const desc = s.description ? `: ${s.description}` : '';
-    return `• ${s.name}${price}${duration}${desc}`;
-  }).join('\n');
+  // Build category map from services
+  const catMap = new Map();
+  for (const s of services) {
+    const cat = s.category || 'Other';
+    if (!catMap.has(cat)) {
+      catMap.set(cat, { id: cat, name: cat, count: 0, services: [] });
+    }
+    catMap.get(cat).count++;
+    catMap.get(cat).services.push(s);
+  }
   
-  return `Here are our treatments:\n\n${list}\n\nWhich one interests you? I can share more details or help you book.`;
+  const categories = Array.from(catMap.values()).slice(0, 10);
+  
+  // Return interactive category list
+  const { getCategoryListMessage } = require('./whatsapp-interactive');
+  return {
+    text: `We have ${services.length} treatments across ${categories.length} categories. What are you looking for?`,
+    whatsappInteractive: getCategoryListMessage(categories)
+  };
 }
 
 // ─── BOOKING REQUEST ──────────────────────────────────────────────
