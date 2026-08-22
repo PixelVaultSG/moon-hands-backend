@@ -14,6 +14,7 @@ const BOOKING_STATES = {
   AWAITING_DATE: 'awaiting_date',
   AWAITING_TIME: 'awaiting_time',
   AWAITING_TREATMENT: 'awaiting_treatment',
+  SELECTING_CATEGORY: 'selecting_category',  // User choosing treatment category
   AWAITING_NAME: 'awaiting_name',
   AWAITING_PHONE: 'awaiting_phone',
   AWAITING_CONFIRMATION: 'awaiting_confirmation',
