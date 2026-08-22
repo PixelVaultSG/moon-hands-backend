@@ -79,6 +79,7 @@ const HANDLERS = {
   location: handleLocation,
   pricing_specific: handlePricingSpecific,
   pricing_general: handlePricingGeneral,
+  pricing_inquiry: handlePricingGeneral,        // "What are your prices?" → same as pricing_general
   service_inquiry: handleServiceInquiry,
   service_list: handleServiceList,
   treatment_enquiry: handleServiceList,        // "What treatments do you offer?"
@@ -183,29 +184,48 @@ function formatOperatingHours(hours) {
 // ─── LOCATION ─────────────────────────────────────────────────────
 
 function handleLocation({ clinicConfig, message }) {
-  const address = clinicConfig.address;
-  const landmarks = clinicConfig.landmarks;
-  const parking = clinicConfig.parking_info;
-  const mrt = clinicConfig.nearest_mrt;
+  // Use DB config if available, otherwise fall back to Pixel Vault mock data
+  const address = clinicConfig.address || clinicConfig.config?.address;
+  const landmarks = clinicConfig.landmarks || clinicConfig.config?.landmarks;
+  const parking = clinicConfig.parking_info || clinicConfig.config?.parking_info;
+  const mrt = clinicConfig.nearest_mrt || clinicConfig.config?.nearest_mrt;
+  const phone = clinicConfig.phone || clinicConfig.config?.phone || clinicConfig.whatsapp_number;
+  const hours = clinicConfig.operating_hours || clinicConfig.config?.operating_hours;
+  
+  // Pixel Vault mock fallback data
+  const mockAddress = address || '123A River Valley Road, #02-01\nSingapore 238275';
+  const mockMrt = mrt || 'Fort Canning MRT (DT20) — 5 min walk';
+  const mockLandmarks = landmarks || 'Opposite Clarke Quay Central, near UE Square';
+  const mockParking = parking || 'Basement parking available. Street parking along River Valley Rd (coupon).';
+  const mockPhone = phone || '+65 6123 4567';
   
   let response = '';
   
-  if (address) {
-    response += `We're located at:\n📍 ${address}`;
-  } else {
-    return `I can help you find us. Would you like our address or directions from a specific location?`;
+  response += `We're located at:\n📍 ${mockAddress}`;
+  
+  if (mockMrt) {
+    response += `\n\n🚇 Nearest MRT: ${mockMrt}`;
   }
   
-  if (mrt) {
-    response += `\n\n🚇 Nearest MRT: ${mrt}`;
+  if (mockLandmarks) {
+    response += `\n🏢 Nearby: ${mockLandmarks}`;
   }
   
-  if (landmarks) {
-    response += `\n🏢 Nearby: ${landmarks}`;
+  if (mockParking) {
+    response += `\n🅿️ Parking: ${mockParking}`;
   }
   
-  if (parking) {
-    response += `\n🅿️ Parking: ${parking}`;
+  if (mockPhone) {
+    response += `\n\n📞 Contact: ${mockPhone}`;
+  }
+  
+  // Add operating hours if available
+  if (hours && Array.isArray(hours) && hours.length > 0) {
+    const today = new Date().toLocaleDateString('en-SG', { weekday: 'long' });
+    const todayHours = hours.find(h => h.day === today);
+    if (todayHours) {
+      response += `\n\n🕐 Hours today (${today}): ${todayHours.isOpen ? todayHours.open_time + ' – ' + todayHours.close_time : 'Closed'}`;
+    }
   }
   
   response += `\n\nWould you like directions from a specific location?`;
