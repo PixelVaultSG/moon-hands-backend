@@ -677,7 +677,7 @@ async function handleWebhook(req, res, channel, url) {
     let matchedIntent = null;
     console.log(`[WEBHOOK:${channel}] Routing to AI: clientId=${clientId?.slice(0, 8)}, text="${sanitizedText.substring(0, 50)}"`);
     try {
-      response = await routeToAI(sanitizedText, message, channel, clientId, interactiveId);
+      response = await routeToAI(sanitizedText, message, channel, clientId, message.interactiveId);
       matchedIntent = response?.intent || null;
       console.log(`[WEBHOOK:${channel}] AI responded: len=${response?.text?.length}, fn=${response?.function_called || 'none'}, model=${response?.model || 'unknown'}`);
       addTrace(message.from, 'AI', 'RESPONSE', `len=${response.text?.length}, fn=${response.function_called || 'none'}`);
