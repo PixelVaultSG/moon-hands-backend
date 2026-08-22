@@ -20,19 +20,8 @@
 
 // Format: { patientPhone: { status: 'bot_active'|'staff_active'|'auto_paused', pausedAt: timestamp, staffChatId: string, reason: string, clinicId: string } }
 const takeoverState = new Map();
-const MAX_TAKEOVER_ENTRIES = 10000; // Security: prevent memory exhaustion
 const AUTO_RESUME_MS = 30 * 60 * 1000; // 30 minutes
 const CLEANUP_INTERVAL_MS = 5 * 60 * 1000; // Run cleanup every 5 minutes
-
-function setTakeoverState(patientPhone, state) {
-  // Security: enforce max size with LRU eviction
-  if (takeoverState.size >= MAX_TAKEOVER_ENTRIES) {
-    const oldestKey = takeoverState.keys().next().value;
-    takeoverState.delete(oldestKey);
-    console.warn('[STAFF_TAKEOVER] State at max size, evicted oldest entry');
-  }
-  takeoverState.set(patientPhone, state);
-}
 
 /**
  * Check if bot should be silent for this patient.
@@ -70,7 +59,7 @@ function isStaffActive(patientPhone) {
 function pauseBot(patientPhone, staffChatId, reason = 'staff_takeover', clinicId = null) {
   const existing = takeoverState.get(patientPhone);
   
-  setTakeoverState(patientPhone, {
+  takeoverState.set(patientPhone, {
     status: 'staff_active',
     pausedAt: Date.now(),
     staffChatId: staffChatId || existing?.staffChatId || null,
@@ -281,6 +270,69 @@ async function handleTakeoverCommand(bot, chatId, text, clinicId) {
   );
 }
 
+// ─── WABA STAFF NOTIFICATION ─────────────────────────────────────
+// When the bot auto-pauses (escalation, complaint, human_request),
+// send a WhatsApp notification to clinic staff so they can take over.
+//
+// Staff must configure their WhatsApp number in client config:
+//   notification_settings.staff_whatsapp = "+658XXXXXXX"
+//
+// The notification is sent FROM the bot's WABA number TO the staff.
+
+async function notifyStaffViaWhatsApp(staffPhone, patientPhone, reason, clinicName) {
+  if (!staffPhone) return { success: false, error: 'No staff WhatsApp configured' };
+  
+  const D360_KEY = process.env.D360_API_KEY;
+  if (!D360_KEY) return { success: false, error: 'No D360 API key' };
+  
+  const ENDPOINT = process.env.D360_API_URL || 'https://waba-v2.360dialog.io/messages';
+  
+  const reasonText = reason === 'complaint' 
+    ? 'A patient has raised a complaint and may need personal attention.'
+    : reason === 'human_request'
+    ? 'A patient has explicitly requested to speak with a staff member.'
+    : 'The conversation has been escalated for manual handling.';
+  
+  const body = {
+    messaging_product: 'whatsapp',
+    recipient_type: 'individual',
+    to: staffPhone,
+    type: 'text',
+    text: {
+      body: `🚨 *Patient Needs Attention*\n\n` +
+            `Patient: +${patientPhone.replace(/\D/g, '')}\n` +
+            `Clinic: ${clinicName || 'Your Clinic'}\n\n` +
+            `${reasonText}\n\n` +
+            `The bot has been *auto-paused* for this patient.\n` +
+            `Reply to the patient directly from your WhatsApp Business app to take over the conversation.`
+    }
+  };
+  
+  try {
+    const resp = await fetch(ENDPOINT, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'D360-API-KEY': D360_KEY
+      },
+      body: JSON.stringify(body)
+    });
+    
+    if (resp.ok) {
+      const data = await resp.json();
+      console.log(`[WABA_NOTIFY] Sent to staff ${staffPhone}: ${data.messages?.[0]?.id || 'ok'}`);
+      return { success: true, messageId: data.messages?.[0]?.id };
+    } else {
+      const errText = await resp.text();
+      console.error(`[WABA_NOTIFY] Failed: ${resp.status} ${errText.slice(0, 200)}`);
+      return { success: false, error: errText };
+    }
+  } catch (err) {
+    console.error(`[WABA_NOTIFY] Network error: ${err.message}`);
+    return { success: false, error: err.message };
+  }
+}
+
 // ─── EXPORTS ─────────────────────────────────────────────────────
 
 module.exports = {
@@ -291,6 +343,7 @@ module.exports = {
   getPausedConversations,
   cleanupExpiredPauses,
   AUTO_RESUME_MS,
+  notifyStaffViaWhatsApp,
   // Telegram command handlers
   handlePauseCommand,
   handleResumeCommand,
