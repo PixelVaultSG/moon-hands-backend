@@ -147,6 +147,13 @@ async function routeMessage(message, clinicConfig, patientPhone = null, conversa
     return await startBookingFlow(message, clinicConfig, patientPhone, conversationHistory, startTime);
   }
   
+  // Interactive button intents (date/time/category/service selections)
+  // These bypass normal intent handling and go straight to booking flow
+  const INTERACTIVE_BOOKING_INTENTS = ['date_selected', 'time_selected', 'category_selected', 'service_selected'];
+  if (INTERACTIVE_BOOKING_INTENTS.includes(primaryIntent.intent)) {
+    return await startBookingFlow(message, clinicConfig, patientPhone, conversationHistory, startTime);
+  }
+  
   // ── STEP 4b: Handle context-dependent intents ───────────────────
   // These require looking at conversation history to determine meaning
   
@@ -423,6 +430,7 @@ function isBookingState(state) {
     BOOKING_STATES.AWAITING_DATE,
     BOOKING_STATES.AWAITING_TIME,
     BOOKING_STATES.AWAITING_TREATMENT,
+    BOOKING_STATES.SELECTING_CATEGORY,
     BOOKING_STATES.AWAITING_NAME,
     BOOKING_STATES.AWAITING_PHONE,
     BOOKING_STATES.AWAITING_CONFIRMATION,
@@ -460,6 +468,19 @@ async function startBookingFlow(message, clinicConfig, patientPhone, conversatio
     }
     if (primaryTreatment) {
       setState(patientPhone, BOOKING_STATES.AWAITING_TIME, { date: fields.date, treatment: primaryTreatment, treatments: treatmentNames });
+      // Show available time slots as buttons
+      const { getAvailableSlots } = require('./availability-engine');
+      const avail = await getAvailableSlots(clinicConfig.id, fields.date, treatmentNames, clinicConfig);
+      if (avail.available && avail.slots.length > 0) {
+        const { getTimeSlotButtons } = require('./whatsapp-interactive');
+        return {
+          text: `Here are available times on ${fields.date}:\n🕐 ${avail.operatingHours}`,
+          source: 'hardcoded',
+          cost_saved: 1,
+          latency_ms: Date.now() - startTime,
+          whatsappInteractive: getTimeSlotButtons(avail.slots, avail.operatingHours)
+        };
+      }
       return { text: `${fields.date} noted ✓ What time would you prefer?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
     }
     setState(patientPhone, BOOKING_STATES.AWAITING_TIME, { date: fields.date });
@@ -477,12 +498,36 @@ async function startBookingFlow(message, clinicConfig, patientPhone, conversatio
   
   if (primaryTreatment) {
     setState(patientPhone, BOOKING_STATES.AWAITING_DATE, { treatment: primaryTreatment, treatments: treatmentNames });
-    const displayName = treatmentNames.length > 1 ? treatmentNames.join(' + ') : primaryTreatment;
-    return { text: `${displayName} — lovely choice! Which date works for you?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+    // Show date buttons with available dates
+    const { getNextAvailableDates } = require('./availability-engine');
+    const { getDateButtonOptions } = require('./whatsapp-interactive');
+    const dateOptions = await getNextAvailableDates(clinicConfig.id, treatmentNames, clinicConfig, 3);
+    if (dateOptions.length > 0) {
+      return {
+        text: `${treatmentNames.length > 1 ? treatmentNames.join(' + ') : primaryTreatment} — lovely choice! When would you like to come in?`,
+        source: 'hardcoded',
+        cost_saved: 1,
+        latency_ms: Date.now() - startTime,
+        whatsappInteractive: getDateButtonOptions(dateOptions)
+      };
+    }
+    return { text: `${treatmentNames.length > 1 ? treatmentNames.join(' + ') : primaryTreatment} — lovely choice! Which date works for you? (e.g., 'next Tuesday' or 'July 15')`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
   }
   
-  // No fields extracted — ask for date
+  // No fields extracted — ask for date with button options
   setState(patientPhone, BOOKING_STATES.AWAITING_DATE, {});
+  const { getNextAvailableDates } = require('./availability-engine');
+  const { getDateButtonOptions } = require('./whatsapp-interactive');
+  const dateOptions = await getNextAvailableDates(clinicConfig.id, [], clinicConfig, 3);
+  if (dateOptions.length > 0) {
+    return {
+      text: 'Sure! When would you like to come in?',
+      source: 'hardcoded',
+      cost_saved: 1,
+      latency_ms: Date.now() - startTime,
+      whatsappInteractive: getDateButtonOptions(dateOptions)
+    };
+  }
   return { text: "Sure! What date works for you? (e.g., 'next Tuesday' or 'July 15')", source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
 }
 
@@ -600,11 +645,26 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
         return { text: `${data.date} at ${data.time} works! Which treatment would you like?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
       }
       // If treatment already known, preserve it when moving to AWAITING_TIME
-      if (currentState.data?.treatment || currentState.data?.treatments) {
-        setState(patientPhone, BOOKING_STATES.AWAITING_TIME, { date: data.date, treatment: currentState.data.treatment, treatments: currentState.data.treatments });
-      } else {
-        setState(patientPhone, BOOKING_STATES.AWAITING_TIME, { date: data.date });
+      const existingTreatment = currentState.data?.treatment || currentState.data?.treatments?.[0];
+      const existingTreatments = currentState.data?.treatments || (existingTreatment ? [existingTreatment] : []);
+      if (existingTreatment) {
+        setState(patientPhone, BOOKING_STATES.AWAITING_TIME, { date: data.date, treatment: existingTreatment, treatments: existingTreatments });
+        // Show available time slots as buttons
+        const { getAvailableSlots } = require('./availability-engine');
+        const { getTimeSlotButtons } = require('./whatsapp-interactive');
+        const avail = await getAvailableSlots(clinicConfig.id, data.date, existingTreatments, clinicConfig);
+        if (avail.available && avail.slots.length > 0) {
+          return {
+            text: `Here are available times on ${data.date}:\n🕐 ${avail.operatingHours}`,
+            source: 'hardcoded',
+            cost_saved: 1,
+            latency_ms: Date.now() - startTime,
+            whatsappInteractive: getTimeSlotButtons(avail.slots, avail.operatingHours)
+          };
+        }
+        return { text: `${data.date} works. What time would you prefer?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
       }
+      setState(patientPhone, BOOKING_STATES.AWAITING_TIME, { date: data.date });
       return { text: `${data.date} works. What time would you prefer?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
     
     case BOOKING_STATES.AWAITING_TIME:
@@ -626,32 +686,49 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
       if (data.treatment) {
         return await attemptBooking(clinicConfig, patientPhone, { date, time: data.time, treatment: data.treatment }, conversationHistory, startTime);
       }
-      setState(patientPhone, BOOKING_STATES.AWAITING_TREATMENT, { date, time: data.time });
-      return { text: `${date} at ${data.time} — noted ✓ Which treatment are you looking for?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+      // Treatment not known — show category selection
+      setState(patientPhone, BOOKING_STATES.SELECTING_CATEGORY, { date, time: data.time });
+      return showCategorySelection(clinicConfig, startTime);
+    
+    case BOOKING_STATES.SELECTING_CATEGORY:
+      // User selected a category from the list
+      const catId = extractCategoryId(message);
+      if (catId) {
+        const services = clinicConfig.config?.services || [];
+        const categoryServices = services.filter(s => 
+          (s.category || 'Other').toLowerCase() === catId.toLowerCase() ||
+          catId.toLowerCase().includes((s.category || '').toLowerCase())
+        );
+        if (categoryServices.length > 0) {
+          setState(patientPhone, BOOKING_STATES.AWAITING_TREATMENT, { 
+            ...currentState.data, 
+            category: catId,
+            categoryServices: categoryServices.map(s => s.name)
+          });
+          const { getTreatmentsByCategoryMessage } = require('./whatsapp-interactive');
+          return {
+            text: `Here are our ${catId} treatments:`,
+            source: 'hardcoded',
+            cost_saved: 1,
+            latency_ms: Date.now() - startTime,
+            whatsappInteractive: getTreatmentsByCategoryMessage(catId, categoryServices)
+          };
+        }
+      }
+      // If no category matched, show category list again
+      return showCategorySelection(clinicConfig, startTime);
     
     case BOOKING_STATES.AWAITING_TREATMENT:
       if (!data.treatment) {
-        // Show the full detailed service list
-        const services = clinicConfig.config?.services || [];
-        if (services.length > 0) {
-          const serviceList = services.map(s => {
-            const price = s.price ? ` (${s.price}${s.price_unit ? '/' + s.price_unit : ''})` : '';
-            const duration = s.duration ? ` — ${s.duration}min${s.duration > 1 ? 's' : ''}` : '';
-            const desc = s.description ? `: ${s.description}` : '';
-            return `• ${s.name}${price}${duration}${desc}`;
-          }).join('\n');
-          return { text: `Here are our treatments:\n${serviceList}\n\nWhich one would you like?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
-        }
-        return { text: `Which treatment are you looking for?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+        // Show category selection first
+        return showCategorySelection(clinicConfig, startTime);
       }
       const date2 = data.date || currentState.data.date;
       const time2 = data.time || currentState.data.time;
       const treatments2 = data.treatments || [data.treatment];
       // ── SHOW BOOKING CONFIRMATION SUMMARY ──
       setState(patientPhone, BOOKING_STATES.AWAITING_CONFIRMATION, { date: date2, time: time2, treatment: data.treatment, treatments: treatments2 });
-      const allServices = clinicConfig.config?.services || [];
-      const summary = await buildBookingSummary(clinicConfig, date2, time2, treatments2, allServices);
-      return { text: summary, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+      return await buildConfirmationResponse(clinicConfig, patientPhone, date2, time2, treatments2, startTime);
     
     case BOOKING_STATES.AWAITING_CONFIRMATION:
       return await handleBookingConfirmation(message, clinicConfig, patientPhone, currentState, conversationHistory, startTime);
@@ -662,6 +739,83 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
   
   // Fallback
   return await routeToOpenAI(message, clinicConfig, conversationHistory, [], startTime);
+}
+
+// ─── CATEGORY SELECTION HELPERS ──────────────────────────────────
+
+function showCategorySelection(clinicConfig, startTime) {
+  const services = clinicConfig.config?.services || [];
+  
+  // Extract unique categories from services
+  const categoriesMap = new Map();
+  for (const s of services) {
+    const cat = s.category || 'Other';
+    if (!categoriesMap.has(cat)) {
+      categoriesMap.set(cat, { id: cat, name: cat, count: 0 });
+    }
+    categoriesMap.get(cat).count++;
+  }
+  
+  const categories = Array.from(categoriesMap.values()).slice(0, 10);
+  
+  if (categories.length === 0) {
+    return { text: 'Which treatment are you looking for?', source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+  }
+  
+  const { getCategoryListMessage } = require('./whatsapp-interactive');
+  return {
+    text: 'What type of treatment are you looking for?',
+    source: 'hardcoded',
+    cost_saved: 1,
+    latency_ms: Date.now() - startTime,
+    whatsappInteractive: getCategoryListMessage(categories)
+  };
+}
+
+function extractCategoryId(message) {
+  // Button IDs come through as `cat_Injectables` or similar
+  // But by the time they reach here, the text might be the button title
+  // The interactiveId would have been mapped in bot-engine.js
+  // For now, check if message starts with a known category pattern
+  const knownCategories = ['Injectables', 'Facials', 'Laser', 'Lifting', 'Body', 'Skin', 'Peels', 'Other'];
+  const lower = message.toLowerCase();
+  for (const cat of knownCategories) {
+    if (lower.includes(cat.toLowerCase())) return cat;
+  }
+  return null;
+}
+
+// ─── CONFIRMATION CARD ────────────────────────────────────────────
+
+async function buildConfirmationResponse(clinicConfig, patientPhone, date, time, treatments, startTime) {
+  const services = clinicConfig.config?.services || [];
+  let totalDuration = 0;
+  let totalPrice = 0;
+  
+  for (const t of treatments) {
+    const svc = services.find(s => s.name.toLowerCase().includes(t.toLowerCase()) || t.toLowerCase().includes(s.name.toLowerCase()));
+    if (svc) {
+      totalDuration += parseInt(svc.duration) || 60;
+      const priceNum = parseInt(svc.price?.replace(/[^0-9]/g, '')) || 0;
+      totalPrice += priceNum;
+    }
+  }
+  
+  const { getConfirmationCard } = require('./whatsapp-interactive');
+  return {
+    text: `Booking summary: ${treatments.join(' + ')} on ${date} at ${time}`,
+    source: 'hardcoded',
+    cost_saved: 1,
+    latency_ms: Date.now() - startTime,
+    whatsappInteractive: getConfirmationCard({
+      date,
+      time,
+      treatments,
+      totalDuration: totalDuration || undefined,
+      totalPrice: totalPrice ? `$${totalPrice}` : undefined,
+      clinicName: clinicConfig.name
+    })
+  };
 }
 
 async function attemptBooking(clinicConfig, patientPhone, fields, conversationHistory, startTime) {
@@ -741,11 +895,24 @@ async function attemptBooking(clinicConfig, patientPhone, fields, conversationHi
       const confirmationMsg = hasCalendar 
         ? `The clinic will confirm within 30 minutes.` 
         : `This is subject to clinic confirmation and they'll get back to you shortly.`;
+      
+      // Generate booking reference for calendar CTA
+      const bookingRef = result.bookingId || result.id || `PX-${Date.now().toString(36).toUpperCase()}`;
+      const baseUrl = process.env.WEBHOOK_BASE_URL || 'https://moon-hands-backend.onrender.com';
+      const icsUrl = `${baseUrl}/calendar-event/${bookingRef}?date=${fields.date}&time=${fields.time}&treatment=${encodeURIComponent(serviceNames)}&clinic=${encodeURIComponent(clinicConfig.name)}&duration=${totalDuration}`;
+      
+      const { getCalendarCTAButtons } = require('./whatsapp-interactive');
+      
       return {
-        text: `✅ Booking request received! ${serviceNames}${multiNote} on ${fields.date} at ${fields.time}. ${confirmationMsg}`,
+        text: `✅ Booking confirmed!\n\n💆 ${serviceNames}${multiNote}\n📅 ${fields.date}\n🕐 ${fields.time}\n\n${confirmationMsg}\n\nRef: ${bookingRef}`,
         source: 'hardcoded',
         cost_saved: 0.5,
-        latency_ms: Date.now() - startTime
+        latency_ms: Date.now() - startTime,
+        whatsappInteractive: getCalendarCTAButtons(bookingRef, icsUrl),
+        followUp: {
+          text: `Need to reschedule? Just let us know. We recommend arriving 10 minutes early.`,
+          delayMs: 2000
+        }
       };
     } else {
       return {
