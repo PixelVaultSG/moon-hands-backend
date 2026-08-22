@@ -39,7 +39,7 @@ const INTENT_PATTERNS = {
   
   location: {
     regex: /(?:where\s+(?:are\s+you|is\s+(?:the\s+)?clinic|are\s+you\s+located|do\s+i\s+find)|address|location|how\s+to\s+get\s+(?:there|to)|(?:clinic|shop)\s+near|nearest\s+(?:mrt|bus|mrt\s+station)|parking)/i,
-    keywords: ['where', 'address', 'location', 'how to get', 'find you', 'parking', 'nearby', 'near'],
+    keywords: ['where', 'address', 'location', 'how to get', 'find you', 'parking', 'nearby', 'near', 'location & contact'],
     weight: 0.9,
   },
   
@@ -100,8 +100,8 @@ const INTENT_PATTERNS = {
     // Both singular and plural forms must match. "treatment info" also included.
     // Also handles: "what services and treatments do you offer" (compound form)
     // TOLERANT: Leading words can be typos/gibberish — we look for "services/treatments" + "offer/have/available"
-    regex: /(?:what|wat|which|hat|hot|how)\s+(?:services?|treatments?)\s+(?:do\s+(?:you|u)\s+(?:offer|have)|are\s+(?:available|there|offered)|info)|what\s+(?:do\s+(?:you|u)\s+(?:do|offer|have)|can\s+(?:you|u)\s+do)|list\s+(?:of\s+)?(?:services?|treatments?|procedures)|(?:show|give|tell)\s+me\s+(?:the\s+)?(?:services?|treatments?|menu|list|options)|(?:what|wat)\s+(?:do\s+(?:you|u)\s+)?have[?\s]*$|(?:treatment|service)\s+(?:list|menu|info)|(?:what|wat|which)\s+(?:services?|treatments?)\s+(?:and|&)\s+(?:services?|treatments?)\s+(?:do\s+(?:you|u)\s+(?:offer|have)|are\s+(?:available|there|offered))|(?:^|\s)(?:services?|treatments?)\s+(?:do\s+(?:you|u)\s+(?:offer|have)|are\s+(?:available|there|offered))/i,
-    keywords: ['what services', 'what treatments', 'what treatment', 'treatment info', 'what do you offer', 'what do you have', 'list of services', 'list of treatments', 'wat services', 'show me', 'what can you do', 'treatment list', 'service list', 'services and treatments', 'treatments and services', 'services do you', 'treatments do you'],
+    regex: /(?:what|wat|which|hat|hot|how)\s+(?:services?|treatments?)\s+(?:do\s+(?:you|u)\s+(?:offer|have)|are\s+(?:available|there|offered)|info)|what\s+(?:do\s+(?:you|u)\s+(?:do|offer|have)|can\s+(?:you|u)\s+do)|list\s+(?:of\s+)?(?:services?|treatments?|procedures)|(?:show|give|tell)\s+me\s+(?:the\s+)?(?:services?|treatments?|menu|list|options)|(?:what|wat)\s+(?:do\s+(?:you|u)\s+)?have[?\s]*$|(?:treatment|service)\s+(?:list|menu|info)|(?:what|wat|which)\s+(?:services?|treatments?)\s+(?:and|&)\s+(?:services?|treatments?)\s+(?:do\s+(?:you|u)\s+(?:offer|have)|are\s+(?:available|there|offered))|(?:^|\s)(?:services?|treatments?)\s+(?:do\s+(?:you|u)\s+(?:offer|have)|are\s+(?:available|there|offered))|\btreatments?\s+&\s+services?\b/i,
+    keywords: ['what services', 'what treatments', 'what treatment', 'treatment info', 'what do you offer', 'what do you have', 'list of services', 'list of treatments', 'wat services', 'show me', 'what can you do', 'treatment list', 'service list', 'services and treatments', 'treatments and services', 'services do you', 'treatments do you', 'treatments & services'],
     weight: 0.9,
   },
   
@@ -133,8 +133,9 @@ const INTENT_PATTERNS = {
     // "i want hifu" — treatment name after "i want" implies booking intent
     // CRITICAL: "I would like do a chemical peel" (no "to") must match — patients drop "to"
     // Also: "I'd like to get Botox", "I wanna do microneedling"
-    regex: /(?:i\s+(?:want|would\s+like|wanna)\s+(?:to\s+)?(?:book|make|schedule)|can\s+i\s+(?:book|make|schedule|come)|(?:book|schedule|make)\s+(?:an?\s+)?(?:appointment|booking|slot)|(?:i\s+want|looking\s+for)\s+(?:an?\s+)?(?:slot|appointment)|when\s+(?:can|is)\s+i\s+(?:book|come)|next\s+available|earliest\s+(?:slot|appointment)|i\s+(?:want|wanna)\s+(?:to\s+)?(?:botox|filler|hifu|laser|facial|rejuran|thread|peel|microneedling)|i\s+(?:want|would\s+like|wanna)\s+(?:to\s+)?(?:do|get|have)\s+(?:a\s+)?(?:chemical\s+peel|botox|filler|hifu|laser|facial|rejuran|thread|peel|microneedling|treatment|service)|i\s+(?:want|would\s+like|wanna)\s+(?:to\s+)?do\s+(?:a\s+)?(?:chemical\s+peel|botox|filler|hifu|laser|facial|rejuran|thread|peel|microneedling|treatment|service)|i\s+(?:want|would\s+like|wanna)\s+do\s+(?:a\s+)?(?:chemical\s+peel|botox|filler|hifu|laser|facial|rejuran|thread|peel|microneedling|treatment|service))/i,
-    keywords: ['book', 'appointment', 'schedule', 'slot', 'booking', 'i want to come', 'available slots', 'i would like', 'i want to do', 'i would like to do', 'i wanna do'],
+    // Also handles WhatsApp interactive button titles: "3. Book Appointment"
+    regex: /(?:i\s+(?:want|would\s+like|wanna)\s+(?:to\s+)?(?:book|make|schedule)|can\s+i\s+(?:book|make|schedule|come)|(?:book|schedule|make)\s+(?:an?\s+)?(?:appointment|booking|slot)|(?:i\s+want|looking\s+for)\s+(?:an?\s+)?(?:slot|appointment)|when\s+(?:can|is)\s+i\s+(?:book|come)|next\s+available|earliest\s+(?:slot|appointment)|i\s+(?:want|wanna)\s+(?:to\s+)?(?:botox|filler|hifu|laser|facial|rejuran|thread|peel|microneedling)|i\s+(?:want|would\s+like|wanna)\s+(?:to\s+)?(?:do|get|have)\s+(?:a\s+)?(?:chemical\s+peel|botox|filler|hifu|laser|facial|rejuran|thread|peel|microneedling|treatment|service)|i\s+(?:want|would\s+like|wanna)\s+(?:to\s+)?do\s+(?:a\s+)?(?:chemical\s+peel|botox|filler|hifu|laser|facial|rejuran|thread|peel|microneedling|treatment|service)|i\s+(?:want|would\s+like|wanna)\s+do\s+(?:a\s+)?(?:chemical\s+peel|botox|filler|hifu|laser|facial|rejuran|thread|peel|microneedling|treatment|service)|\bbook\s+appointment\b)/i,
+    keywords: ['book', 'appointment', 'schedule', 'slot', 'booking', 'i want to come', 'available slots', 'i would like', 'i want to do', 'i would like to do', 'i wanna do', 'book appointment'],
     weight: 0.9,
     extract: (match, msg) => {
       // Try to extract date preference
@@ -190,6 +191,14 @@ const INTENT_PATTERNS = {
       const treatmentMatch = msg.match(/after\s+(?:the\s+)?(\w+(?:\s+\w+){0,3})/i);
       return treatmentMatch ? { treatment: treatmentMatch[1].trim() } : {};
     }
+  },
+
+  faq: {
+    // Generic FAQ / common questions — handles WhatsApp interactive button "Common Questions"
+    // and general "I have a question", "what should I know", "help"
+    regex: /\bcommon\s+questions?\b|\bfrequently\s+asked\b|\bfaq\b|i\s+have\s+a\s+question|what\s+should\s+i\s+know|tell\s+me\s+more|general\s+questions?|questions?\s+about/i,
+    keywords: ['common questions', 'faq', 'frequently asked', 'i have a question', 'what should i know', 'general questions', 'tell me more'],
+    weight: 0.85,
   },
   
   language_switch: {

@@ -677,7 +677,7 @@ async function handleWebhook(req, res, channel, url) {
     let matchedIntent = null;
     console.log(`[WEBHOOK:${channel}] Routing to AI: clientId=${clientId?.slice(0, 8)}, text="${sanitizedText.substring(0, 50)}"`);
     try {
-      response = await routeToAI(sanitizedText, message, channel, clientId);
+      response = await routeToAI(sanitizedText, message, channel, clientId, interactiveId);
       matchedIntent = response?.intent || null;
       console.log(`[WEBHOOK:${channel}] AI responded: len=${response?.text?.length}, fn=${response?.function_called || 'none'}, model=${response?.model || 'unknown'}`);
       addTrace(message.from, 'AI', 'RESPONSE', `len=${response.text?.length}, fn=${response.function_called || 'none'}`);
@@ -966,7 +966,7 @@ function addConversationTurn(phone, userMsg, aiMsg) {
   conversationCache.set(phone, cached);
 }
 
-async function routeToAI(text, message, channel, preResolvedClientId = null) {
+async function routeToAI(text, message, channel, preResolvedClientId = null, interactiveId = null) {
   // Determine client ID from the webhook path or phone number
   const clientId = preResolvedClientId || await resolveClientId(message.to, channel);
   
@@ -1018,7 +1018,7 @@ async function routeToAI(text, message, channel, preResolvedClientId = null) {
     
     const history = getConversationHistory(message.from);
     const startMs = Date.now();
-    const result = await processMessage(text, clientId, history, message.from, message.interactiveId);
+    const result = await processMessage(text, clientId, history, message.from, interactiveId);
     const elapsedMs = Date.now() - startMs;
     
     // Track estimated spend ($0.005 base + ~$0.003 per 1K tokens)
@@ -1049,6 +1049,7 @@ async function routeToAI(text, message, channel, preResolvedClientId = null) {
     };
   } catch (err) {
     console.error('[AI_ROUTING] Bot engine error:', err.message);
+    console.error('[AI_ROUTING] Stack trace:', err.stack);
     return {
       text: "I'm having a moment. Please try again shortly, or call the clinic directly.",
       channel: channel,
