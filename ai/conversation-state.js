@@ -21,6 +21,27 @@ const BOOKING_STATES = {
   READY_TO_BOOK: 'ready_to_book',
 };
 
+// Follow-up stages for stalled customers in booking flow
+const FOLLOW_UP_STAGES = {
+  NONE: 0,
+  FIRST_REMINDER: 1,    // 5 min — gentle nudge
+  SECOND_REMINDER: 2,   // 15 min — urgency
+  FINAL_REMINDER: 3,    // 30 min — final attempt
+  RESET: 4              // 60 min — state reset (existing TTL)
+};
+
+const FOLLOW_UP_DELAYS_MS = {
+  [FOLLOW_UP_STAGES.FIRST_REMINDER]: 5 * 60 * 1000,   // 5 min
+  [FOLLOW_UP_STAGES.SECOND_REMINDER]: 15 * 60 * 1000,  // 15 min
+  [FOLLOW_UP_STAGES.FINAL_REMINDER]: 30 * 60 * 1000,   // 30 min
+};
+
+const FOLLOW_UP_MESSAGES = {
+  [FOLLOW_UP_STAGES.FIRST_REMINDER]: "Just checking in — are you still interested in booking? Let me know if you need help choosing a treatment or date 😊",
+  [FOLLOW_UP_STAGES.SECOND_REMINDER]: "I don't want you to miss out on your preferred slot! Reply whenever you're ready, or I can help you find the best availability 📅",
+  [FOLLOW_UP_STAGES.FINAL_REMINDER]: "No worries if you're busy! I'll be here when you're ready. Just send a message and I'll pick up where we left off 👋",
+};
+
 function normalizePhone(phone) { return (phone || '').replace(/\D/g, ''); }
 
 function getState(phone) {
@@ -30,17 +51,106 @@ function getState(phone) {
     stateStore.delete(normalizePhone(phone));
     return { state: BOOKING_STATES.IDLE, data: {} };
   }
-  return { state: record.state, data: record.data };
+  return { state: record.state, data: record.data, followUpStage: record.followUpStage || 0 };
 }
 
 function setState(phone, state, data = {}) {
+  const prev = stateStore.get(normalizePhone(phone));
   stateStore.set(normalizePhone(phone), {
-    state, data: { ...getState(phone).data, ...data },
-    lastActivity: Date.now()
+    state, data: { ...(prev?.data || {}), ...data },
+    lastActivity: Date.now(),
+    followUpStage: prev?.followUpStage || 0,
+    lastFollowUpAt: prev?.lastFollowUpAt || null
   });
 }
 
-function resetIdle(phone) { setState(phone, BOOKING_STATES.IDLE, {}); }
+function resetIdle(phone) {
+  stateStore.set(normalizePhone(phone), {
+    state: BOOKING_STATES.IDLE,
+    data: {},
+    lastActivity: Date.now(),
+    followUpStage: 0,
+    lastFollowUpAt: null
+  });
+}
+
+/**
+ * Add a selected treatment to the patient's selection (multi-treatment support)
+ */
+function addSelectedTreatment(phone, treatmentName) {
+  const record = stateStore.get(normalizePhone(phone));
+  const current = record?.data?.selectedTreatments || [];
+  if (!current.includes(treatmentName)) {
+    current.push(treatmentName);
+  }
+  setState(phone, record?.state || BOOKING_STATES.AWAITING_TREATMENT, {
+    selectedTreatments: current
+  });
+  return current;
+}
+
+function clearSelectedTreatments(phone) {
+  const record = stateStore.get(normalizePhone(phone));
+  if (record) {
+    record.data.selectedTreatments = [];
+  }
+}
+
+/**
+ * Check for stalled conversations that need follow-up.
+ * Returns array of { phone, stage, message } for each stalled conversation.
+ */
+function getStalledConversations() {
+  const now = Date.now();
+  const stalled = [];
+  const bookingStates = [
+    BOOKING_STATES.BOOKING_OFFERED,
+    BOOKING_STATES.AWAITING_DATE,
+    BOOKING_STATES.AWAITING_TIME,
+    BOOKING_STATES.AWAITING_TREATMENT,
+    BOOKING_STATES.SELECTING_CATEGORY,
+    BOOKING_STATES.AWAITING_NAME,
+    BOOKING_STATES.AWAITING_PHONE,
+    BOOKING_STATES.AWAITING_CONFIRMATION,
+    BOOKING_STATES.READY_TO_BOOK,
+  ];
+
+  for (const [phone, record] of stateStore.entries()) {
+    if (!bookingStates.includes(record.state)) continue;
+
+    const idleTime = now - record.lastActivity;
+    const currentStage = record.followUpStage || 0;
+
+    // Check if enough time has passed for next follow-up stage
+    const nextStage = currentStage + 1;
+    const delayNeeded = FOLLOW_UP_DELAYS_MS[nextStage];
+
+    if (delayNeeded && idleTime >= delayNeeded) {
+      // Only send if we haven't already sent at this stage
+      const lastFollowUp = record.lastFollowUpAt || 0;
+      if (now - lastFollowUp >= delayNeeded) {
+        stalled.push({
+          phone,
+          stage: nextStage,
+          message: FOLLOW_UP_MESSAGES[nextStage],
+          state: record.state
+        });
+      }
+    }
+  }
+  return stalled;
+}
+
+/**
+ * Mark a follow-up as sent for a patient
+ */
+function markFollowUpSent(phone, stage) {
+  const record = stateStore.get(normalizePhone(phone));
+  if (record) {
+    record.followUpStage = stage;
+    record.lastFollowUpAt = Date.now();
+  }
+}
 
 // Date parsing
 function parseDatePhrase(phrase) {
@@ -392,6 +502,9 @@ setInterval(() => {
 
 module.exports = {
   BOOKING_STATES, getState, setState, resetIdle,
+  FOLLOW_UP_STAGES, FOLLOW_UP_MESSAGES, FOLLOW_UP_DELAYS_MS,
+  addSelectedTreatment, clearSelectedTreatments,
+  getStalledConversations, markFollowUpSent,
   extractBookingFields, extractTreatmentName, extractAllTreatments,
   isConfirmation, isDenial, parseDatePhrase, parseTimePhrase,
   parseSmartConfirmation, normalizeTreatmentNames

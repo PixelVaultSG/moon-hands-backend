@@ -1275,6 +1275,57 @@ async function sendWhatsAppReply(toPhone, text, replyToMessageId = null, interac
   return { success: false, error: finalError };
 }
 
+// ─── PROACTIVE FOLLOW-UP SYSTEM ──────────────────────────────────
+// Sends gentle reminders to customers who stall during booking flow.
+// Runs every 5 minutes, checks for conversations that haven't had
+// activity for 5/15/30 minutes and sends staged follow-up messages.
+
+let followUpIntervalId = null;
+
+async function processFollowUps() {
+  try {
+    const { getStalledConversations, markFollowUpSent } = require('../ai/conversation-state');
+    const stalled = getStalledConversations();
+
+    if (stalled.length === 0) return;
+
+    console.log(`[FOLLOW_UP] Found ${stalled.length} stalled conversation(s)`);
+
+    for (const { phone, stage, message } of stalled) {
+      console.log(`[FOLLOW_UP] Sending stage ${stage} to +${phone.slice(-4)}`);
+      const result = await sendWhatsAppReply(phone, message);
+
+      if (result.success) {
+        markFollowUpSent(phone, stage);
+        console.log(`[FOLLOW_UP] ✅ Stage ${stage} sent to +${phone.slice(-4)}`);
+      } else {
+        console.error(`[FOLLOW_UP] ❌ Failed to send to +${phone.slice(-4)}: ${result.error}`);
+      }
+    }
+  } catch (err) {
+    console.error('[FOLLOW_UP] Error in follow-up processor:', err.message);
+  }
+}
+
+function startFollowUpScheduler(intervalMs = 5 * 60 * 1000) {
+  if (followUpIntervalId) {
+    console.log('[FOLLOW_UP] Scheduler already running');
+    return;
+  }
+  console.log(`[FOLLOW_UP] Starting scheduler (interval: ${intervalMs}ms)`);
+  followUpIntervalId = setInterval(processFollowUps, intervalMs);
+  // Run immediately on start too
+  processFollowUps();
+}
+
+function stopFollowUpScheduler() {
+  if (followUpIntervalId) {
+    clearInterval(followUpIntervalId);
+    followUpIntervalId = null;
+    console.log('[FOLLOW_UP] Scheduler stopped');
+  }
+}
+
 // ─── SECURITY EVENT LOGGING ──────────────────────────────────────
 
 async function logSecurityEvent(event) {
@@ -1651,9 +1702,9 @@ if (require.main === module) {
   standaloneServer.listen(standalonePort, () => {
     console.log(`Webhook server (standalone) on port ${standalonePort}`);
   });
-  module.exports = { server: standaloneServer, requestHandler, API_KEY: effectiveApiKey, WEBHOOK_SECRET, generateWebhookToken, getClinicWebhookUrl };
+  module.exports = { server: standaloneServer, requestHandler, API_KEY: effectiveApiKey, WEBHOOK_SECRET, generateWebhookToken, getClinicWebhookUrl, sendWhatsAppReply, startFollowUpScheduler, stopFollowUpScheduler };
 } else {
   // Module mode: export handler for server.js to use
   console.log('  📦 Webhook module loaded — waiting for server.js to bind');
-  module.exports = { requestHandler, API_KEY: effectiveApiKey, WEBHOOK_SECRET, generateWebhookToken, getClinicWebhookUrl };
+  module.exports = { requestHandler, API_KEY: effectiveApiKey, WEBHOOK_SECRET, generateWebhookToken, getClinicWebhookUrl, sendWhatsAppReply, startFollowUpScheduler, stopFollowUpScheduler };
 }

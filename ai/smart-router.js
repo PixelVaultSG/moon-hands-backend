@@ -147,12 +147,74 @@ async function routeMessage(message, clinicConfig, patientPhone = null, conversa
     return await startBookingFlow(message, clinicConfig, patientPhone, conversationHistory, startTime);
   }
   
-  // Interactive button intents (date/time/service selections)
+  // Interactive button intents (date/time selections)
   // These bypass normal intent handling and go straight to booking flow
-  // Note: category_selected is handled separately to show treatments in the category
-  const INTERACTIVE_BOOKING_INTENTS = ['date_selected', 'time_selected', 'service_selected'];
+  const INTERACTIVE_BOOKING_INTENTS = ['date_selected', 'time_selected'];
   if (INTERACTIVE_BOOKING_INTENTS.includes(primaryIntent.intent)) {
     return await startBookingFlow(message, clinicConfig, patientPhone, conversationHistory, startTime);
+  }
+
+  // ── SERVICE SELECTED: Multi-treatment selection flow ─────────────
+  // When user taps a treatment from a category, add it to their selection
+  // and let them choose to book or add more treatments.
+  if (primaryIntent.intent === 'service_selected') {
+    const treatmentName = message;
+    const services = clinicConfig.config?.services || [];
+    const matchedService = services.find(s =>
+      s.name.toLowerCase() === treatmentName.toLowerCase() ||
+      treatmentName.toLowerCase().includes(s.name.toLowerCase()) ||
+      s.name.toLowerCase().includes(treatmentName.toLowerCase())
+    );
+    const svcName = matchedService ? matchedService.name : treatmentName;
+
+    // Add to selected treatments (multi-treatment support)
+    const { addSelectedTreatment } = require('./conversation-state');
+    const selectedTreatments = addSelectedTreatment(patientPhone, svcName);
+
+    // Calculate running totals
+    let totalDuration = 0;
+    let totalPrice = 0;
+    for (const t of selectedTreatments) {
+      const svc = services.find(s => s.name === t);
+      if (svc) {
+        totalDuration += parseInt(svc.duration) || 60;
+        const priceNum = parseInt(svc.price?.replace(/[^0-9]/g, '')) || 0;
+        totalPrice += priceNum;
+      }
+    }
+
+    const { getMultiTreatmentButtons } = require('./whatsapp-interactive');
+    return {
+      text: `${svcName} added! ${selectedTreatments.length > 1 ? `You have ${selectedTreatments.length} treatments selected.` : ''}`,
+      source: 'hardcoded',
+      cost_saved: 1,
+      latency_ms: Date.now() - startTime,
+      whatsappInteractive: getMultiTreatmentButtons(
+        selectedTreatments,
+        totalDuration,
+        totalPrice ? `$${totalPrice}` : null
+      )
+    };
+  }
+
+  // ── BOOK SELECTED: Proceed with all selected treatments ─────────
+  if (primaryIntent.intent === 'book_selected') {
+    const { getState } = require('./conversation-state');
+    const current = getState(patientPhone);
+    const selectedTreatments = current.data?.selectedTreatments || [];
+    const primaryTreatment = selectedTreatments[0] || message;
+    return await startBookingFlow(
+      primaryTreatment,
+      clinicConfig,
+      patientPhone,
+      conversationHistory,
+      startTime
+    );
+  }
+
+  // ── ADD TREATMENT: Show categories again ─────────────────────────
+  if (primaryIntent.intent === 'add_treatment') {
+    return showCategorySelection(clinicConfig, startTime);
   }
 
   // Category selection from interactive list — show treatments in that category
@@ -476,8 +538,19 @@ async function startBookingFlow(message, clinicConfig, patientPhone, conversatio
   const fields = extractBookingFields(message);
   const services = clinicConfig.config?.services || [];
 
-  // Normalize treatments: use treatments array if available, fallback to single
-  const treatments = fields.treatments || (fields.treatment ? [fields.treatment] : []);
+  // Check for existing multi-treatment selection in state
+  const { getState: _getStateForBooking } = require('./conversation-state');
+  const existingState = _getStateForBooking(patientPhone);
+  const existingSelected = existingState.data?.selectedTreatments || [];
+
+  // Normalize treatments: use selectedTreatments from state if available, else extract from message
+  let treatments = existingSelected.length > 0
+    ? existingSelected
+    : (fields.treatments || (fields.treatment ? [fields.treatment] : []));
+
+  // Deduplicate
+  treatments = [...new Set(treatments)];
+
   const treatmentNames = treatments.map(t => {
     const svc = services.find(s => s.name.toLowerCase() === t.toLowerCase());
     return svc ? svc.name : t;

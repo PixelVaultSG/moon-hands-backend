@@ -140,6 +140,27 @@ function getTreatmentInfoButtons(treatmentName) {
 }
 
 /**
+ * Multi-treatment selection buttons
+ * Shows after user picks a treatment — lets them book immediately or add more.
+ */
+function getMultiTreatmentButtons(selectedTreatments, totalDuration, totalPrice) {
+  const treatmentText = selectedTreatments.join(' + ');
+  const durText = totalDuration ? ` (${totalDuration}min)` : '';
+  const priceText = totalPrice ? ` • ${totalPrice}` : '';
+  const isPlural = selectedTreatments.length > 1;
+
+  return buildQuickReplyButtons({
+    body: `Selected: ${treatmentText}${durText}${priceText}\n\nWould you like to book ${isPlural ? 'these treatments' : 'this treatment'}, or add more?`,
+    footer: 'Tap an option',
+    buttons: [
+      { id: 'book_selected', title: `📅 Book ${isPlural ? 'These' : 'This'}` },
+      { id: 'add_treatment', title: '➕ Add More' },
+      { id: 'cancel', title: '❌ Cancel' }
+    ]
+  });
+}
+
+/**
  * Build date selection buttons (Quick Reply)
  * Shows up to 3 date options + "Other" as quick reply buttons.
  * Each button ID encodes the actual date: `date_YYYY-MM-DD`
@@ -277,5 +298,6 @@ module.exports = {
   getTreatmentsByCategoryMessage,
   getConfirmationCard,
   getCalendarCTAButtons,
+  getMultiTreatmentButtons,
   withInteractive
 };

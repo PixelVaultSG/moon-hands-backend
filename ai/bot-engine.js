@@ -771,6 +771,10 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
       'book_this': { intent: 'booking_request', text: 'I want to book this treatment' },
       'ask_more': { intent: 'question', text: 'Tell me more' },
       'back_menu': { intent: 'greeting', text: 'Hi' },
+      // Multi-treatment selection buttons
+      'book_selected': { intent: 'book_selected', text: 'Book these treatments' },
+      'add_treatment': { intent: 'add_treatment', text: 'Add another treatment' },
+      'cancel': { intent: 'cancellation', text: 'Cancel' },
     };
     
     let effectiveText = messageText;

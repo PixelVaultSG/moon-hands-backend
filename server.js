@@ -394,6 +394,12 @@ setTimeout(async () => {
     } else {
       console.error('  ⚠️  Webhook module loaded but no handler found');
     }
+
+    // Start proactive follow-up scheduler for stalled booking conversations
+    if (webhookModule.startFollowUpScheduler) {
+      webhookModule.startFollowUpScheduler(5 * 60 * 1000); // Check every 5 minutes
+      console.log('  ✅ Follow-up scheduler started (5min interval)');
+    }
   } catch (err) {
     webhookLoadError = {
       message: err.message,
