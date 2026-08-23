@@ -676,6 +676,9 @@ async function handleWebhook(req, res, channel, url) {
     let response;
     let matchedIntent = null;
     
+    // Send typing indicator for human-like UX
+    sendTypingIndicator(message.from).catch(() => {});
+    
     // ─── DIRECT BYPASS: Welcome list buttons ────────────────────────
     // If user tapped a known welcome list button, handle it directly
     // without going through the complex AI pipeline. This guarantees
@@ -1207,7 +1210,7 @@ function getRateLimitResponse(reason) {
 
 // ─── SEND WHATSAPP TYPING INDICATOR ──────────────────────────────
 // Sends "typing..." status before the actual message for human-like UX.
-// 360dialog supports: { "status": "typing" } via the /messages endpoint.
+// 360dialog supports typing indicators via the standard /messages endpoint.
 
 async function sendTypingIndicator(toPhone) {
   const d360Key = process.env.D360_API_KEY;
@@ -1226,13 +1229,12 @@ async function sendTypingIndicator(toPhone) {
         messaging_product: 'whatsapp',
         recipient_type: 'individual',
         to: toPhone,
-        type: 'text',
-        text: { body: '.' },
-        // 360dialog doesn't have a pure typing indicator in /messages,
-        // but we can simulate perceived latency with a small delay
+        type: 'typing'
       })
     });
+    console.log(`[TYPING] Sent typing indicator to ${toPhone.slice(-4)}`);
   } catch (err) {
+    // Typing indicator is best-effort — don't fail if it doesn't work
     console.log(`[TYPING] Indicator skipped: ${err.message}`);
   }
 }

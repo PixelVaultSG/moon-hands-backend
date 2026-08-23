@@ -320,10 +320,36 @@ function handleServiceList({ clinicConfig }) {
     return `We offer a range of aesthetic treatments. Let me know what you're interested in!`;
   }
   
+  // Check if we have explicit service_categories config
+  const serviceCategories = getConfig(clinicConfig, 'service_categories') || [];
+  
   // Build category map from services
   const catMap = new Map();
+  
   for (const s of services) {
-    const cat = s.category || 'Other';
+    // Use explicit category if available
+    let cat = s.category || null;
+    
+    // If no explicit category, try to infer from service name
+    if (!cat) {
+      const name = s.name.toLowerCase();
+      if (name.includes('botox') || name.includes('filler') || name.includes('rejuran') || name.includes('profhilo') || name.includes('inject')) {
+        cat = 'Injectables';
+      } else if (name.includes('facial') || name.includes('peel') || name.includes('hydra') || name.includes('cleanse')) {
+        cat = 'Facials';
+      } else if (name.includes('laser') || name.includes('ipl') || name.includes('bbl') || name.includes('pigment')) {
+        cat = 'Laser';
+      } else if (name.includes('hifu') || name.includes('thread') || name.includes('lift') || name.includes('tighten') || name.includes('thermage') || name.includes('ultherapy')) {
+        cat = 'Lifting & Tightening';
+      } else if (name.includes('body') || name.includes('slim') || name.includes('sculpt') || name.includes('fat') || name.includes('ems')) {
+        cat = 'Body';
+      } else if (name.includes('skin') || name.includes('booster') || name.includes('pores') || name.includes('texture')) {
+        cat = 'Skin';
+      } else {
+        cat = 'Other';
+      }
+    }
+    
     if (!catMap.has(cat)) {
       catMap.set(cat, { id: cat, name: cat, count: 0, services: [] });
     }
@@ -331,7 +357,23 @@ function handleServiceList({ clinicConfig }) {
     catMap.get(cat).services.push(s);
   }
   
-  const categories = Array.from(catMap.values()).slice(0, 10);
+  // Sort categories: put "Other" last
+  let categories = Array.from(catMap.values());
+  categories.sort((a, b) => {
+    if (a.name === 'Other') return 1;
+    if (b.name === 'Other') return -1;
+    return a.name.localeCompare(b.name);
+  });
+  categories = categories.slice(0, 10);
+  
+  // If only one category ("Other"), just show the treatments directly
+  if (categories.length === 1 && categories[0].name === 'Other') {
+    const { getServiceListMessage } = require('./whatsapp-interactive');
+    return {
+      text: `We have ${services.length} treatments available. Here they are:`,
+      whatsappInteractive: getServiceListMessage(services)
+    };
+  }
   
   // Return interactive category list
   const { getCategoryListMessage } = require('./whatsapp-interactive');
