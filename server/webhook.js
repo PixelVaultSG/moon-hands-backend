@@ -675,18 +675,37 @@ async function handleWebhook(req, res, channel, url) {
     // Layer 10: Route to appropriate AI handler
     let response;
     let matchedIntent = null;
-    console.log(`[WEBHOOK:${channel}] Routing to AI: clientId=${clientId?.slice(0, 8)}, text="${sanitizedText.substring(0, 50)}"`);
-    try {
-      response = await routeToAI(sanitizedText, message, channel, clientId, message.interactiveId);
-      matchedIntent = response?.intent || null;
-      console.log(`[WEBHOOK:${channel}] AI responded: len=${response?.text?.length}, fn=${response?.function_called || 'none'}, model=${response?.model || 'unknown'}`);
-      addTrace(message.from, 'AI', 'RESPONSE', `len=${response.text?.length}, fn=${response.function_called || 'none'}`);
-    } catch (aiErr) {
-      console.error(`[AI_ROUTING] Error: ${aiErr.message}`);
-      console.error(`[AI_ROUTING] Stack: ${aiErr.stack?.split('\n')?.slice(0, 3)?.join(' | ')}`);
-      addTrace(message.from, 'AI', 'ERROR', aiErr.message);
-      recordError(`AI routing: ${aiErr.message}`);
-      response = { text: "I'm having a moment. Please try again shortly.", channel, ai_processed: false };
+    
+    // ─── DIRECT BYPASS: Welcome list buttons ────────────────────────
+    // If user tapped a known welcome list button, handle it directly
+    // without going through the complex AI pipeline. This guarantees
+    // these high-traffic interactions always work.
+    if (message.interactiveId && WELCOME_INTENT_MAP[message.interactiveId]) {
+      console.log(`[DIRECT_BYPASS] Handling ${message.interactiveId} directly for ${message.from?.slice(-4)}`);
+      response = await getDirectResponse(message.interactiveId, clientId, message.from);
+      if (response) {
+        console.log(`[DIRECT_BYPASS] Success: text_len=${response.text?.length}, hasInteractive=${!!response.whatsappInteractive}`);
+        matchedIntent = WELCOME_INTENT_MAP[message.interactiveId];
+      } else {
+        console.log(`[DIRECT_BYPASS] Failed — falling through to AI pipeline`);
+      }
+    }
+    
+    // Only call AI pipeline if direct bypass didn't handle it
+    if (!response) {
+      console.log(`[WEBHOOK:${channel}] Routing to AI: clientId=${clientId?.slice(0, 8)}, text="${sanitizedText.substring(0, 50)}"`);
+      try {
+        response = await routeToAI(sanitizedText, message, channel, clientId, message.interactiveId);
+        matchedIntent = response?.intent || null;
+        console.log(`[WEBHOOK:${channel}] AI responded: len=${response?.text?.length}, fn=${response?.function_called || 'none'}, model=${response?.model || 'unknown'}`);
+        addTrace(message.from, 'AI', 'RESPONSE', `len=${response.text?.length}, fn=${response.function_called || 'none'}`);
+      } catch (aiErr) {
+        console.error(`[AI_ROUTING] Error: ${aiErr.message}`);
+        console.error(`[AI_ROUTING] Stack: ${aiErr.stack?.split('\n')?.slice(0, 3)?.join(' | ')}`);
+        addTrace(message.from, 'AI', 'ERROR', aiErr.message);
+        recordError(`AI routing: ${aiErr.message}`);
+        response = { text: "I'm having a moment. Please try again shortly.", channel, ai_processed: false };
+      }
     }
     
     // ─── LAYER 10.5: AUTO-PAUSE ON COMPLAINT/HUMAN_HANDOFF ──────────
@@ -844,7 +863,93 @@ function extractMessage(body, channel) {
 // ─── AI ROUTING ──────────────────────────────────────────────────
 
 const { processMessage } = require('../ai/bot-engine');
+const { executeHandler } = require('../ai/intent-handlers');
 const { isKilled } = require('../middleware/cost-protection');
+
+// ─── DIRECT BYPASS: Welcome list buttons ─────────────────────────
+// Handles known interactive IDs directly, bypassing the entire AI pipeline.
+// This guarantees welcome list buttons work even if the AI has bugs.
+
+const WELCOME_INTENT_MAP = {
+  services: 'service_list',
+  location: 'location_inquiry',
+  book: 'booking_request',
+  faq: 'faq'
+};
+
+async function getDirectResponse(interactiveId, clientId, patientPhone) {
+  const intent = WELCOME_INTENT_MAP[interactiveId];
+  if (!intent) return null;
+  
+  try {
+    // Load minimal clinic config directly from Supabase
+    const { supabase } = require('../supabase/client');
+    const { data, error } = await supabase
+      .from('clients')
+      .select('id, name, slug, google_calendar_id, client_configs(*)')
+      .eq('id', clientId)
+      .single();
+    
+    if (error || !data) {
+      console.error(`[DIRECT_BYPASS] Config load failed: ${error?.message}`);
+      return null;
+    }
+    
+    // Unwrap nested config (same logic as loadClientConfig but without the ...nestedConfig bug)
+    const clientConfigRow = Array.isArray(data.client_configs)
+      ? (data.client_configs[0] || {})
+      : (data.client_configs || {});
+    const nestedConfig = clientConfigRow.config || {};
+    
+    const services = (nestedConfig.services && nestedConfig.services.length > 0)
+      ? nestedConfig.services
+      : (clientConfigRow.services || []);
+    const operating_hours = (nestedConfig.operating_hours && nestedConfig.operating_hours.length > 0)
+      ? nestedConfig.operating_hours
+      : (clientConfigRow.operating_hours || []);
+    const faqs = (nestedConfig.faqs && nestedConfig.faqs.length > 0)
+      ? nestedConfig.faqs
+      : (clientConfigRow.faqs || []);
+    
+    const clinicConfig = {
+      id: data.id,
+      name: data.name,
+      slug: data.slug,
+      googleCalendarId: data.google_calendar_id,
+      services,
+      operating_hours,
+      faqs,
+      config: {
+        ...nestedConfig,
+        services,
+        operating_hours,
+        faqs
+      }
+    };
+    
+    // Call the handler directly
+    const result = await executeHandler(intent, {
+      message: '',
+      clinicConfig,
+      patientPhone,
+      params: {},
+      conversationHistory: []
+    });
+    
+    if (!result) return null;
+    
+    return {
+      text: typeof result === 'string' ? result : (result.text || ''),
+      whatsappInteractive: typeof result === 'object' ? result.whatsappInteractive : null,
+      ai_processed: true,
+      model: 'hardcoded-bypass'
+    };
+  } catch (err) {
+    console.error(`[DIRECT_BYPASS] Error for ${interactiveId}: ${err.message}`);
+    console.error(`[DIRECT_BYPASS] Stack: ${err.stack?.split('\n')?.slice(0, 3)?.join(' | ')}`);
+    return null;
+  }
+}
 
 // In-memory conversation cache (per patient phone)
 const conversationCache = new Map();
