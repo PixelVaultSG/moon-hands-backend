@@ -221,10 +221,22 @@ async function routeMessage(message, clinicConfig, patientPhone = null, conversa
   if (primaryIntent.intent === 'category_selected') {
     const catId = message; // The category name from button tap (e.g., "Other", "Injectables")
     const services = clinicConfig.config?.services || [];
-    const categoryServices = services.filter(s =>
-      (s.category || 'Other').toLowerCase() === catId.toLowerCase() ||
-      catId.toLowerCase().includes((s.category || '').toLowerCase())
-    );
+    
+    // Auto-categorize services (same logic as handleServiceList)
+    function getCategory(s) {
+      if (s.category) return s.category;
+      const name = s.name.toLowerCase();
+      if (name.includes('botox') || name.includes('filler') || name.includes('rejuran') || name.includes('profhilo') || name.includes('inject')) return 'Injectables';
+      if (name.includes('facial') || name.includes('peel') || name.includes('hydra') || name.includes('cleanse')) return 'Facials';
+      if (name.includes('laser') || name.includes('ipl') || name.includes('bbl') || name.includes('pigment')) return 'Laser';
+      if (name.includes('hifu') || name.includes('thread') || name.includes('lift') || name.includes('tighten') || name.includes('thermage') || name.includes('ultherapy')) return 'Lifting & Tightening';
+      if (name.includes('body') || name.includes('slim') || name.includes('sculpt') || name.includes('fat') || name.includes('ems')) return 'Body';
+      if (name.includes('skin') || name.includes('booster') || name.includes('pores') || name.includes('texture')) return 'Skin';
+      return 'Other';
+    }
+    
+    const categoryServices = services.filter(s => getCategory(s) === catId);
+    
     if (categoryServices.length > 0) {
       setState(patientPhone, BOOKING_STATES.AWAITING_TREATMENT, {
         category: catId,
@@ -927,10 +939,21 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
       const catId = extractCategoryId(message);
       if (catId) {
         const services = clinicConfig.config?.services || [];
-        const categoryServices = services.filter(s => 
-          (s.category || 'Other').toLowerCase() === catId.toLowerCase() ||
-          catId.toLowerCase().includes((s.category || '').toLowerCase())
-        );
+        
+        // Auto-categorize services
+        function getCategory(s) {
+          if (s.category) return s.category;
+          const name = s.name.toLowerCase();
+          if (name.includes('botox') || name.includes('filler') || name.includes('rejuran') || name.includes('profhilo') || name.includes('inject')) return 'Injectables';
+          if (name.includes('facial') || name.includes('peel') || name.includes('hydra') || name.includes('cleanse')) return 'Facials';
+          if (name.includes('laser') || name.includes('ipl') || name.includes('bbl') || name.includes('pigment')) return 'Laser';
+          if (name.includes('hifu') || name.includes('thread') || name.includes('lift') || name.includes('tighten') || name.includes('thermage') || name.includes('ultherapy')) return 'Lifting & Tightening';
+          if (name.includes('body') || name.includes('slim') || name.includes('sculpt') || name.includes('fat') || name.includes('ems')) return 'Body';
+          if (name.includes('skin') || name.includes('booster') || name.includes('pores') || name.includes('texture')) return 'Skin';
+          return 'Other';
+        }
+        
+        const categoryServices = services.filter(s => getCategory(s) === catId);
         if (categoryServices.length > 0) {
           setState(patientPhone, BOOKING_STATES.AWAITING_TREATMENT, { 
             ...currentState.data, 
@@ -978,17 +1001,35 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
 function showCategorySelection(clinicConfig, startTime) {
   const services = clinicConfig.config?.services || [];
   
-  // Extract unique categories from services
+  // Auto-categorize services (same logic as handleServiceList)
+  function getCategory(s) {
+    if (s.category) return s.category;
+    const name = s.name.toLowerCase();
+    if (name.includes('botox') || name.includes('filler') || name.includes('rejuran') || name.includes('profhilo') || name.includes('inject')) return 'Injectables';
+    if (name.includes('facial') || name.includes('peel') || name.includes('hydra') || name.includes('cleanse')) return 'Facials';
+    if (name.includes('laser') || name.includes('ipl') || name.includes('bbl') || name.includes('pigment')) return 'Laser';
+    if (name.includes('hifu') || name.includes('thread') || name.includes('lift') || name.includes('tighten') || name.includes('thermage') || name.includes('ultherapy')) return 'Lifting & Tightening';
+    if (name.includes('body') || name.includes('slim') || name.includes('sculpt') || name.includes('fat') || name.includes('ems')) return 'Body';
+    if (name.includes('skin') || name.includes('booster') || name.includes('pores') || name.includes('texture')) return 'Skin';
+    return 'Other';
+  }
+  
   const categoriesMap = new Map();
   for (const s of services) {
-    const cat = s.category || 'Other';
+    const cat = getCategory(s);
     if (!categoriesMap.has(cat)) {
       categoriesMap.set(cat, { id: cat, name: cat, count: 0 });
     }
     categoriesMap.get(cat).count++;
   }
   
-  const categories = Array.from(categoriesMap.values()).slice(0, 10);
+  let categories = Array.from(categoriesMap.values());
+  categories.sort((a, b) => {
+    if (a.name === 'Other') return 1;
+    if (b.name === 'Other') return -1;
+    return a.name.localeCompare(b.name);
+  });
+  categories = categories.slice(0, 10);
   
   if (categories.length === 0) {
     return { text: 'Which treatment are you looking for?', source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
@@ -1009,7 +1050,7 @@ function extractCategoryId(message) {
   // But by the time they reach here, the text might be the button title
   // The interactiveId would have been mapped in bot-engine.js
   // For now, check if message starts with a known category pattern
-  const knownCategories = ['Injectables', 'Facials', 'Laser', 'Lifting', 'Body', 'Skin', 'Peels', 'Other'];
+  const knownCategories = ['Injectables', 'Facials', 'Laser', 'Lifting & Tightening', 'Body', 'Skin', 'Other'];
   const lower = message.toLowerCase();
   for (const cat of knownCategories) {
     if (lower.includes(cat.toLowerCase())) return cat;

@@ -876,7 +876,7 @@ const { isKilled } = require('../middleware/cost-protection');
 const WELCOME_INTENT_MAP = {
   services: 'service_list',
   location: 'location_inquiry',
-  book: 'booking_request',
+  // book: 'booking_request',  // ← let normal flow use startBookingFlow (interactive dates)
   faq: 'faq'
 };
 
