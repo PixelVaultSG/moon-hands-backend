@@ -812,6 +812,7 @@ function extractMessage(body, channel) {
           interactiveId = msg.interactive.list_reply.id;
           text = msg.interactive.list_reply.title || text;
         }
+        console.log(`[EXTRACT] Interactive ${msg.interactive.type}: id=${interactiveId}, title="${text?.substring(0,40)}"`);
       }
       
       return {

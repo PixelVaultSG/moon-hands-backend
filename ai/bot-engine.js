@@ -152,6 +152,9 @@ async function loadClientConfig(clientId) {
       ? nestedConfig.faqs
       : (clientConfigRow.faqs || []);
 
+    // Destructure nestedConfig to avoid overwriting our computed arrays
+    const { services: _ns, operating_hours: _noh, faqs: _nf, ...restNestedConfig } = nestedConfig;
+
     return {
       id: data.id,
       name: data.name,
@@ -161,8 +164,8 @@ async function loadClientConfig(clientId) {
       services,
       operating_hours,
       faqs,
-      // Copy any other properties from nested config
-      ...nestedConfig,
+      // Copy any other properties from nested config (excluding the arrays we already merged)
+      ...restNestedConfig,
       // Keep merged config object for backward compatibility
       config: {
         ...nestedConfig,
@@ -744,7 +747,10 @@ function getNextBusinessDay(dateStr) {
 async function processMessage(messageText, clientId, conversationHistory = [], patientPhone = null, interactiveId = null) {
   const startTime = Date.now();
   try {
+    console.log(`[BOT_ENGINE] === START === clientId=${clientId}, phone=${patientPhone}, interactiveId=${interactiveId}, msg="${messageText?.substring(0,60)}"`);
+    
     const clientConfig = await loadClientConfig(clientId);
+    console.log(`[BOT_ENGINE] Config loaded: name=${clientConfig?.name}, services=${clientConfig?.services?.length}, config.services=${clientConfig?.config?.services?.length}`);
     
     // ─── INTERACTIVE ID ROUTING ─────────────────────────────────────
     // If user tapped a button/list item, map the ID directly to an intent
@@ -833,7 +839,9 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
     }
     
     // ─── SMART ROUTER: Try hardcoded responses first ($0) ───────────
+    console.log(`[BOT_ENGINE] Routing: effectiveText="${effectiveText?.substring(0,60)}", forcedIntents=${JSON.stringify(forcedIntents)}`);
     const routerResult = await routeMessage(effectiveText, clientConfig, patientPhone, conversationHistory, forcedIntents);
+    console.log(`[BOT_ENGINE] Router result: source=${routerResult?.source}, hasText=${!!routerResult?.text}, intents=${routerResult?.intents?.join(',')}`);
     
     if (routerResult.source === 'hardcoded' && routerResult.text) {
       // Log the hardcoded response for analytics
@@ -1045,7 +1053,9 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
     };
 
   } catch (err) {
+    console.error('[BOT_ENGINE] === CRASH ===');
     console.error('[BOT_ENGINE] Error:', err.message);
+    console.error('[BOT_ENGINE] Stack:', err.stack);
     return {
       text: "I'm having trouble right now. Please try again in a moment, or call us directly.",
       error: err.message
