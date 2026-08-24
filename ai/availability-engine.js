@@ -216,8 +216,7 @@ function formatDate(d) {
 function getDateLabel(d, offset) {
   const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
   const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  if (offset === 0) return `Today (${dayNames[d.getDay()]}, ${d.getDate()} ${monthNames[d.getMonth()]})`;
-  if (offset === 1) return `Tomorrow (${dayNames[d.getDay()]}, ${d.getDate()} ${monthNames[d.getMonth()]})`;
+  // Use consistent short format for ALL dates (max ~13 chars, well under 20-char WhatsApp limit)
   return `${dayNames[d.getDay()]}, ${d.getDate()} ${monthNames[d.getMonth()]}`;
 }
 

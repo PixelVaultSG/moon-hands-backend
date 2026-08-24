@@ -879,16 +879,17 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
       
       if (expertResult.text) {
         // Log the expert response
+        const expertsUsed = expertResult.expertsUsed || [];
         await logConversation(clientConfig.id, 'whatsapp', patientPhone, null,
-          messageText, expertResult.text, `experts:${expertResult.expertsUsed.join(',')}`);
+          messageText, expertResult.text, `experts:${expertsUsed.join(',')}`);
         
-        console.log(`[BOT_ENGINE] Experts: [${expertResult.expertsUsed.join(', ')}] — cost: $${expertResult.totalCost.toFixed(4)}`);
+        console.log(`[BOT_ENGINE] Experts: [${expertsUsed.join(', ')}] — cost: $${expertResult.totalCost.toFixed(4)}`);
         
         return {
           text: expertResult.text,
           function_called: expertResult.functionCall,
           model: 'gpt-4o-mini-experts',
-          experts_used: expertResult.expertsUsed,
+          experts_used: expertsUsed,
           total_cost: expertResult.totalCost,
           latency_ms: Date.now() - startTime
         };
