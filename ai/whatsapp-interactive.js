@@ -140,6 +140,46 @@ function getTreatmentInfoButtons(treatmentName) {
 }
 
 /**
+ * Rich treatment info card with description, price, duration
+ * Buttons: Book This | Add Another | Back to List
+ */
+function getTreatmentInfoCard(service, selectedCount = 0) {
+  const priceText = service.price ? `💰 ${service.price}` : '';
+  const durationText = service.duration ? `⏱️ ${service.duration}min` : '';
+  const descText = service.description || '';
+  const header = `*${service.name}*`;
+  const meta = [priceText, durationText].filter(Boolean).join('  ');
+  const selectedBanner = selectedCount > 0 ? `\n\n🛒 You have ${selectedCount} treatment(s) selected` : '';
+  
+  const buttons = [
+    { id: 'book_this', title: '📅 Book This' },
+    { id: 'add_another', title: '➕ Add Another' },
+    { id: 'back_list', title: '🔙 Back to List' }
+  ];
+  
+  return buildQuickReplyButtons({
+    body: `${header}\n${meta}\n\n${descText}${selectedBanner}`,
+    footer: 'Tap to proceed',
+    buttons
+  });
+}
+
+/**
+ * Edit menu — shown when user taps Edit on confirmation card
+ */
+function getEditMenuButtons() {
+  return buildQuickReplyButtons({
+    body: 'What would you like to change?',
+    footer: 'Tap an option',
+    buttons: [
+      { id: 'edit_date', title: '📅 Change Date' },
+      { id: 'edit_time', title: '🕐 Change Time' },
+      { id: 'edit_treatment', title: '💆 Change Treatment' }
+    ]
+  });
+}
+
+/**
  * Multi-treatment selection buttons
  * Shows after user picks a treatment — lets them book immediately or add more.
  */
@@ -248,12 +288,14 @@ function getTreatmentsByCategoryMessage(categoryName, services) {
  * Rich booking confirmation card with summary details
  */
 function getConfirmationCard({ date, time, treatments, totalDuration, totalPrice, clinicName }) {
-  const treatmentText = Array.isArray(treatments) ? treatments.join(' + ') : treatments;
+  const treatmentText = Array.isArray(treatments) ? treatments.join(' + ') : (treatments || 'Not selected');
+  const dateText = date || '📅 Date not set';
+  const timeText = time || '🕐 Time not set';
   const durText = totalDuration ? `⏱️ ${totalDuration} mins` : '';
   const priceText = totalPrice ? `💰 ${totalPrice}` : '';
   
   return buildQuickReplyButtons({
-    body: `✅ *Booking Summary*\n\n📅 ${date}\n🕐 ${time}\n💆 ${treatmentText}\n${durText}\n${priceText}\n\nEverything look correct?`,
+    body: `✅ *Booking Summary*\n\n📅 ${dateText}\n🕐 ${timeText}\n💆 ${treatmentText}\n${durText}\n${priceText}\n\nEverything look correct?`,
     footer: clinicName ? `${clinicName}` : 'Tap to confirm',
     buttons: [
       { id: 'confirm_yes', title: '✅ Confirm' },
@@ -292,6 +334,8 @@ module.exports = {
   getYesNoButtons,
   getServiceListMessage,
   getTreatmentInfoButtons,
+  getTreatmentInfoCard,
+  getEditMenuButtons,
   getDateButtonOptions,
   getTimeSlotButtons,
   getCategoryListMessage,

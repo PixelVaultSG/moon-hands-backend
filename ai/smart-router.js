@@ -533,6 +533,8 @@ function isBookingState(state) {
     BOOKING_STATES.AWAITING_TIME,
     BOOKING_STATES.AWAITING_TREATMENT,
     BOOKING_STATES.SELECTING_CATEGORY,
+    BOOKING_STATES.TREATMENT_INFO,
+    BOOKING_STATES.EDITING_BOOKING,
     BOOKING_STATES.AWAITING_NAME,
     BOOKING_STATES.AWAITING_PHONE,
     BOOKING_STATES.AWAITING_CONFIRMATION,
@@ -856,7 +858,14 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
         const existingTreatment = currentState.data?.treatment || currentState.data?.treatments?.[0];
         const existingTreatments = currentState.data?.treatments || (existingTreatment ? [existingTreatment] : []);
         if (existingTreatment) {
-          return await attemptBooking(clinicConfig, patientPhone, { date: data.date, time: data.time, treatment: existingTreatment, treatments: existingTreatments }, conversationHistory, startTime);
+          // Show confirmation summary instead of booking directly
+          setState(patientPhone, BOOKING_STATES.AWAITING_CONFIRMATION, { 
+            date: data.date, 
+            time: data.time, 
+            treatment: existingTreatment, 
+            treatments: existingTreatments 
+          });
+          return await buildConfirmationResponse(clinicConfig, patientPhone, data.date, data.time, existingTreatments, startTime);
         }
         setState(patientPhone, BOOKING_STATES.AWAITING_TREATMENT, { date: data.date, time: data.time });
         return { text: `${data.date} at ${data.time} works! Which treatment would you like?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
@@ -1001,12 +1010,22 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
         // Proceed with booking attempt anyway — let the calendar service handle conflicts
       }
       
-      // CRITICAL: If treatment is ALREADY known from previous turn, skip AWAITING_TREATMENT
+      // Time is valid — proceed to confirmation (show summary before booking)
+      // existingTreatment2 and existingTreatments2 already declared above
       if (existingTreatment2) {
-        return await attemptBooking(clinicConfig, patientPhone, { date, time: data.time, treatment: existingTreatment2, treatments: existingTreatments2 }, conversationHistory, startTime);
+        // Show confirmation summary before creating the booking
+        setState(patientPhone, BOOKING_STATES.AWAITING_CONFIRMATION, { 
+          date, 
+          time: data.time, 
+          treatment: existingTreatment2, 
+          treatments: existingTreatments2 
+        });
+        return await buildConfirmationResponse(clinicConfig, patientPhone, date, data.time, existingTreatments2, startTime);
       }
       if (data.treatment) {
-        return await attemptBooking(clinicConfig, patientPhone, { date, time: data.time, treatment: data.treatment }, conversationHistory, startTime);
+        const treatments = [data.treatment];
+        setState(patientPhone, BOOKING_STATES.AWAITING_CONFIRMATION, { date, time: data.time, treatment: data.treatment, treatments });
+        return await buildConfirmationResponse(clinicConfig, patientPhone, date, data.time, treatments, startTime);
       }
       // Treatment not known — show category selection
       setState(patientPhone, BOOKING_STATES.SELECTING_CATEGORY, { date, time: data.time });
@@ -1053,16 +1072,197 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
       return showCategorySelection(clinicConfig, startTime);
     
     case BOOKING_STATES.AWAITING_TREATMENT:
-      if (!data.treatment) {
-        // Show category selection first
+      // Check if user tapped/typed a specific treatment name
+      const services = clinicConfig.config?.services || [];
+      const msgLower = message.toLowerCase();
+      
+      // Find matching treatment from message (button tap or text)
+      let matchedService = null;
+      for (const s of services) {
+        if (msgLower.includes(s.name.toLowerCase())) {
+          matchedService = s;
+          break;
+        }
+      }
+      
+      // Also check categoryServices from state (treatments in current category)
+      if (!matchedService && currentState.data?.categoryServices) {
+        for (const tName of currentState.data.categoryServices) {
+          if (msgLower.includes(tName.toLowerCase())) {
+            matchedService = services.find(s => s.name.toLowerCase() === tName.toLowerCase());
+            break;
+          }
+        }
+      }
+      
+      if (matchedService) {
+        // Show treatment info card FIRST before booking
+        const selectedTreatments = currentState.data?.selectedTreatments || [];
+        setState(patientPhone, BOOKING_STATES.TREATMENT_INFO, {
+          ...currentState.data,
+          selectedTreatment: matchedService.name,
+          selectedTreatments
+        });
+        const { getTreatmentInfoCard } = require('./whatsapp-interactive');
+        return {
+          text: `*${matchedService.name}* — ${matchedService.price || ''} ${matchedService.duration ? matchedService.duration + 'min' : ''}\n\n${matchedService.description || 'Tap an option to proceed.'}`,
+          source: 'hardcoded',
+          intents: ['treatment_info'],
+          cost_saved: 1,
+          latency_ms: Date.now() - startTime,
+          whatsappInteractive: getTreatmentInfoCard(matchedService, selectedTreatments.length)
+        };
+      }
+      
+      // No treatment recognized — show category selection
+      return showCategorySelection(clinicConfig, startTime);
+    
+    case BOOKING_STATES.TREATMENT_INFO:
+      // User is viewing treatment details. Handle their action.
+      const selectedTreatment = currentState.data?.selectedTreatment;
+      const existingSelected = currentState.data?.selectedTreatments || [];
+      const msgLower2 = message.toLowerCase().trim();
+      
+      // "Book This" — proceed to date selection with this treatment
+      if (msgLower2.includes('book') || msgLower2 === 'book_this' || msgLower2.includes('book this')) {
+        const allTreatments = [...existingSelected];
+        if (selectedTreatment && !allTreatments.includes(selectedTreatment)) {
+          allTreatments.push(selectedTreatment);
+        }
+        setState(patientPhone, BOOKING_STATES.AWAITING_DATE, {
+          ...currentState.data,
+          treatment: selectedTreatment,
+          treatments: allTreatments,
+          selectedTreatments: allTreatments
+        });
+        const { getDateButtonOptions } = require('./whatsapp-interactive');
+        const { getAvailableDates } = require('./availability-engine');
+        try {
+          const dates = await getAvailableDates(clinicConfig.id, clinicConfig);
+          return {
+            text: `When would you like to come in?`,
+            source: 'hardcoded',
+            intents: ['date_request'],
+            cost_saved: 1,
+            latency_ms: Date.now() - startTime,
+            whatsappInteractive: getDateButtonOptions(dates)
+          };
+        } catch (err) {
+          return {
+            text: `When would you like to come in? (e.g., 'next Tuesday' or 'September 15')`,
+            source: 'hardcoded',
+            intents: ['date_request'],
+            cost_saved: 1,
+            latency_ms: Date.now() - startTime
+          };
+        }
+      }
+      
+      // "Add Another" — add current treatment to basket, go back to categories
+      if (msgLower2.includes('add') || msgLower2.includes('another') || msgLower2 === 'add_another') {
+        const updatedSelected = [...existingSelected];
+        if (selectedTreatment && !updatedSelected.includes(selectedTreatment)) {
+          updatedSelected.push(selectedTreatment);
+        }
+        setState(patientPhone, BOOKING_STATES.SELECTING_CATEGORY, {
+          ...currentState.data,
+          selectedTreatments: updatedSelected
+        });
+        const selectedCount = updatedSelected.length;
+        const suffix = selectedCount > 0 ? ` (you have ${selectedCount} in your basket)` : '';
+        const catResponse = showCategorySelection(clinicConfig, startTime);
+        catResponse.text = `${catResponse.text}${suffix}`;
+        return catResponse;
+      }
+      
+      // "Back" — return to treatment list
+      if (msgLower2.includes('back') || msgLower2 === 'back_list') {
+        setState(patientPhone, BOOKING_STATES.AWAITING_TREATMENT, currentState.data);
+        const category = currentState.data?.category;
+        if (category) {
+          // Re-show treatments in this category
+          const categoryServices = services.filter(s => {
+            if (s.category) return s.category === category;
+            const name = s.name.toLowerCase();
+            if (name.includes('botox') || name.includes('filler') || name.includes('rejuran') || name.includes('profhilo') || name.includes('inject')) return category === 'Injectables';
+            if (name.includes('facial') || name.includes('peel') || name.includes('hydra') || name.includes('cleanse')) return category === 'Facials';
+            if (name.includes('laser') || name.includes('ipl') || name.includes('bbl') || name.includes('pigment')) return category === 'Laser';
+            if (name.includes('hifu') || name.includes('thread') || name.includes('lift') || name.includes('tighten')) return category === 'Lifting & Tightening';
+            if (name.includes('body') || name.includes('slim') || name.includes('sculpt') || name.includes('fat')) return category === 'Body';
+            if (name.includes('skin') || name.includes('booster') || name.includes('pores')) return category === 'Skin';
+            return category === 'Other';
+          });
+          const { getTreatmentsByCategoryMessage } = require('./whatsapp-interactive');
+          return {
+            text: `Here are our ${category} treatments:`,
+            source: 'hardcoded',
+            intents: ['category_selected'],
+            cost_saved: 1,
+            latency_ms: Date.now() - startTime,
+            whatsappInteractive: getTreatmentsByCategoryMessage(category, categoryServices)
+          };
+        }
         return showCategorySelection(clinicConfig, startTime);
       }
-      const date2 = data.date || currentState.data.date;
-      const time2 = data.time || currentState.data.time;
-      const treatments2 = data.treatments || [data.treatment];
-      // ── SHOW BOOKING CONFIRMATION SUMMARY ──
-      setState(patientPhone, BOOKING_STATES.AWAITING_CONFIRMATION, { date: date2, time: time2, treatment: data.treatment, treatments: treatments2 });
-      return await buildConfirmationResponse(clinicConfig, patientPhone, date2, time2, treatments2, startTime);
+      
+      // Fallback — if they typed something else, try to interpret as booking intent
+      return startBookingFlow(message, clinicConfig, patientPhone, conversationHistory, startTime);
+    
+    case BOOKING_STATES.EDITING_BOOKING:
+      // User tapped Edit and chose what to change
+      const editChoice = message.toLowerCase().trim();
+      const editData = currentState.data;
+      
+      if (editChoice.includes('date') || editChoice === 'edit_date') {
+        setState(patientPhone, BOOKING_STATES.AWAITING_DATE, editData);
+        const { getDateButtonOptions } = require('./whatsapp-interactive');
+        const { getAvailableDates } = require('./availability-engine');
+        try {
+          const dates = await getAvailableDates(clinicConfig.id, clinicConfig);
+          return {
+            text: `What date would you prefer?`,
+            source: 'hardcoded',
+            intents: ['date_change'],
+            cost_saved: 1,
+            latency_ms: Date.now() - startTime,
+            whatsappInteractive: getDateButtonOptions(dates)
+          };
+        } catch (err) {
+          return { text: `What date would you prefer?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+        }
+      }
+      
+      if (editChoice.includes('time') || editChoice === 'edit_time') {
+        setState(patientPhone, BOOKING_STATES.AWAITING_TIME, editData);
+        const { getTimeSlotButtons } = require('./whatsapp-interactive');
+        const hours = clinicConfig.config?.operating_hours || clinicConfig.operating_hours || [];
+        const date = editData.date;
+        const v = validateBookingTime(date, '10:00', hours);
+        const slots = generateTimeSlots(v.openTime, v.closeTime, 30);
+        return {
+          text: `What time works better for you?`,
+          source: 'hardcoded',
+          intents: ['time_change'],
+          cost_saved: 1,
+          latency_ms: Date.now() - startTime,
+          whatsappInteractive: getTimeSlotButtons(slots, v.openTime + '–' + v.closeTime)
+        };
+      }
+      
+      if (editChoice.includes('treatment') || editChoice === 'edit_treatment') {
+        setState(patientPhone, BOOKING_STATES.SELECTING_CATEGORY, editData);
+        return showCategorySelection(clinicConfig, startTime);
+      }
+      
+      // Unrecognized edit choice — show edit menu again
+      const { getEditMenuButtons } = require('./whatsapp-interactive');
+      return {
+        text: `What would you like to change?`,
+        source: 'hardcoded',
+        cost_saved: 1,
+        latency_ms: Date.now() - startTime,
+        whatsappInteractive: getEditMenuButtons()
+      };
     
     case BOOKING_STATES.AWAITING_CONFIRMATION:
       return await handleBookingConfirmation(message, clinicConfig, patientPhone, currentState, conversationHistory, startTime);
@@ -1156,8 +1356,9 @@ async function buildConfirmationResponse(clinicConfig, patientPhone, date, time,
   
   const { getConfirmationCard } = require('./whatsapp-interactive');
   return {
-    text: `Booking summary: ${treatments.join(' + ')} on ${date} at ${time}`,
+    text: `Booking summary: ${treatments.join(' + ')} on ${date || 'TBD'} at ${time || 'TBD'}`,
     source: 'hardcoded',
+    intents: ['booking_summary'],
     cost_saved: 1,
     latency_ms: Date.now() - startTime,
     whatsappInteractive: getConfirmationCard({
@@ -1446,11 +1647,17 @@ async function handleBookingConfirmation(message, clinicConfig, patientPhone, cu
     return await attemptBooking(clinicConfig, patientPhone, data, conversationHistory, startTime);
   }
   
-  // NO — ask what to change
-  if (isDenial(message)) {
+  // NO — ask what to change (with interactive buttons)
+  if (isDenial(message) || lower.includes('edit') || lower === 'edit') {
+    setState(patientPhone, BOOKING_STATES.EDITING_BOOKING, data);
+    const { getEditMenuButtons } = require('./whatsapp-interactive');
     return {
-      text: `No problem! What would you like to change? Reply with:\n• DATE — to change the date\n• TIME — to change the time\n• TREATMENT — to change the treatment\n• Or tell me what you'd prefer`,
-      source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime
+      text: `No problem! What would you like to change?`,
+      source: 'hardcoded',
+      intents: ['edit_booking'],
+      cost_saved: 1,
+      latency_ms: Date.now() - startTime,
+      whatsappInteractive: getEditMenuButtons()
     };
   }
   

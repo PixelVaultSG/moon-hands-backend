@@ -10,11 +10,13 @@ const TTL_MS = 60 * 60 * 1000;
 const BOOKING_STATES = {
   IDLE: 'idle',
   MULTI_INTENT_CONFIRM: 'multi_intent_confirm',
-  BOOKING_OFFERED: 'booking_offered',  // Bot offered to help with booking, awaiting Yes/No
+  BOOKING_OFFERED: 'booking_offered',
   AWAITING_DATE: 'awaiting_date',
   AWAITING_TIME: 'awaiting_time',
   AWAITING_TREATMENT: 'awaiting_treatment',
-  SELECTING_CATEGORY: 'selecting_category',  // User choosing treatment category
+  SELECTING_CATEGORY: 'selecting_category',
+  TREATMENT_INFO: 'treatment_info',  // User viewing treatment details, can book or add more
+  EDITING_BOOKING: 'editing_booking', // User tapped Edit on confirmation
   AWAITING_NAME: 'awaiting_name',
   AWAITING_PHONE: 'awaiting_phone',
   AWAITING_CONFIRMATION: 'awaiting_confirmation',
@@ -109,6 +111,8 @@ function getStalledConversations() {
     BOOKING_STATES.AWAITING_TIME,
     BOOKING_STATES.AWAITING_TREATMENT,
     BOOKING_STATES.SELECTING_CATEGORY,
+    BOOKING_STATES.TREATMENT_INFO,
+    BOOKING_STATES.EDITING_BOOKING,
     BOOKING_STATES.AWAITING_NAME,
     BOOKING_STATES.AWAITING_PHONE,
     BOOKING_STATES.AWAITING_CONFIRMATION,
