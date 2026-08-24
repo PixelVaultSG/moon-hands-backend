@@ -246,6 +246,7 @@ async function routeMessage(message, clinicConfig, patientPhone = null, conversa
       return {
         text: `Here are our ${catId} treatments:`,
         source: 'hardcoded',
+        intents: ['category_selected'],
         cost_saved: 1,
         latency_ms: Date.now() - startTime,
         whatsappInteractive: getTreatmentsByCategoryMessage(catId, categoryServices)
@@ -964,6 +965,7 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
           return {
             text: `Here are our ${catId} treatments:`,
             source: 'hardcoded',
+            intents: ['category_selected'],
             cost_saved: 1,
             latency_ms: Date.now() - startTime,
             whatsappInteractive: getTreatmentsByCategoryMessage(catId, categoryServices)
@@ -1039,6 +1041,7 @@ function showCategorySelection(clinicConfig, startTime) {
   return {
     text: 'What type of treatment are you looking for?',
     source: 'hardcoded',
+    intents: ['category_selection'],
     cost_saved: 1,
     latency_ms: Date.now() - startTime,
     whatsappInteractive: getCategoryListMessage(categories)

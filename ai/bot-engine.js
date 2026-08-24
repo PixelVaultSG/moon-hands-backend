@@ -844,24 +844,25 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
     console.log(`[BOT_ENGINE] Router result: source=${routerResult?.source}, hasText=${!!routerResult?.text}, intents=${routerResult?.intents?.join(',')}`);
     
     if (routerResult.source === 'hardcoded' && routerResult.text) {
+      const intents = routerResult.intents || [];
       // Log the hardcoded response for analytics
       await logConversation(clientConfig.id, 'whatsapp', patientPhone, null,
-        messageText, routerResult.text, `hardcoded:${routerResult.intents.join(',')}`);
+        messageText, routerResult.text, `hardcoded:${intents.join(',')}`);
       
-      console.log(`[BOT_ENGINE] Smart router: ${routerResult.intents.join(',')} — cost saved: $${routerResult.cost_saved.toFixed(4)}, hasInteractive=${!!routerResult.whatsappInteractive}`);
+      console.log(`[BOT_ENGINE] Smart router: ${intents.join(',') || 'none'} — cost saved: $${routerResult.cost_saved.toFixed(4)}, hasInteractive=${!!routerResult.whatsappInteractive}`);
       
       return {
         text: routerResult.text,
         function_called: null,
         model: 'hardcoded',
         cost_saved: routerResult.cost_saved,
-        intents: routerResult.intents,
+        intents: intents,
         latency_ms: routerResult.latency_ms,
         whatsappInteractive: routerResult.whatsappInteractive
       };
     }
     
-    console.log(`[BOT_ENGINE] Smart router → Expert System (intents: ${routerResult.intents.join(',') || 'none'})`);
+    console.log(`[BOT_ENGINE] Smart router → Expert System (intents: ${(routerResult.intents || []).join(',') || 'none'})`);
     
     // ─── EXPERT SYSTEM: Route to specialized experts ────────────────
     // Each expert receives ONLY the context it needs — smaller prompts,
