@@ -31,6 +31,21 @@ const AI_ONLY_INTENTS = ['complaint', 'vague_question', 'emotional_support'];
 const BOOKING_INTENTS = ['book_appointment', 'check_availability', 'reschedule', 'booking_request'];
 
 /**
+ * Auto-categorize a service by name. Used consistently across the booking flow.
+ */
+function getCategory(s) {
+  if (s.category) return s.category;
+  const name = s.name.toLowerCase();
+  if (name.includes('botox') || name.includes('filler') || name.includes('rejuran') || name.includes('profhilo') || name.includes('inject')) return 'Injectables';
+  if (name.includes('facial') || name.includes('peel') || name.includes('hydra') || name.includes('cleanse')) return 'Facials';
+  if (name.includes('laser') || name.includes('ipl') || name.includes('bbl') || name.includes('pigment')) return 'Laser';
+  if (name.includes('hifu') || name.includes('thread') || name.includes('lift') || name.includes('tighten') || name.includes('thermage') || name.includes('ultherapy')) return 'Lifting & Tightening';
+  if (name.includes('body') || name.includes('slim') || name.includes('sculpt') || name.includes('fat') || name.includes('ems')) return 'Body';
+  if (name.includes('skin') || name.includes('booster') || name.includes('pores') || name.includes('texture')) return 'Skin';
+  return 'Other';
+}
+
+/**
  * Main entry point
  */
 async function routeMessage(message, clinicConfig, patientPhone = null, conversationHistory = [], forcedIntents = null) {
@@ -221,19 +236,6 @@ async function routeMessage(message, clinicConfig, patientPhone = null, conversa
   if (primaryIntent.intent === 'category_selected') {
     const catId = message; // The category name from button tap (e.g., "Other", "Injectables")
     const services = clinicConfig.config?.services || [];
-    
-    // Auto-categorize services (same logic as handleServiceList)
-    function getCategory(s) {
-      if (s.category) return s.category;
-      const name = s.name.toLowerCase();
-      if (name.includes('botox') || name.includes('filler') || name.includes('rejuran') || name.includes('profhilo') || name.includes('inject')) return 'Injectables';
-      if (name.includes('facial') || name.includes('peel') || name.includes('hydra') || name.includes('cleanse')) return 'Facials';
-      if (name.includes('laser') || name.includes('ipl') || name.includes('bbl') || name.includes('pigment')) return 'Laser';
-      if (name.includes('hifu') || name.includes('thread') || name.includes('lift') || name.includes('tighten') || name.includes('thermage') || name.includes('ultherapy')) return 'Lifting & Tightening';
-      if (name.includes('body') || name.includes('slim') || name.includes('sculpt') || name.includes('fat') || name.includes('ems')) return 'Body';
-      if (name.includes('skin') || name.includes('booster') || name.includes('pores') || name.includes('texture')) return 'Skin';
-      return 'Other';
-    }
     
     const categoryServices = services.filter(s => getCategory(s) === catId);
     
@@ -739,22 +741,99 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
   const fields = extractBookingFields(message);
   const data = { ...currentState.data, ...fields };
   const hours = clinicConfig.config?.operating_hours || clinicConfig.operating_hours || [];
-  
+  const services = clinicConfig.config?.services || [];
+  const msgLower = message.toLowerCase().trim();
+
+  // ═══════════════════════════════════════════════════════════════
+  // GLOBAL ACTION BUTTONS — work from ANY booking state
+  // These handle taps on old messages or cross-state button presses
+  // ═══════════════════════════════════════════════════════════════
+
+  // ── "Book This" — proceed to date selection with all selected treatments ──
+  if (msgLower === 'book_this' || msgLower.includes('book this') || (msgLower.includes('book') && msgLower.includes('this'))) {
+    const selectedTreatment = currentState.data?.selectedTreatment;
+    const existingSelected = currentState.data?.selectedTreatments || [];
+    const allTreatments = [...existingSelected];
+    if (selectedTreatment && !allTreatments.includes(selectedTreatment)) {
+      allTreatments.push(selectedTreatment);
+    }
+    setState(patientPhone, BOOKING_STATES.AWAITING_DATE, {
+      ...currentState.data,
+      treatment: selectedTreatment || allTreatments[0],
+      treatments: allTreatments,
+      selectedTreatments: allTreatments
+    });
+    const { getDateButtonOptions } = require('./whatsapp-interactive');
+    const { getNextAvailableDates } = require('./availability-engine');
+    try {
+      const dates = await getNextAvailableDates(clinicConfig.id, allTreatments, clinicConfig, 3);
+      if (dates.length > 0) {
+        return {
+          text: `When would you like to come in?`,
+          source: 'hardcoded',
+          intents: ['date_request'],
+          cost_saved: 1,
+          latency_ms: Date.now() - startTime,
+          whatsappInteractive: getDateButtonOptions(dates)
+        };
+      }
+    } catch (err) {
+      console.error(`[GLOBAL_BOOK_THIS] getNextAvailableDates error: ${err.message}`);
+    }
+    return {
+      text: `When would you like to come in? (e.g., 'next Tuesday' or 'September 15')`,
+      source: 'hardcoded',
+      intents: ['date_request'],
+      cost_saved: 1,
+      latency_ms: Date.now() - startTime
+    };
+  }
+
+  // ── "Add Another" — add current treatment to basket, go back to categories ──
+  if (msgLower === 'add_another' || (msgLower.includes('add') && msgLower.includes('another'))) {
+    const selectedTreatment = currentState.data?.selectedTreatment;
+    const existingSelected = currentState.data?.selectedTreatments || [];
+    const updatedSelected = [...existingSelected];
+    if (selectedTreatment && !updatedSelected.includes(selectedTreatment)) {
+      updatedSelected.push(selectedTreatment);
+    }
+    setState(patientPhone, BOOKING_STATES.SELECTING_CATEGORY, {
+      ...currentState.data,
+      selectedTreatments: updatedSelected,
+      selectedTreatment: undefined  // Clear so next selection is fresh
+    });
+    const selectedCount = updatedSelected.length;
+    const suffix = selectedCount > 0 ? ` (you have ${selectedCount} in your basket)` : '';
+    const catResponse = showCategorySelection(clinicConfig, startTime);
+    catResponse.text = `${catResponse.text}${suffix}`;
+    return catResponse;
+  }
+
+  // ── "Back to List" — return to treatment list or category selection ──
+  if (msgLower === 'back_list' || (msgLower.includes('back') && msgLower.includes('list'))) {
+    const category = currentState.data?.category;
+    if (category) {
+      const categoryServices = services.filter(s => getCategory(s) === category);
+      if (categoryServices.length > 0) {
+        setState(patientPhone, BOOKING_STATES.AWAITING_TREATMENT, currentState.data);
+        const { getTreatmentsByCategoryMessage } = require('./whatsapp-interactive');
+        return {
+          text: `Here are our ${category} treatments:`,
+          source: 'hardcoded',
+          intents: ['category_selected'],
+          cost_saved: 1,
+          latency_ms: Date.now() - startTime,
+          whatsappInteractive: getTreatmentsByCategoryMessage(category, categoryServices)
+        };
+      }
+    }
+    setState(patientPhone, BOOKING_STATES.SELECTING_CATEGORY, currentState.data);
+    return showCategorySelection(clinicConfig, startTime);
+  }
+
   // ── PRIORITY: Check if user tapped a category (works in ANY booking state) ──
   const catId = extractCategoryId(message);
   if (catId) {
-    const services = clinicConfig.config?.services || [];
-    function getCategory(s) {
-      if (s.category) return s.category;
-      const name = s.name.toLowerCase();
-      if (name.includes('botox') || name.includes('filler') || name.includes('rejuran') || name.includes('profhilo') || name.includes('inject')) return 'Injectables';
-      if (name.includes('facial') || name.includes('peel') || name.includes('hydra') || name.includes('cleanse')) return 'Facials';
-      if (name.includes('laser') || name.includes('ipl') || name.includes('bbl') || name.includes('pigment')) return 'Laser';
-      if (name.includes('hifu') || name.includes('thread') || name.includes('lift') || name.includes('tighten') || name.includes('thermage') || name.includes('ultherapy')) return 'Lifting & Tightening';
-      if (name.includes('body') || name.includes('slim') || name.includes('sculpt') || name.includes('fat') || name.includes('ems')) return 'Body';
-      if (name.includes('skin') || name.includes('booster') || name.includes('pores') || name.includes('texture')) return 'Skin';
-      return 'Other';
-    }
     const categoryServices = services.filter(s => getCategory(s) === catId);
     if (categoryServices.length > 0) {
       setState(patientPhone, BOOKING_STATES.AWAITING_TREATMENT, {
@@ -1033,23 +1112,7 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
     
     case BOOKING_STATES.SELECTING_CATEGORY:
       // User selected a category from the list
-      const catId = extractCategoryId(message);
       if (catId) {
-        const services = clinicConfig.config?.services || [];
-        
-        // Auto-categorize services
-        function getCategory(s) {
-          if (s.category) return s.category;
-          const name = s.name.toLowerCase();
-          if (name.includes('botox') || name.includes('filler') || name.includes('rejuran') || name.includes('profhilo') || name.includes('inject')) return 'Injectables';
-          if (name.includes('facial') || name.includes('peel') || name.includes('hydra') || name.includes('cleanse')) return 'Facials';
-          if (name.includes('laser') || name.includes('ipl') || name.includes('bbl') || name.includes('pigment')) return 'Laser';
-          if (name.includes('hifu') || name.includes('thread') || name.includes('lift') || name.includes('tighten') || name.includes('thermage') || name.includes('ultherapy')) return 'Lifting & Tightening';
-          if (name.includes('body') || name.includes('slim') || name.includes('sculpt') || name.includes('fat') || name.includes('ems')) return 'Body';
-          if (name.includes('skin') || name.includes('booster') || name.includes('pores') || name.includes('texture')) return 'Skin';
-          return 'Other';
-        }
-        
         const categoryServices = services.filter(s => getCategory(s) === catId);
         if (categoryServices.length > 0) {
           setState(patientPhone, BOOKING_STATES.AWAITING_TREATMENT, { 
@@ -1119,12 +1182,14 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
     
     case BOOKING_STATES.TREATMENT_INFO:
       // User is viewing treatment details. Handle their action.
+      // NOTE: book_this / add_another / back_list are handled by GLOBAL handlers at top of handleBookingFlow
+      // This case only handles typed text fallbacks.
       const selectedTreatment = currentState.data?.selectedTreatment;
       const existingSelected = currentState.data?.selectedTreatments || [];
       const msgLower2 = message.toLowerCase().trim();
       
       // "Book This" — proceed to date selection with this treatment
-      if (msgLower2.includes('book') || msgLower2 === 'book_this' || msgLower2.includes('book this')) {
+      if (msgLower2.includes('book') && !msgLower2.includes('another') && !msgLower2.includes('add')) {
         const allTreatments = [...existingSelected];
         if (selectedTreatment && !allTreatments.includes(selectedTreatment)) {
           allTreatments.push(selectedTreatment);
@@ -1136,37 +1201,41 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
           selectedTreatments: allTreatments
         });
         const { getDateButtonOptions } = require('./whatsapp-interactive');
-        const { getAvailableDates } = require('./availability-engine');
+        const { getNextAvailableDates } = require('./availability-engine');
         try {
-          const dates = await getAvailableDates(clinicConfig.id, clinicConfig);
-          return {
-            text: `When would you like to come in?`,
-            source: 'hardcoded',
-            intents: ['date_request'],
-            cost_saved: 1,
-            latency_ms: Date.now() - startTime,
-            whatsappInteractive: getDateButtonOptions(dates)
-          };
+          const dates = await getNextAvailableDates(clinicConfig.id, allTreatments, clinicConfig, 3);
+          if (dates.length > 0) {
+            return {
+              text: `When would you like to come in?`,
+              source: 'hardcoded',
+              intents: ['date_request'],
+              cost_saved: 1,
+              latency_ms: Date.now() - startTime,
+              whatsappInteractive: getDateButtonOptions(dates)
+            };
+          }
         } catch (err) {
-          return {
-            text: `When would you like to come in? (e.g., 'next Tuesday' or 'September 15')`,
-            source: 'hardcoded',
-            intents: ['date_request'],
-            cost_saved: 1,
-            latency_ms: Date.now() - startTime
-          };
+          console.error(`[TREATMENT_INFO] getNextAvailableDates error: ${err.message}`);
         }
+        return {
+          text: `When would you like to come in? (e.g., 'next Tuesday' or 'September 15')`,
+          source: 'hardcoded',
+          intents: ['date_request'],
+          cost_saved: 1,
+          latency_ms: Date.now() - startTime
+        };
       }
       
       // "Add Another" — add current treatment to basket, go back to categories
-      if (msgLower2.includes('add') || msgLower2.includes('another') || msgLower2 === 'add_another') {
+      if (msgLower2.includes('add') || msgLower2.includes('another')) {
         const updatedSelected = [...existingSelected];
         if (selectedTreatment && !updatedSelected.includes(selectedTreatment)) {
           updatedSelected.push(selectedTreatment);
         }
         setState(patientPhone, BOOKING_STATES.SELECTING_CATEGORY, {
           ...currentState.data,
-          selectedTreatments: updatedSelected
+          selectedTreatments: updatedSelected,
+          selectedTreatment: undefined
         });
         const selectedCount = updatedSelected.length;
         const suffix = selectedCount > 0 ? ` (you have ${selectedCount} in your basket)` : '';
@@ -1176,22 +1245,11 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
       }
       
       // "Back" — return to treatment list
-      if (msgLower2.includes('back') || msgLower2 === 'back_list') {
+      if (msgLower2.includes('back')) {
         setState(patientPhone, BOOKING_STATES.AWAITING_TREATMENT, currentState.data);
         const category = currentState.data?.category;
         if (category) {
-          // Re-show treatments in this category
-          const categoryServices = services.filter(s => {
-            if (s.category) return s.category === category;
-            const name = s.name.toLowerCase();
-            if (name.includes('botox') || name.includes('filler') || name.includes('rejuran') || name.includes('profhilo') || name.includes('inject')) return category === 'Injectables';
-            if (name.includes('facial') || name.includes('peel') || name.includes('hydra') || name.includes('cleanse')) return category === 'Facials';
-            if (name.includes('laser') || name.includes('ipl') || name.includes('bbl') || name.includes('pigment')) return category === 'Laser';
-            if (name.includes('hifu') || name.includes('thread') || name.includes('lift') || name.includes('tighten')) return category === 'Lifting & Tightening';
-            if (name.includes('body') || name.includes('slim') || name.includes('sculpt') || name.includes('fat')) return category === 'Body';
-            if (name.includes('skin') || name.includes('booster') || name.includes('pores')) return category === 'Skin';
-            return category === 'Other';
-          });
+          const categoryServices = services.filter(s => getCategory(s) === category);
           const { getTreatmentsByCategoryMessage } = require('./whatsapp-interactive');
           return {
             text: `Here are our ${category} treatments:`,
@@ -1216,20 +1274,24 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
       if (editChoice.includes('date') || editChoice === 'edit_date') {
         setState(patientPhone, BOOKING_STATES.AWAITING_DATE, editData);
         const { getDateButtonOptions } = require('./whatsapp-interactive');
-        const { getAvailableDates } = require('./availability-engine');
+        const { getNextAvailableDates } = require('./availability-engine');
         try {
-          const dates = await getAvailableDates(clinicConfig.id, clinicConfig);
-          return {
-            text: `What date would you prefer?`,
-            source: 'hardcoded',
-            intents: ['date_change'],
-            cost_saved: 1,
-            latency_ms: Date.now() - startTime,
-            whatsappInteractive: getDateButtonOptions(dates)
-          };
+          const treatments = editData.treatments || [editData.treatment];
+          const dates = await getNextAvailableDates(clinicConfig.id, treatments, clinicConfig, 3);
+          if (dates.length > 0) {
+            return {
+              text: `What date would you prefer?`,
+              source: 'hardcoded',
+              intents: ['date_change'],
+              cost_saved: 1,
+              latency_ms: Date.now() - startTime,
+              whatsappInteractive: getDateButtonOptions(dates)
+            };
+          }
         } catch (err) {
-          return { text: `What date would you prefer?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+          console.error(`[EDITING_BOOKING] getNextAvailableDates error: ${err.message}`);
         }
+        return { text: `What date would you prefer?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
       }
       
       if (editChoice.includes('time') || editChoice === 'edit_time') {
@@ -1279,19 +1341,6 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
 
 function showCategorySelection(clinicConfig, startTime) {
   const services = clinicConfig.config?.services || [];
-  
-  // Auto-categorize services (same logic as handleServiceList)
-  function getCategory(s) {
-    if (s.category) return s.category;
-    const name = s.name.toLowerCase();
-    if (name.includes('botox') || name.includes('filler') || name.includes('rejuran') || name.includes('profhilo') || name.includes('inject')) return 'Injectables';
-    if (name.includes('facial') || name.includes('peel') || name.includes('hydra') || name.includes('cleanse')) return 'Facials';
-    if (name.includes('laser') || name.includes('ipl') || name.includes('bbl') || name.includes('pigment')) return 'Laser';
-    if (name.includes('hifu') || name.includes('thread') || name.includes('lift') || name.includes('tighten') || name.includes('thermage') || name.includes('ultherapy')) return 'Lifting & Tightening';
-    if (name.includes('body') || name.includes('slim') || name.includes('sculpt') || name.includes('fat') || name.includes('ems')) return 'Body';
-    if (name.includes('skin') || name.includes('booster') || name.includes('pores') || name.includes('texture')) return 'Skin';
-    return 'Other';
-  }
   
   const categoriesMap = new Map();
   for (const s of services) {
