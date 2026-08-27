@@ -204,6 +204,7 @@ async function createBooking({ client_id, customer_name, customer_phone, service
     }
     
     // Check for conflicts (proper overlap detection, not just exact time match)
+    const treatmentDuration = clinic.appointment_duration_minutes || 30;
     const { data: existingBookings, error: conflictErr } = await supabase
       .from('appointments')
       .select('*')
@@ -219,14 +220,13 @@ async function createBooking({ client_id, customer_name, customer_phone, service
       // Parse requested time
       const [reqH, reqM] = apptTime.split(':').map(Number);
       const reqStart = reqH * 60 + reqM;
-      const treatmentDuration = clinic.appointment_duration_minutes || 30;
       const reqEnd = reqStart + parseInt(treatmentDuration);
       
       // Check for overlap with each existing booking
       for (const existing of existingBookings) {
         const [exH, exM] = existing.appointment_time.split(':').map(Number);
         const exStart = exH * 60 + exM;
-        const exDuration = existing.duration_minutes || clinic.appointment_duration_minutes || 30;
+        const exDuration = existing.duration || existing.duration_minutes || clinic.appointment_duration_minutes || 30;
         const exEnd = exStart + parseInt(exDuration);
         
         // Overlap: (StartA < EndB) AND (EndA > StartB)

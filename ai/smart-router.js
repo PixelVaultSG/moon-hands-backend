@@ -1136,8 +1136,7 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
     
     case BOOKING_STATES.AWAITING_TREATMENT:
       // Check if user tapped/typed a specific treatment name
-      const services = clinicConfig.config?.services || [];
-      const msgLower = message.toLowerCase();
+      // (services and msgLower already declared at top of handleBookingFlow)
       
       // Find matching treatment from message (button tap or text)
       let matchedService = null;
@@ -1375,14 +1374,12 @@ function showCategorySelection(clinicConfig, startTime) {
 }
 
 function extractCategoryId(message) {
-  // Button IDs come through as `cat_Injectables` or similar
-  // But by the time they reach here, the text might be the button title
-  // The interactiveId would have been mapped in bot-engine.js
-  // For now, check if message starts with a known category pattern
+  // Only match EXACT category names — not substrings
+  // "Laser Skin Rejuvenation" should NOT match category "Laser"
   const knownCategories = ['Injectables', 'Facials', 'Laser', 'Lifting & Tightening', 'Body', 'Skin', 'Other'];
-  const lower = message.toLowerCase();
+  const lower = message.toLowerCase().trim();
   for (const cat of knownCategories) {
-    if (lower.includes(cat.toLowerCase())) return cat;
+    if (lower === cat.toLowerCase()) return cat;
   }
   return null;
 }
