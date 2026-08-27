@@ -169,9 +169,9 @@ async function routeMessage(message, clinicConfig, patientPhone = null, conversa
     return await startBookingFlow(message, clinicConfig, patientPhone, conversationHistory, startTime);
   }
 
-  // ── SERVICE SELECTED: Multi-treatment selection flow ─────────────
-  // When user taps a treatment from a category, add it to their selection
-  // and let them choose to book or add more treatments.
+  // ── SERVICE SELECTED: Show treatment info card ─────────────────────
+  // When user taps a treatment from ANY list (welcome or category),
+  // show the treatment info card with Book This / Add Another / Back to List.
   if (primaryIntent.intent === 'service_selected') {
     const treatmentName = message;
     const services = clinicConfig.config?.services || [];
@@ -180,36 +180,33 @@ async function routeMessage(message, clinicConfig, patientPhone = null, conversa
       treatmentName.toLowerCase().includes(s.name.toLowerCase()) ||
       s.name.toLowerCase().includes(treatmentName.toLowerCase())
     );
-    const svcName = matchedService ? matchedService.name : treatmentName;
-
-    // Add to selected treatments (multi-treatment support)
-    const { addSelectedTreatment } = require('./conversation-state');
-    const selectedTreatments = addSelectedTreatment(patientPhone, svcName);
-
-    // Calculate running totals
-    let totalDuration = 0;
-    let totalPrice = 0;
-    for (const t of selectedTreatments) {
-      const svc = services.find(s => s.name === t);
-      if (svc) {
-        totalDuration += parseInt(svc.duration) || 60;
-        const priceNum = parseInt(svc.price?.replace(/[^0-9]/g, '')) || 0;
-        totalPrice += priceNum;
-      }
+    
+    if (matchedService) {
+      // Get current selected treatments from state (preserve basket)
+      const { getState } = require('./conversation-state');
+      const currentState = getState(patientPhone);
+      const selectedTreatments = currentState.data?.selectedTreatments || [];
+      
+      // Set state to TREATMENT_INFO so Book This / Add Another work correctly
+      setState(patientPhone, BOOKING_STATES.TREATMENT_INFO, {
+        ...currentState.data,
+        selectedTreatment: matchedService.name,
+        selectedTreatments
+      });
+      
+      const { getTreatmentInfoCard } = require('./whatsapp-interactive');
+      return {
+        text: `*${matchedService.name}* — ${matchedService.price || ''} ${matchedService.duration ? matchedService.duration + 'min' : ''}\n\n${matchedService.description || 'Tap an option to proceed.'}`,
+        source: 'hardcoded',
+        intents: ['treatment_info'],
+        cost_saved: 1,
+        latency_ms: Date.now() - startTime,
+        whatsappInteractive: getTreatmentInfoCard(matchedService, selectedTreatments.length)
+      };
     }
-
-    const { getMultiTreatmentButtons } = require('./whatsapp-interactive');
-    return {
-      text: `${svcName} added! ${selectedTreatments.length > 1 ? `You have ${selectedTreatments.length} treatments selected.` : ''}`,
-      source: 'hardcoded',
-      cost_saved: 1,
-      latency_ms: Date.now() - startTime,
-      whatsappInteractive: getMultiTreatmentButtons(
-        selectedTreatments,
-        totalDuration,
-        totalPrice ? `$${totalPrice}` : null
-      )
-    };
+    
+    // Fallback: treatment not found, show category selection
+    return showCategorySelection(clinicConfig, startTime);
   }
 
   // ── BOOK SELECTED: Proceed with all selected treatments ─────────

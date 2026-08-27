@@ -767,6 +767,7 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
       'confirm_no': { intent: 'confirmation_no', text: 'No' },
       'no': { intent: 'confirmation_no', text: 'No' },
       'confirm_change': { intent: 'correction', text: 'I want to change something' },
+      'confirm_cancel': { intent: 'cancellation', text: 'Cancel booking' },
       // Service list selections
       'service_0': { intent: 'booking_request', text: 'I want this treatment' },
       'service_1': { intent: 'booking_request', text: 'I want this treatment' },
