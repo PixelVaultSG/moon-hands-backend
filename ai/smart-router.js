@@ -1691,7 +1691,7 @@ async function handleBookingConfirmation(message, clinicConfig, patientPhone, cu
   }
   
   // NO — ask what to change (with interactive buttons)
-  if (isDenial(message) || lower.includes('edit') || lower === 'edit') {
+  if (isDenial(message) || lower.includes('edit') || lower === 'edit' || lower.includes('change')) {
     setState(patientPhone, BOOKING_STATES.EDITING_BOOKING, data);
     const { getEditMenuButtons } = require('./whatsapp-interactive');
     return {

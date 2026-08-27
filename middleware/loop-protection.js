@@ -69,8 +69,14 @@ class LoopDetector {
   /**
    * Check if we should process this incoming message.
    * Returns: { proceed, reason, isDuplicate, isLoop }
+   * 
+   * @param {string} messageId - Unique message ID for deduplication
+   * @param {string} fromPhone - Sender phone number
+   * @param {string} toPhone - Recipient phone number (our business number)
+   * @param {string} messageText - Message content
+   * @param {boolean} isInteractive - True if this is an interactive button/list tap (never a loop)
    */
-  checkIncoming(messageId, fromPhone, toPhone, messageText) {
+  checkIncoming(messageId, fromPhone, toPhone, messageText, isInteractive = false) {
     const now = Date.now();
     const key = `${fromPhone}:${toPhone}`;
     const record = this.getRecord(key);
@@ -101,7 +107,14 @@ class LoopDetector {
       };
     }
 
-    // 3. BOT SIGNATURE: Check if incoming message looks like an auto-reply
+    // 3. INTERACTIVE BYPASS: Button taps and list selections are NEVER loops.
+    // They're deliberate user actions. Track them but skip all loop detection.
+    if (isInteractive) {
+      record.exchanges.push({ time: now, from: 'them', text: `[INTERACTIVE] ${messageText.substring(0, 100)}` });
+      return { proceed: true, reason: null, isDuplicate: false, isLoop: false };
+    }
+
+    // 4. BOT SIGNATURE: Check if incoming message looks like an auto-reply
     const botScore = this.detectBotSignature(messageText);
     if (botScore.isBot) {
       console.log(`[LOOP_PROTECTION] Bot signature detected from ${fromPhone}: ${botScore.matchedPattern}`);
@@ -113,7 +126,7 @@ class LoopDetector {
       }
     }
 
-    // 4. VELOCITY CHECK: Too many BACK-AND-FORTH exchanges = loop
+    // 5. VELOCITY CHECK: Too many BACK-AND-FORTH exchanges = loop
     // NOT triggered by multi-bubble messages (multiple incoming without our reply).
     // Only triggered when we reply AND they reply AND we reply AND they reply...
     record.exchanges.push({ time: now, from: 'them', text: messageText.substring(0, 100) });

@@ -605,11 +605,14 @@ async function handleWebhook(req, res, channel, url) {
     addTrace(message.from, 'RATE_LIMIT', 'PASSED');
     
     // Layer 9: LOOP PROTECTION (prevent infinite bot↔bot loops)
+    // CRITICAL: Interactive button taps (list_reply/button_reply) are NEVER loops —
+    // they're deliberate user actions. Skip bot signature & velocity checks for these.
     const loopCheck = loopDetector.checkIncoming(
       message.messageId,
       message.from,
       message.to,
-      sanitizedText
+      sanitizedText,
+      !!message.interactiveId  // isInteractive — skip loop checks for button taps
     );
     
     if (!loopCheck.proceed) {
