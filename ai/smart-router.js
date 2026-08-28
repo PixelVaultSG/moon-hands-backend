@@ -856,7 +856,38 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
     resetIdle(patientPhone);
     return { text: "No problem! Let me know if you need anything else.", source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
   }
-  
+
+  // ── OFF-TOPIC ESCAPE: patient changed the subject mid-flow ───────────
+  // A stale booking state must NEVER trap unrelated messages. If the patient
+  // asks about treatments, prices, hours, etc. while a booking state is active,
+  // exit the booking flow and answer their actual question.
+  // (Date/time answers and bare treatment names still continue the booking —
+  //  only messages with a clear NON-booking intent escape.)
+  if (!fields.date && !fields.time) {
+    const isBareServiceName = services.some(s => msgLower === s.name.toLowerCase());
+    if (!isBareServiceName) {
+      const { matchIntents } = require('./intent-matcher');
+      const OFF_TOPIC_INTENTS = [
+        'service_list', 'treatment_enquiry', 'pricing_general', 'pricing_specific',
+        'pricing_inquiry', 'operating_hours', 'location', 'location_inquiry',
+        'faq', 'faq_prep', 'faq_aftercare', 'greeting', 'goodbye',
+        'check_appointment', 'human_handoff', 'language_switch', 'clarification'
+      ];
+      const offTopicMatch = (matchIntents(message, conversationHistory, false) || [])
+        .find(m => m.confidence >= 0.7 && OFF_TOPIC_INTENTS.includes(m.intent));
+      // service_inquiry escapes ONLY with an explicit question phrase
+      // ("know more about X", "do you offer X") — never for bare names
+      const inquiryMatch = !offTopicMatch && (matchIntents(message, conversationHistory, false) || [])
+        .find(m => m.intent === 'service_inquiry' && m.confidence >= 0.85 && m.params?.treatment && msgLower !== m.params.treatment);
+      const escapeIntent = offTopicMatch || inquiryMatch;
+      if (escapeIntent) {
+        console.log(`[BOOKING_FLOW] Off-topic '${escapeIntent.intent}' in state ${currentState.state} — exiting booking flow, re-routing`);
+        resetIdle(patientPhone);
+        return await routeMessage(message, clinicConfig, patientPhone, conversationHistory);
+      }
+    }
+  }
+
   switch (currentState.state) {
     case BOOKING_STATES.BOOKING_OFFERED:
       // Bot offered to help with booking ("Would you like me to assist with booking?")

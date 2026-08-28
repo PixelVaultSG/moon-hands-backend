@@ -76,13 +76,14 @@ const INTENT_PATTERNS = {
     // Specific treatment inquiry: "do you do Botox?", "can i get HIFU?", "botox?"
     // CRITICAL: The "can i get" pattern excludes booking words (slot, appointment, booking)
     // so "can i get a slot" goes to booking_request instead.
-    regex: /(?:do\s+(?:you|u)\s+(?:do|have|offer)\s+(.+?)(?:\?|$)|can\s+i\s+get\s+(?:a|an)?\s*(?!slot|appointment|booking)(.+?)(?:\?|$)|is\s+(.+?)\s+available|^(botox|filler|hifu|rejuran|thread|laser|facial|peel|microneedling|picosure)s?\??$)/i,
-    keywords: ['do you do', 'can i get', 'is available', 'botox', 'filler', 'hifu', 'rejuran', 'thread', 'laser', 'facial', 'peel'],
+    regex: /(?:do\s+(?:you|u)\s+(?:do|have|offer)\s+(.+?)(?:\?|$)|can\s+i\s+get\s+(?:a|an)?\s*(?!slot|appointment|booking)(.+?)(?:\?|$)|is\s+(.+?)\s+available|^(botox|filler|hifu|rejuran|thread|laser|facial|peel|microneedling|picosure)s?\??$|(?:know|learn)\s+more\s+about\s+(.+?)(?:\?|$)|tell\s+me\s+(?:more\s+)?about\s+(.+?)(?:\?|$)|(?:more|details?|info)\s+(?:about|on)\s+(.+?)(?:\?|$))/i,
+    keywords: ['do you do', 'can i get', 'is available', 'know more about', 'tell me about', 'botox', 'filler', 'hifu', 'rejuran', 'thread', 'laser', 'facial', 'peel'],
     weight: 0.85,
     extract: (match, msg) => {
-      // match[1] = do you have CAPTURE, match[2] = can i get CAPTURE, 
+      // match[1] = do you have CAPTURE, match[2] = can i get CAPTURE,
       // match[3] = is CAPTURE available, match[4] = standalone treatment
-      let treatment = match[1] || match[2] || match[3] || match[4];
+      // match[5] = know/learn more about CAPTURE, match[6] = tell me about CAPTURE, match[7] = details on CAPTURE
+      let treatment = match[1] || match[2] || match[3] || match[4] || match[5] || match[6] || match[7];
       if (treatment) {
         treatment = treatment.trim().toLowerCase().replace(/\?$/, ''); // Remove trailing ?
         // Verify it's a treatment name, not generic words

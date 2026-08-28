@@ -357,8 +357,13 @@ function extractBookingFields(message, services = []) {
 }
 
 function isConfirmation(message) {
+  // Must be a PURE/short affirmative — not a sentence that merely contains "yes".
+  // "Yes" ✓  "Yes please" ✓  "Yes I want to know more about Botox" ✗
+  const l = message.toLowerCase().trim().replace(/[!.,?]+$/, '');
+  const words = l.split(/\s+/);
+  if (words.length > 4) return false; // Long messages are substantive, not confirmations
   return ['yes','yeah','yup','correct',"that's right",'right','sure','ok','okay','yep','true','accurate','both','go ahead','fine','proceed','confirm','confirmed','mhm','alright','definitely','of course','absolutely','certainly','gladly','happily','by all means','very well']
-    .some(w => message.toLowerCase().trim().includes(w));
+    .some(w => l === w || l.startsWith(w + ' '));
 }
 
 function isDenial(message) {
