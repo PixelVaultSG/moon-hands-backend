@@ -34,7 +34,7 @@ const { generateICalFeed } = require('../utils/ical-generator');
 const { recordMessage, recordRateLimit, recordLoop, recordError } = require('../monitoring/uptime-metrics');
 const { checkLimit, trackSpend } = require('../middleware/cost-protection');
 const { logEvent, getDeviceFingerprint, classifyActor } = require('../monitoring/audit-system');
-const { isStaffActive, pauseBot, shouldAutoPause, notifyStaffViaWhatsApp } = require('../middleware/staff-takeover');
+const { isStaffActive, pauseBot, shouldAutoPause, notifyStaffViaWhatsApp, getResumeTimestamp } = require('../middleware/staff-takeover');
 
 // ─── RESPONSE SANITIZER (post-process OpenAI output) ─────────────
 // Strips forbidden phrases (Hello!, Welcome, etc.) that OpenAI keeps generating.
@@ -673,6 +673,24 @@ async function handleWebhook(req, res, channel, url) {
         reason: 'STAFF_TAKEOVER',
         staffActive: true
       });
+    }
+
+    // ─── LAYER 9.7: STALE PRE-RESUME MESSAGE GUARD ─────────────────
+    // Messages the patient sent WHILE the bot was paused were deliberately
+    // not answered. If WhatsApp/360dialog redelivers them after staff resumes
+    // the bot, answering them now would flood the patient with out-of-context
+    // replies. Drop anything timestamped before the resume moment.
+    if (message.timestamp) {
+      const resumedAt = getResumeTimestamp(message.from);
+      const msgTimeMs = Number(message.timestamp) * 1000; // WA timestamp is unix seconds
+      if (resumedAt && msgTimeMs && msgTimeMs < resumedAt) {
+        console.log(`[STAFF_TAKEOVER] Dropping stale pre-resume message from ${message.from.slice(-4)} (sent ${Math.round((resumedAt - msgTimeMs)/1000)}s before resume)`);
+        addTrace(message.from, 'STAFF_TAKEOVER', 'STALE_DROPPED', message.messageId || '');
+        return sendSecurityResponse(res, 200, 'Stale pre-resume message dropped', {
+          processed: false,
+          reason: 'STALE_PRE_RESUME'
+        });
+      }
     }
     
     // Layer 10: Route to appropriate AI handler

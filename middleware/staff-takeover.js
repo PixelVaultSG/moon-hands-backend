@@ -20,6 +20,31 @@
 
 // Format: { patientPhone: { status: 'bot_active'|'staff_active'|'auto_paused', pausedAt: timestamp, staffChatId: string, reason: string, clinicId: string } }
 const takeoverState = new Map();
+
+// ─── RESUME TIMESTAMP TRACKING ───────────────────────────────────
+// When a bot is resumed, any patient message timestamped BEFORE the
+// resume moment is STALE (it was already seen — and deliberately not
+// answered — while the staff had the conversation paused).
+// 360dialog/WhatsApp may redeliver such messages; answering them after
+// resume floods the patient with out-of-context replies. webhook.js
+// checks getResumeTimestamp() and silently drops stale messages.
+const resumeTimestamps = new Map(); // patientPhone → resume time (ms)
+const RESUME_GUARD_TTL_MS = 24 * 60 * 60 * 1000; // keep guard for 24h
+
+function markResumed(patientPhone) {
+  resumeTimestamps.set(patientPhone, Date.now());
+}
+
+function getResumeTimestamp(patientPhone) {
+  const ts = resumeTimestamps.get(patientPhone);
+  if (!ts) return null;
+  if (Date.now() - ts > RESUME_GUARD_TTL_MS) {
+    resumeTimestamps.delete(patientPhone);
+    return null;
+  }
+  return ts;
+}
+
 const AUTO_RESUME_MS = 30 * 60 * 1000; // 30 minutes
 const CLEANUP_INTERVAL_MS = 5 * 60 * 1000; // Run cleanup every 5 minutes
 
@@ -36,6 +61,7 @@ function isStaffActive(patientPhone) {
     const elapsed = Date.now() - state.pausedAt;
     if (elapsed > AUTO_RESUME_MS) {
       console.log(`[STAFF_TAKEOVER] Auto-resumed ${patientPhone.slice(-4)} after ${Math.round(elapsed/60000)}min`);
+      markResumed(patientPhone);
       state.status = 'bot_active';
       takeoverState.delete(patientPhone);
       return { active: false, wasResumed: true };
@@ -81,7 +107,8 @@ function resumeBot(patientPhone) {
   if (!existing) {
     return { success: false, error: 'Patient was not paused' };
   }
-  
+
+  markResumed(patientPhone);
   takeoverState.delete(patientPhone);
   console.log(`[STAFF_TAKEOVER] RESUMED ${patientPhone.slice(-4)}`);
   return { success: true, patientPhone: patientPhone.slice(-4), wasPausedFor: Date.now() - existing.pausedAt };
@@ -138,6 +165,7 @@ function cleanupExpiredPauses() {
     if (state.status !== 'bot_active') {
       const elapsed = Date.now() - state.pausedAt;
       if (elapsed > AUTO_RESUME_MS) {
+        markResumed(phone);
         takeoverState.delete(phone);
         resumed++;
         console.log(`[STAFF_TAKEOVER] Cleanup auto-resumed ${phone.slice(-4)} (${Math.round(elapsed/60000)}min)`);
@@ -342,6 +370,8 @@ module.exports = {
   shouldAutoPause,
   getPausedConversations,
   cleanupExpiredPauses,
+  getResumeTimestamp,
+  markResumed,
   AUTO_RESUME_MS,
   notifyStaffViaWhatsApp,
   // Telegram command handlers

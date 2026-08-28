@@ -520,7 +520,21 @@ const QUICK_MENU_KEYBOARD = {
 // ─── INLINE KEYBOARD CALLBACK HANDLER ────────────────────────────
 // Handles taps on inline buttons (e.g., "▶️ Resume Bot", "🔄 Suggest Alternative")
 
-bot.on('callback_query', safeHandler('callback_query', async (ctx) => {
+bot.on('callback_query', async (ctx, next) => {
+  // Wrap manually so we can call next() for unmatched callbacks
+  // (safeHandler doesn't pass next through, which would swallow
+  //  callbacks handled by bot.action() registrations below)
+  try {
+    auditCommand(ctx.from?.id, 'callback_query', true);
+    await callbackQueryRouter(ctx, next);
+  } catch (err) {
+    console.error(`[TELEGRAM] callback_query error:`, err.message);
+    auditCommand(ctx.from?.id, 'callback_query', false, err.message);
+    ctx.reply('⚠️ Command failed. Try again in a moment.').catch(() => {});
+  }
+});
+
+async function callbackQueryRouter(ctx, next) {
   // SECURITY: Validate callback query structure before processing
   if (!ctx.callbackQuery || !ctx.callbackQuery.data) {
     console.warn('[SECURITY] Invalid callback_query: missing data');
@@ -645,9 +659,11 @@ bot.on('callback_query', safeHandler('callback_query', async (ctx) => {
     return;
   }
   
-  // Unmatched callback — let other handlers process it
-  return;
-}));
+  // Unmatched callback — pass to bot.action() handlers registered below
+  // (clinic_addservice:, clinic_updateprice:, clinic_hours:, clinic_faq:,
+  //  clinic_voice:, appt_yes:, appt_no:, etc.)
+  return next();
+}
 
 // ─── BUTTON TEXT HANDLERS ────────────────────────────────────────
 // These handle taps on the ReplyKeyboard buttons (not /commands)
