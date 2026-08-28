@@ -869,15 +869,51 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
           return await attemptBooking(clinicConfig, patientPhone, offerData, conversationHistory, startTime);
         }
         if (offerData.date) {
-          setState(patientPhone, BOOKING_STATES.AWAITING_TIME, { date: offerData.date, treatment: offerData.treatment });
+          const offerTreatments = offerData.treatments || (offerData.treatment ? [offerData.treatment] : []);
+          setState(patientPhone, BOOKING_STATES.AWAITING_TIME, { date: offerData.date, treatment: offerData.treatment, treatments: offerTreatments });
+          // Show time slot buttons (same template as the rest of the booking flow)
+          try {
+            const { getAvailableSlots } = require('./availability-engine');
+            const avail = await getAvailableSlots(clinicConfig.id, offerData.date, offerTreatments, clinicConfig);
+            if (avail.available && avail.slots.length > 0) {
+              const { getTimeSlotButtons } = require('./whatsapp-interactive');
+              return {
+                text: `Great! Here are available times on ${offerData.date}:\n🕐 ${avail.operatingHours}`,
+                source: 'hardcoded',
+                cost_saved: 1,
+                latency_ms: Date.now() - startTime,
+                whatsappInteractive: getTimeSlotButtons(avail.slots, avail.operatingHours)
+              };
+            }
+          } catch (e) {
+            console.error(`[BOOKING_OFFERED] getAvailableSlots error: ${e.message}`);
+          }
           return { text: `Great! ${offerData.date} noted. What time works for you?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
         }
-        if (offerData.treatment) {
-          setState(patientPhone, BOOKING_STATES.AWAITING_DATE, { treatment: offerData.treatment });
-          return { text: `Perfect! What date works for your ${offerData.treatment} appointment?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+        // Treatment known (or nothing known) — show date buttons either way
+        const offerTreatments = offerData.treatments || (offerData.treatment ? [offerData.treatment] : []);
+        setState(patientPhone, BOOKING_STATES.AWAITING_DATE, offerData.treatment ? { treatment: offerData.treatment, treatments: offerTreatments } : {});
+        try {
+          const { getNextAvailableDates } = require('./availability-engine');
+          const { getDateButtonOptions } = require('./whatsapp-interactive');
+          const dateOptions = await getNextAvailableDates(clinicConfig.id, offerTreatments, clinicConfig, 3);
+          if (dateOptions.length > 0) {
+            return {
+              text: offerData.treatment
+                ? `Perfect! When would you like your ${offerData.treatment}?`
+                : 'Excellent! When would you like to come in?',
+              source: 'hardcoded',
+              cost_saved: 1,
+              latency_ms: Date.now() - startTime,
+              whatsappInteractive: getDateButtonOptions(dateOptions)
+            };
+          }
+        } catch (e) {
+          console.error(`[BOOKING_OFFERED] getNextAvailableDates error: ${e.message}`);
         }
-        setState(patientPhone, BOOKING_STATES.AWAITING_DATE, {});
-        return { text: `Excellent! What date works for you? (e.g., 'next Tuesday' or 'July 15')`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+        return { text: offerData.treatment
+          ? `Perfect! What date works for your ${offerData.treatment} appointment? (e.g., 'next Tuesday' or 'July 15')`
+          : `Excellent! What date works for you? (e.g., 'next Tuesday' or 'July 15')`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
       } else if (isDenial(message)) {
         resetIdle(patientPhone);
         return { text: `No problem! Feel free to ask about our treatments, pricing, or anything else.`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
@@ -900,17 +936,19 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
           const existingTreatment = currentState.data?.treatment || currentState.data?.treatments?.[0];
           const existingTreatments = currentState.data?.treatments || (existingTreatment ? [existingTreatment] : []);
           
-          // Try to find later slots on the same date
-          const sameDay = await findNextSlotsOnDate(clinicConfig.id, data.date, existingTreatments, clinicConfig, data.time);
-          if (sameDay.found && sameDay.slots.length > 0) {
+          // Show ALL available slots on the SAME date — keep the patient on
+          // the day they chose instead of bouncing them back to date selection
+          const { getAvailableSlots: _getSlots } = require('./availability-engine');
+          const sameDay = await _getSlots(clinicConfig.id, data.date, existingTreatments, clinicConfig);
+          if (sameDay.available && sameDay.slots.length > 0) {
             setState(patientPhone, BOOKING_STATES.AWAITING_TIME, { date: data.date, treatment: existingTreatment, treatments: existingTreatments });
             const { getTimeSlotButtons } = require('./whatsapp-interactive');
             return {
-              text: `Sorry, we're not open at ${data.time} on ${data.date}. Here are later times that day:`,
+              text: `Sorry, we're not open at ${data.time} on ${data.date}${v.openTime && v.closeTime ? ` (open ${v.openTime}–${v.closeTime})` : ''}. Here are times that work:`,
               source: 'hardcoded',
               cost_saved: 1,
               latency_ms: Date.now() - startTime,
-              whatsappInteractive: getTimeSlotButtons(sameDay.slots, v.openTime + '–' + v.closeTime)
+              whatsappInteractive: getTimeSlotButtons(sameDay.slots, sameDay.operatingHours)
             };
           }
           
@@ -1006,23 +1044,28 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
         const existingTreatments2 = currentState.data?.treatments || (existingTreatment2 ? [existingTreatment2] : []);
         
         try {
-          const { findNextSlotsOnDate, findNextAvailableAfter } = require('./availability-engine');
-          
-          // Try later slots on same day
-          const sameDay = await findNextSlotsOnDate(clinicConfig.id, date, existingTreatments2, clinicConfig, data.time);
-          if (sameDay.found && sameDay.slots.length > 0) {
+          const { getAvailableSlots, findNextAvailableAfter } = require('./availability-engine');
+
+          // Show ALL available slots on the SAME date — the patient already chose
+          // this day, so keep them on it. (Requested time may be after closing,
+          // so "later slots after 8pm" would find nothing and wrongly bounce
+          // the patient back to date selection.)
+          const sameDay = await getAvailableSlots(clinicConfig.id, date, existingTreatments2, clinicConfig);
+          if (sameDay.available && sameDay.slots.length > 0) {
+            setState(patientPhone, BOOKING_STATES.AWAITING_TIME, { date, treatment: existingTreatment2, treatments: existingTreatments2 });
             const { getTimeSlotButtons } = require('./whatsapp-interactive');
+            const hoursText = v.openTime && v.closeTime ? ` (${v.openTime}–${v.closeTime})` : '';
             return {
-              text: `Sorry, we're not open at ${data.time}. Here are available times that day:`,
+              text: `Sorry, we're not open at ${data.time}${hoursText ? ` — our hours on ${date} are ${hoursText}` : ''}. Here are times that work on ${date}:`,
               source: 'hardcoded',
               intents: ['time_suggestion'],
               cost_saved: 1,
               latency_ms: Date.now() - startTime,
-              whatsappInteractive: getTimeSlotButtons(sameDay.slots, v.openTime + '–' + v.closeTime)
+              whatsappInteractive: getTimeSlotButtons(sameDay.slots, sameDay.operatingHours)
             };
           }
-          
-          // No slots on this date — suggest next available dates
+
+          // No slots at all on this date — suggest next available dates
           const nextAvail = await findNextAvailableAfter(clinicConfig.id, existingTreatments2, clinicConfig, date);
           if (nextAvail.found) {
             setState(patientPhone, BOOKING_STATES.AWAITING_DATE, { treatment: existingTreatment2, treatments: existingTreatments2 });

@@ -20,7 +20,9 @@ const INTENT_PATTERNS = {
     // CRITICAL: Must be a PURE greeting with nothing else.
     // "Hi" ✓  "Hi there" ✗  "Hello! How are you" ✗  "hi, i want to book" ✗
     // Uses negative lookahead to reject multi-word non-greetings.
-    regex: /^(hi+|hello+|hey+|good\s+(morning|afternoon|evening)|gm|howdy)[\s!]*$/i,
+    // Typo-tolerant: "H", "Hi", "Hii", "Hey", "Hello" all match.
+    // A lone "h" is almost always a mistyped greeting — show the menu, not a generic reply.
+    regex: /^(hi+|hello+|hey+|h+|yo+|good\s+(morning|afternoon|evening)|gm|howdy)(\s+there)?[\s!?.]*$/i,
     keywords: ['hi', 'hello', 'hey', 'good morning', 'good afternoon'],
     weight: 1.0,
   },
@@ -281,9 +283,11 @@ function findIntentsInSegment(segment, isFirstContact = true) {
   const matches = [];
   
   for (const [intentName, pattern] of Object.entries(INTENT_PATTERNS)) {
-    // Skip greeting detection on follow-up messages (not first contact)
-    if (intentName === 'greeting' && !isFirstContact) continue;
-    
+    // Pure greetings ("Hi", "Hello") ALWAYS match — even mid-conversation.
+    // When a patient re-opens the chat with a greeting, they expect the welcome
+    // menu. Booking states are intercepted earlier in the router, so this cannot
+    // hijack an in-progress booking.
+
     let matched = false;
     let params = {};
     let confidence = 0;
@@ -444,9 +448,7 @@ function matchChineseIntents(message, isFirstContact = true) {
   const matches = [];
   
   for (const [intent, regex] of Object.entries(CHINESE_INTENTS)) {
-    // Skip greeting detection on follow-up messages
-    if (intent === 'greeting' && !isFirstContact) continue;
-    
+    // Pure greetings always match (see note in findIntentsInSegment)
     if (regex.test(message)) {
       matches.push({ intent, confidence: 0.9, params: {} });
     }
