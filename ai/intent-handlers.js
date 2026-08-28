@@ -436,11 +436,11 @@ async function handleCancelRequest({ clinicConfig, patientPhone }) {
   
   if (appointments.length === 1) {
     const appt = appointments[0];
-    return `I found your appointment:\n📅 ${formatDate(appt.appointment_date)} at ${formatTime(appt.appointment_time)}\n💆 ${appt.service_name || 'Treatment'}\n\nWould you like me to cancel this appointment? (Reply YES to confirm)`;
+    return `I found your appointment:\n📅 ${formatDate(appt.appointment_date)} at ${formatTime(appt.appointment_time)}\n💆 ${appt.service || 'Treatment'}\n\nWould you like me to cancel this appointment? (Reply YES to confirm)`;
   }
   
   // Multiple appointments
-  const list = appointments.map((a, i) => `${i + 1}. ${formatDate(a.appointment_date)} at ${formatTime(a.appointment_time)} — ${a.service_name || 'Treatment'}`).join('\n');
+  const list = appointments.map((a, i) => `${i + 1}. ${formatDate(a.appointment_date)} at ${formatTime(a.appointment_time)} — ${a.service || 'Treatment'}`).join('\n');
   return `I found multiple upcoming appointments:\n\n${list}\n\nWhich one would you like to cancel? (Reply with the number)`;
 }
 
@@ -466,10 +466,10 @@ async function handleRescheduleRequest({ clinicConfig, patientPhone }) {
   
   if (appointments.length === 1) {
     const appt = appointments[0];
-    return `I found your appointment:\n📅 ${formatDate(appt.appointment_date)} at ${formatTime(appt.appointment_time)}\n💆 ${appt.service_name || 'Treatment'}\n\nWhat date and time would you prefer instead?`;
+    return `I found your appointment:\n📅 ${formatDate(appt.appointment_date)} at ${formatTime(appt.appointment_time)}\n💆 ${appt.service || 'Treatment'}\n\nWhat date and time would you prefer instead?`;
   }
   
-  const list = appointments.map((a, i) => `${i + 1}. ${formatDate(a.appointment_date)} at ${formatTime(a.appointment_time)} — ${a.service_name || 'Treatment'}`).join('\n');
+  const list = appointments.map((a, i) => `${i + 1}. ${formatDate(a.appointment_date)} at ${formatTime(a.appointment_time)} — ${a.service || 'Treatment'}`).join('\n');
   return `I found multiple appointments:\n\n${list}\n\nWhich one would you like to reschedule? (Reply with the number)`;
 }
 
@@ -494,7 +494,7 @@ async function handleCheckAppointment({ clinicConfig, patientPhone }) {
   }
   
   const list = appointments.map(a => 
-    `📅 ${formatDate(a.appointment_date)} at ${formatTime(a.appointment_time)}\n💆 ${a.service_name || 'Treatment'}\n📍 Status: ${a.status}${a.notes ? `\n📝 Notes: ${a.notes}` : ''}`
+    `📅 ${formatDate(a.appointment_date)} at ${formatTime(a.appointment_time)}\n💆 ${a.service || 'Treatment'}\n📍 Status: ${a.status}${a.notes ? `\n📝 Notes: ${a.notes}` : ''}`
   ).join('\n\n');
   
   return `Here are your upcoming appointments:\n\n${list}`;

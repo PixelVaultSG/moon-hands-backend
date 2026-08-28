@@ -44,10 +44,12 @@ async function handlePending(bot, msg) {
     // SECURITY: Scope to clinics this user is authorized for
     const clinicIds = await getAuthorizedClinicIds(chatId);
     
+    // NOTE: createBooking (WhatsApp build) sets status='pending'.
+    // 'pending_approval' is a legacy value — match both so old rows still show.
     let query = db.supabase
       .from('appointments')
       .select('*, clients(name)')
-      .eq('status', 'pending_approval')
+      .in('status', ['pending', 'pending_approval'])
       .order('created_at', { ascending: true });
     
     // If user is linked to specific clinics, filter by those

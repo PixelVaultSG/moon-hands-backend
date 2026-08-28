@@ -599,7 +599,13 @@ bot.on('callback_query', safeHandler('callback_query', async (ctx) => {
     const bookingId = data.replace('confirm_alt_', '');
     // Forward to booking confirmation handler
     const { handlePatientConfirmAlternative } = require('./booking-notifications');
-    await handlePatientConfirmAlternative(ctx, bookingId);
+    const result = await handlePatientConfirmAlternative(bookingId);
+    if (result.success) {
+      await ctx.answerCbQuery('Alternative confirmed');
+      await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
+    } else {
+      await ctx.answerCbQuery(`❌ ${result.error}`, { show_alert: true });
+    }
     return;
   }
   
@@ -699,7 +705,52 @@ bot.hears('▶️ Resume AI', safeHandler('▶️ Resume AI', async (ctx) => {
 }));
 
 bot.hears('📋 My Bookings', safeHandler('📋 My Bookings', async (ctx) => {
-  await commands.handleClients(ctx);
+  // Show UPCOMING APPOINTMENTS — scoped to the clinic(s) this chat is linked to.
+  // (Previously this showed the admin's client list, which is meaningless
+  //  for clinic staff.) Admin (no linked clinics) sees all clinics' bookings.
+  const chatId = ctx.chat.id;
+  const { supabase } = require('../supabase/client');
+  const { escapeMarkdown } = require('./booking-notifications');
+
+  const { data: linked } = await supabase
+    .from('clients')
+    .select('id, name')
+    .contains('telegram_chat_ids', [chatId]);
+  const clinicIds = (linked || []).map(c => c.id);
+
+  const today = new Date().toISOString().split('T')[0];
+  let query = supabase
+    .from('appointments')
+    .select('*, clients(name)')
+    .gte('appointment_date', today)
+    .in('status', ['confirmed', 'pending', 'booked', 'pending_alternative'])
+    .order('appointment_date', { ascending: true })
+    .order('appointment_time', { ascending: true })
+    .limit(15);
+  if (clinicIds.length > 0) {
+    query = query.in('client_id', clinicIds);
+  }
+
+  const { data: bookings, error } = await query;
+  if (error) {
+    console.error('[TELEGRAM] My Bookings query error:', error.message);
+    return ctx.reply('⚠️ Could not load bookings. Try again in a moment.');
+  }
+  if (!bookings || bookings.length === 0) {
+    return ctx.reply('📋 No upcoming bookings.');
+  }
+
+  const statusEmoji = { confirmed: '✅', booked: '✅', pending: '⏳', pending_alternative: '🔄' };
+  const lines = [`📋 *UPCOMING BOOKINGS (${bookings.length})*`, ''];
+  for (const b of bookings) {
+    const clinicTag = clinicIds.length === 0 ? ` · ${escapeMarkdown(b.clients?.name || '?')}` : '';
+    lines.push(
+      `${statusEmoji[b.status] || '❓'} *${b.appointment_date}* ${String(b.appointment_time).slice(0, 5)} — ${escapeMarkdown(b.customer_name || '?')} — ${escapeMarkdown(b.service || 'General')}${clinicTag}`
+    );
+  }
+  lines.push('');
+  lines.push('_⏳ = pending approval · 🔄 = alternative time suggested_');
+  await ctx.reply(lines.join('\n'), { parse_mode: 'Markdown' });
 }));
 
 bot.hears('❓ Help', safeHandler('❓ Help', async (ctx) => {

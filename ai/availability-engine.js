@@ -62,7 +62,9 @@ async function getAvailableSlots(clientId, dateStr, treatmentNames, clientConfig
     .select('appointment_time, duration')
     .eq('client_id', clientId)
     .eq('appointment_date', dateStr)
-    .in('status', ['confirmed', 'pending', 'booked'])
+    // 'pending_alternative' = clinic suggested a different time via Telegram;
+    // the slot stays blocked until the patient accepts or declines.
+    .in('status', ['confirmed', 'pending', 'booked', 'pending_alternative'])
     .order('appointment_time');
   
   if (error) {

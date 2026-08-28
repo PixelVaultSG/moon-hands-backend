@@ -142,7 +142,8 @@ async function checkAndSendClosingSummaries() {
           .from('appointments')
           .select('id, customer_name, service, appointment_date, appointment_time')
           .eq('client_id', clinic.id)
-          .eq('status', 'pending_approval')
+          // WhatsApp build writes 'pending'; 'pending_approval' is legacy
+          .in('status', ['pending', 'pending_approval'])
           .gte('appointment_date', new Date().toISOString().split('T')[0]);
         
         if (pendingErr) {

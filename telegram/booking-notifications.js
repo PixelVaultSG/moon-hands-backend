@@ -73,6 +73,29 @@ async function sendTelegramMessage(text, chatId = ADMIN_CHAT_ID, replyMarkup = u
   }
 }
 
+// ─── APPOINTMENT NORMALIZER ──────────────────────────────────────
+// The appointments table schema (single source of truth, matching the
+// WhatsApp build's createBooking):
+//   customer_name, customer_phone, service, appointment_date,
+//   appointment_time, duration, status, notes, client_id
+// Older callers pass a legacy shape (patient_name / date / treatment).
+// This normalizer accepts BOTH so every notification renders correctly.
+function normalizeAppointment(a = {}) {
+  return {
+    id: a.id || '',
+    date: a.appointment_date || a.date,
+    time: a.appointment_time || a.time,
+    name: a.customer_name || a.patient_name || 'Unknown',
+    phone: a.customer_phone || a.patient_phone || 'N/A',
+    // Multi-treatment bookings are stored as "Botox + Hydrafacial" in `service`
+    service: a.service || a.service_name || a.treatment || 'General consultation',
+    notes: a.notes || '',
+    status: a.status || 'pending',
+    duration: a.duration || a.duration_minutes || null,
+    clientId: a.client_id || a.clinic_id || null,
+  };
+}
+
 // ─── REAL-TIME BOOKING NOTIFICATIONS ─────────────────────────────
 
 /**
@@ -80,31 +103,33 @@ async function sendTelegramMessage(text, chatId = ADMIN_CHAT_ID, replyMarkup = u
  * Clinic sees this immediately on their phone.
  */
 async function notifyBookingCreated(appointment, clinicConfig) {
+  const appt = normalizeAppointment(appointment);
   const chatId = clinicConfig.telegram_chat_id || ADMIN_CHAT_ID;
-  const dateStr = formatDateSG(appointment.date);
-  const timeStr = formatTimeSG(appointment.time);
-  const dayName = getDayName(appointment.date);
-  const apptId = appointment.id || '';
-  
+  const dateStr = formatDateSG(appt.date);
+  const timeStr = formatTimeSG(appt.time);
+  const dayName = getDayName(appt.date);
+  const apptId = appt.id;
+
   const message = [
     `✅ *NEW BOOKING*`,
     ``,
     `📅 *${dayName}, ${dateStr} at ${timeStr}*`,
-    `👤 *${escapeMarkdown(appointment.patient_name || 'Unknown')}*`,
-    `📱 ${escapeMarkdown(appointment.patient_phone || 'N/A')}`,
-    `🩺 ${escapeMarkdown(appointment.treatment || 'General consultation')}`,
-    appointment.notes ? `📝 ${escapeMarkdown(appointment.notes)}` : '',
+    `👤 *${escapeMarkdown(appt.name)}*`,
+    `📱 ${escapeMarkdown(appt.phone)}`,
+    `🩺 ${escapeMarkdown(appt.service)}`,
+    appt.duration ? `⏱ ${appt.duration} min` : '',
+    appt.notes ? `📝 ${escapeMarkdown(appt.notes)}` : '',
     ``,
-    appointment.status === 'pending' 
+    appt.status === 'pending'
       ? `⏳ *Status: Pending your approval*`
       : `✅ *Status: Confirmed*`,
     ``,
     `_Received: ${formatTimeSG(new Date())}_`,
   ].filter(Boolean).join('\n');
-  
+
   // Add inline buttons for pending bookings
   const clinicId = clinicConfig.id || clinicConfig.clinic_id || null;
-  const replyMarkup = appointment.status === 'pending' ? {
+  const replyMarkup = appt.status === 'pending' ? {
     inline_keyboard: [
       [
         { text: '✅ Approve', callback_data: `approve_${apptId}` },
@@ -129,16 +154,17 @@ async function notifyBookingCreated(appointment, clinicConfig) {
  * Send notification when a booking is cancelled.
  */
 async function notifyBookingCancelled(appointment, clinicConfig, reason = '') {
-  const dateStr = formatDateSG(appointment.date);
-  const timeStr = formatTimeSG(appointment.time);
+  const appt = normalizeAppointment(appointment);
+  const dateStr = formatDateSG(appt.date);
+  const timeStr = formatTimeSG(appt.time);
   const clinicId = clinicConfig.id || clinicConfig.clinic_id || null;
-  
+
   const message = [
     `❌ *BOOKING CANCELLED*`,
     ``,
     `📅 *${dateStr} at ${timeStr}*`,
-    `👤 *${escapeMarkdown(appointment.patient_name || 'Unknown')}*`,
-    `🩺 ${escapeMarkdown(appointment.treatment || 'General consultation')}`,
+    `👤 *${escapeMarkdown(appt.name)}*`,
+    `🩺 ${escapeMarkdown(appt.service)}`,
     reason ? `📝 Reason: ${escapeMarkdown(reason)}` : '',
     ``,
     `_Cancelled at: ${formatTimeSG(new Date())}_`,
@@ -156,24 +182,26 @@ async function notifyBookingCancelled(appointment, clinicConfig, reason = '') {
 /**
  * Send notification when a booking is rescheduled.
  */
-async function notifyBookingRescheduled(oldAppt, newAppt, clinicConfig) {
+async function notifyBookingRescheduled(oldApptRaw, newApptRaw, clinicConfig) {
+  const oldAppt = normalizeAppointment(oldApptRaw);
+  const newAppt = normalizeAppointment(newApptRaw);
   const oldDate = formatDateSG(oldAppt.date);
   const oldTime = formatTimeSG(oldAppt.time);
   const newDate = formatDateSG(newAppt.date);
   const newTime = formatTimeSG(newAppt.time);
   const clinicId = clinicConfig.id || clinicConfig.clinic_id || null;
-  
+
   const message = [
     `🔄 *BOOKING RESCHEDULED*`,
     ``,
-    `👤 *${escapeMarkdown(newAppt.patient_name || 'Unknown')}*`,
-    `🩺 ${escapeMarkdown(newAppt.treatment || 'General consultation')}`,
+    `👤 *${escapeMarkdown(newAppt.name)}*`,
+    `🩺 ${escapeMarkdown(newAppt.service)}`,
     ``,
     `*FROM:* ${oldDate} at ${oldTime}`,
     `*TO:* ${newDate} at ${newTime}`,
     ``,
     newAppt.status === 'pending'
-      ? `⏳ *Status: Pending your approval*\nReply /approve ${newAppt.id?.slice(0, 6) || ''} to confirm`
+      ? `⏳ *Status: Pending your approval*\nReply /approve ${escapeMarkdown(newAppt.phone)} to confirm`
       : `✅ *Status: Confirmed*`,
     ``,
     `_Updated: ${formatTimeSG(new Date())}_`,
@@ -214,10 +242,11 @@ async function sendWeeklyRoundup(clinicConfig, supabase) {
     .from('appointments')
     .select('*')
     .eq('client_id', clinicId)
-    .gte('date', today.toISOString().split('T')[0])
-    .lte('date', nextWeek.toISOString().split('T')[0])
-    .order('date', { ascending: true })
-    .order('time', { ascending: true });
+    .gte('appointment_date', today.toISOString().split('T')[0])
+    .lte('appointment_date', nextWeek.toISOString().split('T')[0])
+    .in('status', ['confirmed', 'pending', 'booked'])
+    .order('appointment_date', { ascending: true })
+    .order('appointment_time', { ascending: true });
   
   if (error) {
     console.error('[BOOKING_NOTIFY] Weekly roundup query failed:', error.message);
@@ -237,8 +266,8 @@ async function sendWeeklyRoundup(clinicConfig, supabase) {
   // Group by date
   const byDate = {};
   for (const appt of appointments) {
-    if (!byDate[appt.date]) byDate[appt.date] = [];
-    byDate[appt.date].push(appt);
+    if (!byDate[appt.appointment_date]) byDate[appt.appointment_date] = [];
+    byDate[appt.appointment_date].push(appt);
   }
   
   // Build message
@@ -258,12 +287,12 @@ async function sendWeeklyRoundup(clinicConfig, supabase) {
     lines.push(`*${dayName}, ${formatDateSG(date)}*`);
     for (const appt of appts) {
       const statusEmoji = appt.status === 'confirmed' ? '✅' : '⏳';
-      lines.push(`  ${statusEmoji} ${formatTimeSG(appt.time)} — ${escapeMarkdown(appt.patient_name || '?')} (${escapeMarkdown(appt.treatment || 'General')})`);
+      lines.push(`  ${statusEmoji} ${formatTimeSG(appt.appointment_time)} — ${escapeMarkdown(appt.customer_name || '?')} (${escapeMarkdown(appt.service || 'General')})`);
     }
     lines.push('');
   }
   
-  lines.push(`Reply /approveall to confirm all pending bookings, or /reject [ID] to cancel.`);
+  lines.push(`Reply /pending to review pending bookings, /approve <phone> to confirm, or /reject <phone> [reason] to cancel.`);
   
   // SECURITY: Use multi-clinic sender (scoped to clinic's telegram_chat_ids[])
   await sendClinicNotification(clinicId, lines.join('\n'));
@@ -278,12 +307,15 @@ async function sendWeeklyRoundup(clinicConfig, supabase) {
  * @returns {boolean} true if slot is available
  */
 async function isSlotAvailable(supabase, clinicId, date, time, durationMinutes = 30) {
+  // Statuses that BLOCK a slot — must match ai/availability-engine.js exactly:
+  // pending bookings hold the slot until the clinic rejects them, and
+  // pending_alternative holds it while an alternative time is being negotiated.
   const { data: existing, error } = await supabase
     .from('appointments')
     .select('*')
     .eq('client_id', clinicId)
-    .eq('date', date)
-    .eq('status', 'confirmed')
+    .eq('appointment_date', date)
+    .in('status', ['confirmed', 'pending', 'booked', 'pending_alternative'])
     .not('id', 'is', null);
   
   if (error) {
@@ -300,9 +332,9 @@ async function isSlotAvailable(supabase, clinicId, date, time, durationMinutes =
   
   // Check overlap with existing bookings
   for (const appt of existing) {
-    const [exHour, exMin] = appt.time.split(':').map(Number);
+    const [exHour, exMin] = appt.appointment_time.split(':').map(Number);
     const exStart = exHour * 60 + exMin;
-    const exEnd = exStart + (appt.duration_minutes || 30);
+    const exEnd = exStart + (appt.duration || 60);
     
     // Overlap check: (StartA < EndB) and (EndA > StartB)
     if (reqStart < exEnd && reqEnd > exStart) {
@@ -353,7 +385,7 @@ async function sendDailyClosingSummary(clinicConfig, supabase) {
     .select('*')
     .eq('client_id', clinicId)
     .eq('appointment_date', tomorrowStr)
-    .in('status', ['confirmed', 'pending'])
+    .in('status', ['confirmed', 'pending', 'booked', 'pending_alternative'])
     .order('appointment_time', { ascending: true });
   
   if (error) {
@@ -391,7 +423,7 @@ async function sendDailyClosingSummary(clinicConfig, supabase) {
     for (const b of bookings) {
       // Calculate end time
       const [h, m] = b.appointment_time.split(':').map(Number);
-      const duration = b.duration_minutes || clinicConfig.appointment_duration_minutes || 30;
+      const duration = b.duration || clinicConfig.appointment_duration_minutes || 60;
       const startMinutes = h * 60 + m;
       const endMinutes = startMinutes + parseInt(duration);
       const endH = Math.floor(endMinutes / 60);
@@ -399,7 +431,7 @@ async function sendDailyClosingSummary(clinicConfig, supabase) {
       const timeStr = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}-${String(endH).padStart(2,'0')}:${String(endM).padStart(2,'0')}`;
       
       const statusEmoji = b.status === 'confirmed' ? '✅' : '⏳';
-      lines.push(`${statusEmoji} ${timeStr} — ${escapeMarkdown(b.customer_name || '?')} — ${escapeMarkdown(b.service_name || 'General')}`);
+      lines.push(`${statusEmoji} ${timeStr} — ${escapeMarkdown(b.customer_name || '?')} — ${escapeMarkdown(b.service || 'General')}`);
     }
     
     if (pendingCount > 0) {
@@ -448,26 +480,33 @@ async function handleClinicSuggestAlternative(staffChatId, alternativeTimeText) 
       return { success: false, error: 'Booking not found.' };
     }
     
-    // Store the alternative in the booking record
+    // Store the alternative in the booking record.
+    // NOTE: The appointments schema has no dedicated alternative column —
+    // we store it in `notes` (parsed back by extractAlternativeFromNotes)
+    // and hold the slot with status 'pending_alternative' (which the
+    // WhatsApp availability engine treats as BLOCKING — no double-booking
+    // while the patient decides).
+    const altNote = `Alternative suggested: ${alternativeTimeText}`;
     await supabase
       .from('appointments')
-      .update({ 
-        alternative_time_suggested: alternativeTimeText,
-        status: 'pending_alternative' 
+      .update({
+        notes: booking.notes ? `${booking.notes} | ${altNote}` : altNote,
+        status: 'pending_alternative',
+        updated_at: new Date().toISOString()
       })
       .eq('id', pending.bookingId);
-    
+
     // Clear pending
     pendingAlternatives.delete(staffChatId);
-    
+
     // Send alternative to patient via WhatsApp
     const { sendWhatsAppMessage } = require('../jobs/reminders');
     await sendWhatsAppMessage(
-      booking.patient_phone,
+      booking.customer_phone,
       `📅 *Alternative Time Suggested*\n\n` +
-      `Your clinic suggests: *${alternativeTimeText}*\n\n` +
-      `Would this work for you? Reply YES to confirm, or suggest another time.`,
-      booking.clinic_id
+      `For your ${booking.service || 'appointment'}:\n` +
+      `The clinic suggests: *${alternativeTimeText}*\n\n` +
+      `Would this work for you? Reply YES to confirm, or suggest another time.`
     );
     
     return { success: true, booking, alternativeTime: alternativeTimeText };
@@ -481,6 +520,12 @@ async function handleClinicSuggestAlternative(staffChatId, alternativeTimeText) 
  * Step 2: Patient confirms the alternative time
  * Called when patient replies "YES" to the alternative time suggestion
  */
+// Parse the alternative time back out of the notes field
+function extractAlternativeFromNotes(notes) {
+  const m = (notes || '').match(/Alternative suggested:\s*([^|]+)/i);
+  return m ? m[1].trim() : null;
+}
+
 async function handlePatientConfirmAlternative(bookingId) {
   try {
     const { data: booking } = await supabase
@@ -488,39 +533,35 @@ async function handlePatientConfirmAlternative(bookingId) {
       .select('*')
       .eq('id', bookingId)
       .single();
-    
-    if (!booking || !booking.alternative_time_suggested) {
+
+    const altTime = extractAlternativeFromNotes(booking?.notes);
+    if (!booking || !altTime) {
       return { success: false, error: 'No alternative time found for this booking.' };
     }
-    
+
     // Update booking: confirmed with alternative time
     await supabase
       .from('appointments')
-      .update({ 
+      .update({
         status: 'confirmed',
-        notes: (booking.notes || '') + ` | Alternative time: ${booking.alternative_time_suggested}`
+        notes: (booking.notes || '') + ` | Patient accepted alternative: ${altTime}`,
+        updated_at: new Date().toISOString()
       })
       .eq('id', bookingId);
-    
+
     // Notify clinic staff
-    const { data: client } = await supabase
-      .from('clients')
-      .select('id')
-      .eq('id', booking.clinic_id)
-      .single();
-    
-    if (client) {
+    if (booking.client_id) {
       await sendClinicNotification(
-        client.id,
+        booking.client_id,
         `✅ *Patient Accepted Alternative Time*\n\n` +
-        `👤 ${escapeMarkdown(booking.patient_name || 'Patient')}\n` +
-        `📅 New time: *${booking.alternative_time_suggested}*\n` +
-        `🩺 ${escapeMarkdown(booking.treatment || 'General consultation')}\n\n` +
+        `👤 ${escapeMarkdown(booking.customer_name || 'Patient')}\n` +
+        `📅 New time: *${escapeMarkdown(altTime)}*\n` +
+        `🩺 ${escapeMarkdown(booking.service || 'General consultation')}\n\n` +
         `Booking confirmed.`,
         { includeAdmin: true }
       );
     }
-    
+
     return { success: true, booking };
   } catch (err) {
     console.error('[BOOKING_NOTIFY] Patient confirm alternative error:', err.message);

@@ -357,7 +357,7 @@ async function cancelBooking({ client_id, customer_phone, appointment_id, patien
         time: updated.appointment_time,
         patient_name: updated.customer_name,
         patient_phone: updated.customer_phone,
-        treatment: updated.service_name,
+        treatment: updated.service,
         status: 'cancelled',
       }, clinic, 'Patient cancelled via WhatsApp');
     } catch (notifyErr) {
@@ -367,7 +367,7 @@ async function cancelBooking({ client_id, customer_phone, appointment_id, patien
     return {
       success: true,
       appointment: updated,
-      message: `✅ Your appointment for ${target.service_name} on ${target.appointment_date} at ${target.appointment_time} has been cancelled.`
+      message: `✅ Your appointment for ${target.service} on ${target.appointment_date} at ${target.appointment_time} has been cancelled.`
     };
     
   } catch (err) {
@@ -402,7 +402,7 @@ async function rescheduleBooking({ client_id, customer_phone, new_date, new_time
     const old = appointments[0];
     
     // Check new slot availability
-    const availability = await checkAvailability({ client_id, date: new_date, service: old.service_name });
+    const availability = await checkAvailability({ client_id, date: new_date, service: old.service });
     if (!availability.success || !availability.slots.includes(new_time)) {
       return { success: false, error: `The new slot ${new_date} at ${new_time} is not available.` };
     }
@@ -418,7 +418,7 @@ async function rescheduleBooking({ client_id, customer_phone, new_date, new_time
       client_id,
       customer_name: old.customer_name,
       customer_phone: old.customer_phone,
-      service_name: old.service_name,
+      service_name: old.service,
       appointment_date: new_date,
       appointment_time: new_time,
       notes: old.notes || '',
