@@ -71,7 +71,14 @@ async function addService(clientId, service) {
   const config = await getClientConfig(clientId);
   if (!config) return { success: false, error: 'Client not found' };
 
-  const services = [...(config.services || []), service];
+  // Dedupe: a service with the same name (case-insensitive) is UPDATED
+  // in place — appending a duplicate breaks WhatsApp list messages
+  // (duplicate row IDs get the whole menu rejected) and double-counts.
+  const existing = config.services || [];
+  const dupeIdx = existing.findIndex(s => s.name.trim().toLowerCase() === service.name.trim().toLowerCase());
+  const services = dupeIdx >= 0
+    ? existing.map((s, i) => (i === dupeIdx ? { ...s, ...service } : s))
+    : [...existing, service];
   const { error } = await supabase
     .from('client_configs')
     .update({ services, updated_at: new Date().toISOString() })

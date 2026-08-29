@@ -1410,6 +1410,27 @@ async function sendWhatsAppReply(toPhone, text, replyToMessageId = null, interac
   }
   
   // All endpoints failed
+  // If this was an INTERACTIVE message (list/buttons), the payload may have
+  // been rejected (invalid row, over-limit title, etc.). Never leave the
+  // customer with dead air — retry once as plain text so they at least get
+  // the content and can reply by typing.
+  if (interactivePayload && text) {
+    console.warn(`[360DIALOG:${TRACE_ID}] ⚠️ Interactive send failed everywhere — retrying as PLAIN TEXT fallback`);
+    // Flatten the interactive options into the text so the customer can
+    // still answer by typing (e.g. "1. Facials\n2. Other")
+    let fallbackText = text;
+    const action = interactivePayload.interactive?.action || {};
+    const rows = action.sections?.flatMap(s => s.rows || []) || [];
+    const buttons = (action.buttons || []).map(b => b.reply?.title).filter(Boolean);
+    if (rows.length > 0) {
+      fallbackText += '\n\n' + rows.map((r, i) => `${i + 1}. ${r.title}`).join('\n');
+    } else if (buttons.length > 0) {
+      fallbackText += '\n\nReply: ' + buttons.map(b => b.replace(/[^\p{L}\p{N} ]/gu, '').trim()).join(' / ');
+    }
+    const fallback = await sendWhatsAppReply(toPhone, fallbackText, replyToMessageId, null);
+    if (fallback.success) return fallback;
+  }
+
   const finalError = `All ${ENDPOINTS.length} endpoints failed (used /messages path per 360dialog docs). Contact 360dialog support with trace ID ${TRACE_ID}.`;
   console.error(`[360DIALOG:${TRACE_ID}] ❌ ${finalError}`);
   console.error(`[360DIALOG:${TRACE_ID}] ══════════════════════════════════════`);
