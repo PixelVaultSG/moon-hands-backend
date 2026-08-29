@@ -539,6 +539,14 @@ async function handleWebhook(req, res, channel, url) {
       console.log(`[WEBHOOK:${channel}] No text message to process — returning 200`);
       return sendSecurityResponse(res, 200, 'No message to process');
     }
+
+    // Remember the customer's WhatsApp profile name — the booking flow
+    // uses it instead of asking for a name we already know
+    if (channel === 'whatsapp' && message.senderName && message.from) {
+      try {
+        require('../ai/conversation-state').setKnownName(message.from, message.senderName);
+      } catch { /* non-fatal */ }
+    }
     
     // Layer 6: CRITICAL — Prompt injection check
     const securityCheck = processIncomingMessage(message.text, {
@@ -864,7 +872,10 @@ function extractMessage(body, channel) {
         from: msg.from,
         to: value.metadata?.phone_number_id || msg.to || '',
         timestamp: msg.timestamp,
-        messageId: msg.id
+        messageId: msg.id,
+        // WhatsApp profile name (360dialog/Meta contacts array) — used to
+        // pre-fill the customer's name in bookings so we only ask when unknown
+        senderName: value.contacts?.[0]?.profile?.name || ''
       };
     }
     

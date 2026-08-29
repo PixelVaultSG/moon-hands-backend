@@ -145,37 +145,85 @@ bot.use(async (ctx, next) => {
 
 const { Markup } = require('telegraf');
 
-// Main menu layout — organized by function
-const MENU_KEYBOARD = Markup.inlineKeyboard([
-  // Row 1: Dashboard
-  [
-    Markup.button.callback('📊 Status', 'menu_health'),
-    Markup.button.callback('🏥 Clinics', 'menu_clients'),
-    Markup.button.callback('📈 Usage', 'menu_usage'),
-  ],
-  // Row 2: Clinic Management
-  [
-    Markup.button.callback('⚙️ View Config', 'menu_viewconfig'),
-    Markup.button.callback('➕ Add Service', 'menu_addservice'),
-    Markup.button.callback('💰 Update Price', 'menu_updateprice'),
-  ],
-  // Row 3: Operations
-  [
-    Markup.button.callback('⏸ Pause AI', 'menu_pause'),
-    Markup.button.callback('▶️ Resume AI', 'menu_resume'),
-    Markup.button.callback('🛡 Security', 'menu_security'),
-  ],
-  // Row 4: Settings
-  [
-    Markup.button.callback('🕐 Update Hours', 'menu_updatehours'),
-    Markup.button.callback('❓ Add FAQ', 'menu_addfaq'),
-    Markup.button.callback('🎤 Voice', 'menu_voice'),
-  ],
-  // Row 5: Help
-  [
-    Markup.button.callback('❓ Full Command List', 'menu_help'),
-  ],
-]);
+// Main menu layout — global actions only. Clinic-specific actions
+// (Add Service, Update Price, Hours, FAQ, Voice, Config, Usage,
+// Pause/Resume) live BEHIND a clinic pick: admin chooses the clinic
+// first, then gets that clinic's action menu (see clinicdash: handler).
+// NOTE: the admin dashboard keyboard is built dynamically by
+// adminMainMenu() below — global actions + one button per clinic.
+// (Clinic edit actions were removed from the top-level menu: admin
+//  picks the clinic FIRST, then sees that clinic's action menu.)
+
+// Admin entry screen: "Which clinic do you want to check/edit?"
+// Dynamic keyboard = global actions + one button per clinic.
+async function adminMainMenu(ctx, edit = false) {
+  const { supabase } = require('../supabase/client');
+  const { data: clients } = await supabase
+    .from('clients')
+    .select('slug, name, status')
+    .order('created_at', { ascending: true });
+
+  const buttons = [
+    [
+      Markup.button.callback('📊 Status', 'menu_health'),
+      Markup.button.callback('🏥 Clinics', 'menu_clients'),
+      Markup.button.callback('🛡 Security', 'menu_security'),
+    ],
+    [Markup.button.callback('❓ Full Command List', 'menu_help')],
+  ];
+
+  if (clients && clients.length > 0) {
+    for (const c of clients) {
+      const statusEmoji = c.status === 'active' ? '✅' : c.status === 'paused' ? '⏸' : '⚡';
+      buttons.push([Markup.button.callback(`${statusEmoji} ${c.name}`, `clinicdash:${c.slug}`)]);
+    }
+  }
+
+  const text = `📱 Moon Hands Admin\n\nWhich clinic do you want to check/edit? Tap a clinic below to manage it.`;
+  const keyboard = Markup.inlineKeyboard(buttons);
+  if (edit) {
+    try {
+      return await ctx.editMessageText(text, keyboard);
+    } catch {
+      return await ctx.reply(text, keyboard);
+    }
+  }
+  return await ctx.reply(text, keyboard);
+}
+
+// Per-clinic action dashboard — shown AFTER the admin picks a clinic.
+// All edit actions (Add Service, Update Price, etc.) hang off this menu,
+// pre-scoped to the chosen clinic via act:<action>:<slug> callbacks.
+async function showClinicDashboard(ctx, slug, edit = true) {
+  const { supabase } = require('../supabase/client');
+  const { data: clinic } = await supabase
+    .from('clients')
+    .select('name, status')
+    .eq('slug', slug)
+    .single();
+
+  const name = clinic?.name || slug;
+  const cb = Markup.button.callback;
+  const buttons = [
+    [cb('⚙️ View Config', `act:viewconfig:${slug}`), cb('📈 Usage', `act:usage:${slug}`)],
+    [cb('➕ Add Service', `act:addservice:${slug}`), cb('💰 Update Price', `act:updateprice:${slug}`)],
+    [cb('🕐 Update Hours', `act:updatehours:${slug}`), cb('❓ Add FAQ', `act:addfaq:${slug}`)],
+    [cb('🎤 Voice', `act:voice:${slug}`)],
+    [cb('⏸ Pause AI', `act:pause:${slug}`), cb('▶️ Resume AI', `act:resume:${slug}`)],
+    [cb('🔙 Back to Clinics', 'menu_main')],
+  ];
+
+  const text = `🏥 *${name}*\nStatus: ${clinic?.status || 'unknown'}\n\nWhat do you want to do with this clinic?`;
+  const keyboard = Markup.inlineKeyboard(buttons);
+  if (edit) {
+    try {
+      return await ctx.editMessageText(text, { parse_mode: 'Markdown', ...keyboard });
+    } catch {
+      return await ctx.reply(text, { parse_mode: 'Markdown', ...keyboard });
+    }
+  }
+  return await ctx.reply(text, { parse_mode: 'Markdown', ...keyboard });
+}
 
 // Back button for sub-menus
 const BACK_TO_MENU = Markup.inlineKeyboard([
@@ -198,12 +246,8 @@ bot.start(safeHandler('/start', async (ctx) => {
   // ── MODE 1: ADMIN ──
   if (chatId.toString() === ADMIN_CHAT_ID) {
     auditCommand(ctx.from.id, '/start', true);
-    await ctx.reply(
-      `Moon Hands Admin Bot\n\n` +
-      `Welcome back, boss.\n\n` +
-      `Use /menu for the quick-action dashboard, or /help for full commands.`,
-      MENU_KEYBOARD
-    );
+    await ctx.reply(`Moon Hands Admin Bot\n\nWelcome back, boss.`);
+    await adminMainMenu(ctx);
     return;
   }
 
@@ -286,11 +330,7 @@ bot.command('menu', safeHandler('/menu', async (ctx) => {
 
   // ── MODE 1: ADMIN ──
   if (chatId.toString() === ADMIN_CHAT_ID) {
-    await ctx.reply(
-      `📱 Moon Hands Quick Menu\n\n` +
-      `Tap any button to manage your clinics.`,
-      MENU_KEYBOARD
-    );
+    await adminMainMenu(ctx);
     return;
   }
 
@@ -316,10 +356,14 @@ async function getSlug(ctx) {
 
 // Dashboard callbacks
 bot.action('menu_main', safeHandler('menu_main', async (ctx) => {
-  await ctx.editMessageText(
-    `📱 Moon Hands Quick Menu\n\nTap any button to manage your clinics.`,
-    MENU_KEYBOARD
-  );
+  await ctx.answerCbQuery().catch(() => {});
+  await adminMainMenu(ctx, true);
+}));
+
+// Admin picked a clinic → show that clinic's action dashboard
+bot.action(/^clinicdash:(.+)$/, safeHandler('clinicdash', async (ctx) => {
+  await ctx.answerCbQuery().catch(() => {});
+  await showClinicDashboard(ctx, ctx.match[1], true);
 }));
 
 bot.action('menu_health', safeHandler('menu_health', async (ctx) => {
@@ -408,13 +452,13 @@ bot.action(/^act:(\w+):(.+)$/, safeHandler('act', async (ctx) => {
     case 'resume': return commands.handleResume(ctx, slug);
     case 'addservice':
       return ctx.reply(
-        `➕ Add Service to *${slug}*\n\nType:\n/addservice ${slug} "Service Name" $price durationMin\n\nExample:\n/addservice ${slug} "HIFU Treatment" $350 60`,
-        BACK_TO_MENU
+        `➕ Add Service to *${slug}*\n\nType:\n/addservice ${slug} "Service Name" $price durationMin\n\nExamples:\n/addservice ${slug} "HIFU Treatment" $350 60\n/addservice ${slug} "Consultation" "$50-$100" 60\n\n💡 Price can be a fixed amount ($350) or a range ("$50-$100") — quote the range.`,
+        Markup.inlineKeyboard([[Markup.button.callback(`🔙 Back to ${slug}`, `clinicdash:${slug}`)]])
       );
     case 'updateprice':
       return ctx.reply(
-        `💰 Update Price for *${slug}*\n\nType:\n/updateprice ${slug} "Service Name" $newPrice\n\nExample:\n/updateprice ${slug} "HIFU Treatment" $299`,
-        BACK_TO_MENU
+        `💰 Update Price for *${slug}*\n\nType:\n/updateprice ${slug} "Service Name" $newPrice\n\nExamples:\n/updateprice ${slug} "HIFU Treatment" $299\n/updateprice ${slug} "Consultation" "$50-$100"\n\n💡 Ranges are supported — quote them: "$50-$100".`,
+        Markup.inlineKeyboard([[Markup.button.callback(`🔙 Back to ${slug}`, `clinicdash:${slug}`)]])
       );
     case 'updatehours':
       return ctx.reply(
@@ -623,23 +667,34 @@ async function submitChangeRequest(ctx, action, payload) {
 }
 
 bot.command('req_addservice', safeHandler('/req_addservice', async (ctx) => {
+  const { normalizePrice } = require('../utils/price');
   const raw = ctx.message.text.replace('/req_addservice', '').trim();
-  const match = raw.match(/[“"]([^”"]+)[”"]\s+\$?(\S+)\s+(\d+)/);
+  // Price may be fixed ($350) or a quoted range ("$50-$100")
+  const match = raw.match(/[“"]([^”"]+)[”"]\s+[“"']?\$?(\d+(?:\s*[-–—]\s*\$?\d+)?)[”"']?\s+(\d+)/);
   if (!match) {
-    return ctx.reply('⚠️ Format: `/req_addservice "Service Name" $price durationMin`\nExample: `/req_addservice "HIFU Treatment" $350 60`', { parse_mode: 'Markdown' });
+    return ctx.reply('⚠️ Format: `/req_addservice "Service Name" $price durationMin`\nExamples:\n`/req_addservice "HIFU Treatment" $350 60`\n`/req_addservice "Consultation" "$50-$100" 60`', { parse_mode: 'Markdown' });
   }
-  const [, name, price, duration] = match;
-  await submitChangeRequest(ctx, 'add_service', { name: name.trim(), price: price.trim(), duration: parseInt(duration) });
+  const [, name, rawPrice, duration] = match;
+  const price = normalizePrice(rawPrice);
+  if (!price) {
+    return ctx.reply(`❌ Could not understand the price "${rawPrice}". Use a fixed amount ($350) or a quoted range ("$50-$100").`);
+  }
+  await submitChangeRequest(ctx, 'add_service', { name: name.trim(), price, duration: parseInt(duration) });
 }));
 
 bot.command('req_updateprice', safeHandler('/req_updateprice', async (ctx) => {
+  const { normalizePrice } = require('../utils/price');
   const raw = ctx.message.text.replace('/req_updateprice', '').trim();
-  const match = raw.match(/[“"]([^”"]+)[”"]\s+\$?(\S+)/);
+  const match = raw.match(/[“"]([^”"]+)[”"]\s+[“"']?\$?(\d+(?:\s*[-–—]\s*\$?\d+)?)[”"']?/);
   if (!match) {
-    return ctx.reply('⚠️ Format: `/req_updateprice "Service Name" $newPrice`\nExample: `/req_updateprice "HIFU Treatment" $299`', { parse_mode: 'Markdown' });
+    return ctx.reply('⚠️ Format: `/req_updateprice "Service Name" $newPrice`\nExamples:\n`/req_updateprice "HIFU Treatment" $299`\n`/req_updateprice "Consultation" "$50-$100"`', { parse_mode: 'Markdown' });
   }
-  const [, serviceName, newPrice] = match;
-  await submitChangeRequest(ctx, 'update_price', { service_name: serviceName.trim(), new_price: newPrice.trim() });
+  const [, serviceName, rawPrice] = match;
+  const newPrice = normalizePrice(rawPrice);
+  if (!newPrice) {
+    return ctx.reply(`❌ Could not understand the price "${rawPrice}". Use a fixed amount ($299) or a quoted range ("$50-$100").`);
+  }
+  await submitChangeRequest(ctx, 'update_price', { service_name: serviceName.trim(), new_price: newPrice });
 }));
 
 bot.command('req_hours', safeHandler('/req_hours', async (ctx) => {
@@ -791,7 +846,7 @@ async function callbackQueryRouter(ctx, next) {
   const chatId = ctx.callbackQuery.message.chat.id;
 
   // ── Admin-only callback areas: main menu, clinic management, change approvals ──
-  const ADMIN_CALLBACK_PREFIXES = ['menu_', 'act:', 'clinic_', 'chg_'];
+  const ADMIN_CALLBACK_PREFIXES = ['menu_', 'act:', 'clinic_', 'chg_', 'clinicdash:'];
   if (ADMIN_CALLBACK_PREFIXES.some(p => data.startsWith(p))) {
     if (!isAdmin(ctx)) {
       await ctx.answerCbQuery('🔒 Moon Hands admin only').catch(() => {});
@@ -966,9 +1021,11 @@ bot.hears('📝 Request Changes', safeHandler('📝 Request Changes', async (ctx
     'Changes are reviewed and approved by Moon Hands before going live. ' +
     'Send your request with one of these commands:\n\n' +
     '*Add a treatment:*\n' +
-    '`/req_addservice "HIFU Treatment" $350 60`\n\n' +
+    '`/req_addservice "HIFU Treatment" $350 60`\n' +
+    '(price can be a range: `/req_addservice "Consultation" "$50-$100" 60`)\n\n' +
     '*Update a price:*\n' +
-    '`/req_updateprice "HIFU Treatment" $299`\n\n' +
+    '`/req_updateprice "HIFU Treatment" $299`\n' +
+    '(or a range: `/req_updateprice "Consultation" "$50-$100"`)\n\n' +
     '*Update operating hours:*\n' +
     '`/req_hours Saturday 09:00 17:00`\n\n' +
     '*Add an FAQ:*\n' +
@@ -1004,7 +1061,9 @@ bot.hears('📋 My Bookings', safeHandler('📋 My Bookings', async (ctx) => {
   //  for clinic staff.) Admin (no linked clinics) sees all clinics' bookings.
   const chatId = ctx.chat.id;
   const { supabase } = require('../supabase/client');
-  const { escapeMarkdown } = require('./booking-notifications');
+  // Markdown v1 escaper — only _ * ` [ are special there. (The v2 escaper
+  // also escapes '-' and '+', which then show up as literal backslashes.)
+  const esc1 = (t) => String(t ?? '').replace(/([_*`\[])/g, '\\$1');
 
   const { data: linked } = await supabase
     .from('clients')
@@ -1037,9 +1096,9 @@ bot.hears('📋 My Bookings', safeHandler('📋 My Bookings', async (ctx) => {
   const statusEmoji = { confirmed: '✅', booked: '✅', pending: '⏳', pending_alternative: '🔄' };
   const lines = [`📋 *UPCOMING BOOKINGS (${bookings.length})*`, ''];
   for (const b of bookings) {
-    const clinicTag = clinicIds.length === 0 ? ` · ${escapeMarkdown(b.clients?.name || '?')}` : '';
+    const clinicTag = clinicIds.length === 0 ? ` · ${esc1(b.clients?.name || '?')}` : '';
     lines.push(
-      `${statusEmoji[b.status] || '❓'} *${b.appointment_date}* ${String(b.appointment_time).slice(0, 5)} — ${escapeMarkdown(b.customer_name || '?')} — ${escapeMarkdown(b.service || 'General')}${clinicTag}`
+      `${statusEmoji[b.status] || '❓'} *${b.appointment_date}* ${String(b.appointment_time).slice(0, 5)} — ${esc1(b.customer_name || '?')} — ${esc1(b.service || 'General')}${clinicTag}`
     );
   }
   lines.push('');

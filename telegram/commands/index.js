@@ -54,7 +54,9 @@ async function safeReplyMD(ctx, text) {
   try {
     await ctx.replyWithMarkdownV2(text);
   } catch {
-    await ctx.reply(text.replace(/[*_]/g, ''));
+    // Plain-text fallback — strip markdown markers AND escape backslashes
+    // so "50\-$100" doesn't show up literally as "50\-$100"
+    await ctx.reply(text.replace(/\\([_*[\]()~`>#+\-=|{}.!])/g, '$1').replace(/[*_]/g, ''));
   }
 }
 
@@ -71,8 +73,9 @@ async function handleHelp(ctx) {
     '\u2702\ufe0f SERVICES',
     '/addservice <clinic> "Name" $price durationMin',
     '  \u2192 /addservice glow "Bridal Package" $500 180',
+    '  \u2192 range price: /addservice glow "Consultation" "$50-$100" 60',
     '/updateprice <clinic> "Service" $newPrice',
-    '  \u2192 /updateprice glow "Hair Cut" $75',
+    '  \u2192 /updateprice glow "Hair Cut" $75  (or "$50-$100")',
     '/removeservice <clinic> "Service Name"',
     '',
     '\ud83d\udd50 HOURS & FAQ',
@@ -235,14 +238,17 @@ async function handleViewConfig(ctx, providedSlug = null) {
 }
 
 async function handleAddService(ctx) {
-  // Parse: /addservice <slug> "Service Name" $price duration
-  // Supports both straight quotes ("") and curly/smart quotes (" " " " )
+  // Parse: /addservice <slug> "Service Name" <price> <duration>
+  // Price can be fixed ($350) or a range ("$50-$100") — ranges may be quoted.
+  const { normalizePrice } = require('../../utils/price');
   const args = ctx.message.text.split(/\s+/);
   if (args.length < 5) {
     return ctx.reply(
       '\u26a0\ufe0f Usage: /addservice <slug> "Service Name" <price> <duration>\n\n' +
-      'Example: /addservice pixelvault "HIFU Treatment" $350 60\n\n' +
-      'Note: Price can be with or without $ sign. Duration is in minutes.'
+      'Examples:\n' +
+      '/addservice pixelvault "HIFU Treatment" $350 60\n' +
+      '/addservice pixelvault "Consultation" "$50-$100" 60\n\n' +
+      'Note: Price can be a fixed amount or a quoted range "$50-$100". Duration is in minutes.'
     );
   }
 
@@ -250,27 +256,30 @@ async function handleAddService(ctx) {
   const client = await db.getClientBySlug(slug);
   if (!client) return ctx.reply(`\u274c Client "${slug}" not found. Use /clients to see all slugs.`);
 
-  // Parse quoted service name + price + duration
-  // Regex supports both straight quotes (") and curly/smart quotes (") + optional $ before price
+  // Parse quoted service name + price (optionally quoted, ranges allowed) + duration
   const raw = ctx.message.text.replace(`/addservice ${slug} `, '');
-  const match = raw.match(/[\u201C"]([^\u201D"]+)[\u201D"]\s+\$?(\S+)\s+(\d+)/);
+  const match = raw.match(/[\u201C"]([^\u201D"]+)[\u201D"]\s+[\u201C"']?\$?(\d+(?:\s*[-\u2013\u2014]\s*\$?\d+)?)[\u201D"']?\s+(\d+)/);
   if (!match) {
     return ctx.reply(
       '\u26a0\ufe0f Format: /addservice <slug> "Service Name" <price> <duration>\n\n' +
       `Your input: ${raw.substring(0, 60)}\n\n` +
       'Tips:\n' +
       '1. Use straight quotes: "Service Name" (not curly quotes)\n' +
-      '2. Price can be: $350 or just 350\n' +
+      '2. Price can be fixed ($350) or a range ("$50-$100" — quote it)\n' +
       '3. Duration is in minutes: 60\n\n' +
       'Example: /addservice pixelvault "HIFU Treatment" $350 60'
     );
   }
 
-  const [, name, price, duration] = match;
+  const [, name, rawPrice, duration] = match;
+  const price = normalizePrice(rawPrice);
+  if (!price) {
+    return ctx.reply(`\u274c Could not understand the price "${rawPrice}". Use a fixed amount ($350) or a range ("$50-$100").`);
+  }
 
   const result = await db.addService(client.id, {
     name: name.trim(),
-    price: price.trim(),
+    price,
     duration: parseInt(duration),
     description: ''
   });
@@ -309,17 +318,24 @@ async function handleUpdatePrice(ctx) {
   if (!client) return ctx.reply(`\u274c Client "${slug}" not found. Use /clients to see all slugs.`);
 
   const raw = ctx.message.text.replace(`/updateprice ${slug} `, '');
-  // Support both straight quotes (") and curly/smart quotes (")
-  const match = raw.match(/[\u201C"]([^\u201D"]+)[\u201D"]\s+\$?(\S+)/);
+  // Support straight/curly quotes + fixed or range price (range may be quoted)
+  const { normalizePrice } = require('../../utils/price');
+  const match = raw.match(/[\u201C"]([^\u201D"]+)[\u201D"]\s+[\u201C"']?\$?(\d+(?:\s*[-\u2013\u2014]\s*\$?\d+)?)[\u201D"']?/);
   if (!match) {
     return ctx.reply(
       '\u26a0\ufe0f Format: /updateprice <slug> "Service" <price>\n\n' +
-      'Example: /updateprice pixelvault "HIFU Treatment" $299\n\n' +
+      'Examples:\n' +
+      '/updateprice pixelvault "HIFU Treatment" $299\n' +
+      '/updateprice pixelvault "Consultation" "$50-$100"\n\n' +
       `Your input: ${raw.substring(0, 60)}`
     );
   }
 
-  const [, serviceName, newPrice] = match;
+  const [, serviceName, rawPrice] = match;
+  const newPrice = normalizePrice(rawPrice);
+  if (!newPrice) {
+    return ctx.reply(`\u274c Could not understand the price "${rawPrice}". Use a fixed amount ($299) or a range ("$50-$100").`);
+  }
 
   const result = await db.updateServicePrice(client.id, serviceName, newPrice);
 

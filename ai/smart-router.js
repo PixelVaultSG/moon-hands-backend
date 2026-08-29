@@ -22,7 +22,10 @@ const {
   extractBookingFields,
   isConfirmation,
   isDenial,
+  setKnownName,
+  getKnownName,
 } = require('./conversation-state');
+const { sumServicePrices, formatPriceTotal } = require('../utils/price');
 
 // Intents that ALWAYS go to OpenAI
 const AI_ONLY_INTENTS = ['complaint', 'vague_question', 'emotional_support'];
@@ -1396,6 +1399,30 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
         whatsappInteractive: getEditMenuButtons()
       };
     
+    case BOOKING_STATES.AWAITING_NAME: {
+      // Customer was asked for their name before we create the booking
+      const cancelWords = ['cancel', 'nevermind', 'never mind', 'forget it', 'stop'];
+      if (cancelWords.some(w => msgLower === w || msgLower.startsWith(w + ' '))) {
+        resetIdle(patientPhone);
+        return { text: `No problem — I've cancelled that booking. Anything else I can help with?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+      }
+
+      const candidate = extractValidName(message, services);
+      if (candidate) {
+        setKnownName(patientPhone, candidate);
+        const bookingData = { ...currentState.data, name: candidate };
+        setState(patientPhone, BOOKING_STATES.READY_TO_BOOK, bookingData);
+        return await attemptBooking(clinicConfig, patientPhone, bookingData, conversationHistory, startTime);
+      }
+
+      return {
+        text: `Sorry, that doesn't look like a name. What name should the clinic use for your booking? (e.g., "Sarah Tan")`,
+        source: 'hardcoded',
+        cost_saved: 1,
+        latency_ms: Date.now() - startTime
+      };
+    }
+
     case BOOKING_STATES.AWAITING_CONFIRMATION:
       return await handleBookingConfirmation(message, clinicConfig, patientPhone, currentState, conversationHistory, startTime);
     
@@ -1444,6 +1471,26 @@ function showCategorySelection(clinicConfig, startTime) {
   };
 }
 
+/**
+ * Validate a reply given during AWAITING_NAME.
+ * Accepts "Sarah", "Sarah Tan", "my name is Sarah Tan".
+ * Rejects digits, service names, yes/no answers, and anything implausible.
+ */
+function extractValidName(message, services = []) {
+  let m = (message || '').trim();
+  const prefixed = m.match(/(?:my name is|call me|name is|i am|i'm|its|it's)\s+(.+)/i);
+  if (prefixed) m = prefixed[1].trim();
+  m = m.replace(/[.!,?]+$/, '').trim();
+  if (m.length < 2 || m.length > 40) return null;
+  if (/\d/.test(m)) return null;
+  if (!/^[A-Za-z][A-Za-z\s.'@-]*$/.test(m)) return null;
+  if (isConfirmation(m) || isDenial(m)) return null;
+  const lower = m.toLowerCase();
+  if ((services || []).some(s => lower === s.name.toLowerCase() || (lower.length >= 4 && s.name.toLowerCase().includes(lower)))) return null;
+  // Capitalize each word for storage ("sarah tan" → "Sarah Tan")
+  return m.split(/\s+/).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+}
+
 function extractCategoryId(message) {
   // Only match EXACT category names — not substrings
   // "Laser Skin Rejuvenation" should NOT match category "Laser"
@@ -1460,18 +1507,22 @@ function extractCategoryId(message) {
 async function buildConfirmationResponse(clinicConfig, patientPhone, date, time, treatments, startTime) {
   const services = clinicConfig.config?.services || [];
   let totalDuration = 0;
-  let totalPrice = 0;
-  
+  const matched = [];
+
   for (const t of treatments) {
     const svc = services.find(s => s.name.toLowerCase().includes(t.toLowerCase()) || t.toLowerCase().includes(s.name.toLowerCase()));
     if (svc) {
+      matched.push(svc);
       totalDuration += parseInt(svc.duration) || 60;
-      const priceNum = parseInt(svc.price?.replace(/[^0-9]/g, '')) || 0;
-      totalPrice += priceNum;
     }
   }
-  
+
+  // Range-aware total: fixed prices sum to one number, ranges sum to min–max
+  const priceSum = sumServicePrices(matched);
+  const totalPriceText = priceSum.hasPrice ? formatPriceTotal(priceSum.min, priceSum.max) : undefined;
+
   const { getConfirmationCard } = require('./whatsapp-interactive');
+  const customerName = getKnownName(patientPhone) || null;
   return {
     text: `Booking summary: ${treatments.join(' + ')} on ${date || 'TBD'} at ${time || 'TBD'}`,
     source: 'hardcoded',
@@ -1483,7 +1534,10 @@ async function buildConfirmationResponse(clinicConfig, patientPhone, date, time,
       time,
       treatments,
       totalDuration: totalDuration || undefined,
-      totalPrice: totalPrice ? `$${totalPrice}` : undefined,
+      totalPrice: totalPriceText,
+      priceIsRange: priceSum.isRange,
+      customerName,
+      customerPhone: patientPhone,
       clinicName: clinicConfig.name
     })
   };
@@ -1529,8 +1583,9 @@ async function attemptBooking(clinicConfig, patientPhone, fields, conversationHi
   const totalDuration = matchedServices.reduce((sum, s) => sum + (parseInt(s.duration) || 60), 0);
   const serviceNames = matchedServices.map(s => s.name).join(' + ');
   
-  // Extract patient name from conversation history
-  let patientName = fields.name || null;
+  // Name resolution order: explicit in message → asked during booking
+  // (AWAITING_NAME stored it) → WhatsApp profile name → history → Guest
+  let patientName = fields.name || getKnownName(patientPhone) || null;
   if (!patientName && conversationHistory.length > 0) {
     for (const turn of conversationHistory.slice(-4).reverse()) {
       if (turn.ai && turn.ai.includes('name')) {
@@ -1543,7 +1598,11 @@ async function attemptBooking(clinicConfig, patientPhone, fields, conversationHi
     }
   }
   patientName = patientName || 'Guest';
-  
+
+  // Range-aware estimated total (fixed prices sum; ranges sum to min–max)
+  const priceSum = sumServicePrices(matchedServices);
+  const priceText = priceSum.hasPrice ? formatPriceTotal(priceSum.min, priceSum.max) : null;
+
   try {
     const { createBooking } = require('./expert-system/function-handlers');
     const result = await createBooking({
@@ -1553,7 +1612,7 @@ async function attemptBooking(clinicConfig, patientPhone, fields, conversationHi
       service_name: serviceNames,
       appointment_date: fields.date,
       appointment_time: fields.time,
-      notes: `Total duration: ${totalDuration}mins. ${notFound.length > 0 ? 'Not found: ' + notFound.join(', ') : ''}`
+      notes: `Total duration: ${totalDuration}mins.${priceText ? ` Est. total: ${priceText}${priceSum.isRange ? ' (range — final price confirmed at clinic)' : ''}.` : ''} ${notFound.length > 0 ? 'Not found: ' + notFound.join(', ') : ''}`
     });
     
     resetIdle(patientPhone);
@@ -1574,8 +1633,9 @@ async function attemptBooking(clinicConfig, patientPhone, fields, conversationHi
       
       const { getCalendarCTAButtons } = require('./whatsapp-interactive');
       
+      const priceLine = priceText ? `\n💰 ${priceText}${priceSum.isRange ? ' (final price confirmed at the clinic)' : ''}` : '';
       return {
-        text: `✅ Booking confirmed!\n\n💆 ${serviceNames}${multiNote}\n📅 ${fields.date}\n🕐 ${fields.time}\n\n${confirmationMsg}\n\nRef: ${bookingRef}`,
+        text: `✅ Booking confirmed!\n\n👤 ${patientName}\n📱 +${String(patientPhone).replace(/^\+/, '')}\n💆 ${serviceNames}${multiNote}\n📅 ${fields.date}\n🕐 ${fields.time}${priceLine}\n\n${confirmationMsg}\n\nRef: ${bookingRef}`,
         source: 'hardcoded',
         cost_saved: 0.5,
         latency_ms: Date.now() - startTime,
@@ -1646,26 +1706,27 @@ function isCalendarHealthy(clinicId) {
 
 async function buildBookingSummary(clinicConfig, date, time, treatments, services) {
   const matchedServices = [];
-  let totalPrice = 0;
   let totalDuration = 0;
-  
+
   for (const t of treatments) {
     const svc = services.find(s => s.name.toLowerCase().includes(t.toLowerCase()) || t.toLowerCase().includes(s.name.toLowerCase()));
     if (svc) {
       matchedServices.push(svc);
       totalDuration += parseInt(svc.duration) || 60;
-      const priceNum = parseInt(svc.price?.replace(/[^0-9]/g, '')) || 0;
-      totalPrice += priceNum;
     }
   }
-  
+
+  const priceSum = sumServicePrices(matchedServices);
+
   const serviceLines = matchedServices.map(s => {
     const price = s.price ? ` (${s.price}${s.price_unit ? '/' + s.price_unit : ''})` : '';
     const dur = s.duration ? ` — ${s.duration}mins` : '';
     return `• ${s.name}${price}${dur}`;
   }).join('\n');
-  
-  const priceLine = totalPrice > 0 ? `\n💰 Total: ~S$${totalPrice}` : '';
+
+  const priceLine = priceSum.hasPrice
+    ? `\n💰 Total: ~${formatPriceTotal(priceSum.min, priceSum.max, 'S$')}${priceSum.isRange ? ' (final price confirmed at the clinic)' : ''}`
+    : '';
   const durLine = totalDuration > 0 ? `\n⏱ Total duration: ${totalDuration}mins` : '';
   
   // ── Calendar availability check ──
@@ -1759,9 +1820,21 @@ async function handleBookingConfirmation(message, clinicConfig, patientPhone, cu
     };
   }
   
-  // YES — create the booking
+  // YES — create the booking (after we have a name for the clinic)
   if (isConfirmation(message)) {
-    return await attemptBooking(clinicConfig, patientPhone, data, conversationHistory, startTime);
+    const knownName = data.name || getKnownName(patientPhone);
+    if (!knownName) {
+      // The clinic needs a name to schedule / call back. Ask once, then book.
+      setState(patientPhone, BOOKING_STATES.AWAITING_NAME, data);
+      return {
+        text: `Almost done! 👤 May I have your name for the booking?\n\n(Your WhatsApp number is saved automatically — the clinic will use it to confirm or call you back.)`,
+        source: 'hardcoded',
+        intents: ['name_request'],
+        cost_saved: 1,
+        latency_ms: Date.now() - startTime
+      };
+    }
+    return await attemptBooking(clinicConfig, patientPhone, { ...data, name: knownName }, conversationHistory, startTime);
   }
   
   // NO — ask what to change (with interactive buttons)
