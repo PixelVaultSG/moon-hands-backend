@@ -287,15 +287,20 @@ function getTreatmentsByCategoryMessage(categoryName, services) {
 /**
  * Rich booking confirmation card with summary details
  */
-function getConfirmationCard({ date, time, treatments, totalDuration, totalPrice, clinicName }) {
+function getConfirmationCard({ date, time, treatments, totalDuration, totalPrice, priceIsRange, customerName, customerPhone, clinicName }) {
   const treatmentText = Array.isArray(treatments) ? treatments.join(' + ') : (treatments || 'Not selected');
-  const dateText = date || '📅 Date not set';
-  const timeText = time || '🕐 Time not set';
   const durText = totalDuration ? `⏱️ ${totalDuration} mins` : '';
-  const priceText = totalPrice ? `💰 ${totalPrice}` : '';
-  
+  const priceText = totalPrice ? `💰 ${totalPrice}${priceIsRange ? ' (final price confirmed at the clinic)' : ''}` : '';
+  // Name & phone the clinic will use to schedule / call back.
+  // Phone always comes from WhatsApp; name from profile or asked later.
+  const nameText = customerName ? `👤 ${customerName}` : '';
+  const phoneText = customerPhone ? `📱 +${String(customerPhone).replace(/^\+/, '')}` : '';
+  const details = [nameText, phoneText, `📅 ${date || 'TBD'}`, `🕐 ${time || 'TBD'}`, `💆 ${treatmentText}`, durText, priceText]
+    .filter(Boolean)
+    .join('\n');
+
   return buildQuickReplyButtons({
-    body: `✅ *Booking Summary*\n\n📅 ${dateText}\n🕐 ${timeText}\n💆 ${treatmentText}\n${durText}\n${priceText}\n\nEverything look correct?`,
+    body: `✅ *Booking Summary*\n\n${details}\n\nEverything look correct?`,
     footer: clinicName ? `${clinicName}` : 'Tap to confirm',
     buttons: [
       { id: 'confirm_yes', title: '✅ Confirm' },

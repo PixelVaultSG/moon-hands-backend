@@ -46,6 +46,30 @@ const FOLLOW_UP_MESSAGES = {
 
 function normalizePhone(phone) { return (phone || '').replace(/\D/g, ''); }
 
+// ─── KNOWN CUSTOMER NAMES ────────────────────────────────────────
+// Name book keyed by phone. Populated from (1) the WhatsApp profile
+// name that arrives with every message and (2) the explicit name the
+// customer gives during booking (AWAITING_NAME step). The booking flow
+// only ASKS for a name when neither source has one.
+const knownNames = new Map(); // normalizedPhone → { name, savedAt }
+const KNOWN_NAME_TTL_MS = 180 * 24 * 60 * 60 * 1000; // 180 days
+
+function setKnownName(phone, name) {
+  const cleaned = (name || '').trim();
+  if (!cleaned || cleaned.length < 2 || cleaned.length > 40) return;
+  knownNames.set(normalizePhone(phone), { name: cleaned, savedAt: Date.now() });
+}
+
+function getKnownName(phone) {
+  const rec = knownNames.get(normalizePhone(phone));
+  if (!rec) return null;
+  if (Date.now() - rec.savedAt > KNOWN_NAME_TTL_MS) {
+    knownNames.delete(normalizePhone(phone));
+    return null;
+  }
+  return rec.name;
+}
+
 function getState(phone) {
   const record = stateStore.get(normalizePhone(phone));
   if (!record) return { state: BOOKING_STATES.IDLE, data: {} };
@@ -511,6 +535,7 @@ setInterval(() => {
 
 module.exports = {
   BOOKING_STATES, getState, setState, resetIdle,
+  setKnownName, getKnownName,
   FOLLOW_UP_STAGES, FOLLOW_UP_MESSAGES, FOLLOW_UP_DELAYS_MS,
   addSelectedTreatment, clearSelectedTreatments,
   getStalledConversations, markFollowUpSent,
