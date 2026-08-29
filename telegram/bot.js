@@ -55,11 +55,55 @@ function auditCommand(userId, command, success, reason = null) {
 
 // ─── AUTH + SECURITY MIDDLEWARE ──────────────────────────────────
 
+// ─── ACCESS CONTROL ──────────────────────────────────────────────
+// Two user classes:
+//   ADMIN (ADMIN_CHAT_ID)     → full access, changes apply instantly
+//   CLINIC STAFF (linked via telegram_chat_ids) → clinic menu, booking
+//     approvals, patient pause/resume, and change REQUESTS (need admin approval)
+//   EVERYONE ELSE             → rejected
+
+const linkedChatCache = new Map(); // chatId → { linked: boolean, at: timestamp }
+const LINKED_CACHE_TTL = 5 * 60 * 1000;
+
+async function isLinkedClinicChat(chatId) {
+  const cached = linkedChatCache.get(chatId);
+  if (cached && Date.now() - cached.at < LINKED_CACHE_TTL) return cached.linked;
+  let linked = false;
+  try {
+    const { supabase } = require('../supabase/client');
+    const { data } = await supabase
+      .from('clients')
+      .select('id')
+      .contains('telegram_chat_ids', [chatId])
+      .limit(1);
+    linked = !!(data && data.length > 0);
+  } catch (err) {
+    console.error('[SECURITY] linked-chat check failed:', err.message);
+  }
+  linkedChatCache.set(chatId, { linked, at: Date.now() });
+  return linked;
+}
+
+function isAdmin(ctx) {
+  return ctx.from && ctx.from.id.toString() === ADMIN_CHAT_ID;
+}
+
+// Guard for admin-only commands/callbacks (clinic staff get a polite refusal)
+function adminOnly(ctx) {
+  if (isAdmin(ctx)) return true;
+  ctx.reply('🔒 This area is for Moon Hands admin only.').catch(() => {});
+  return false;
+}
+
 bot.use(async (ctx, next) => {
-  // Layer 1: Reject non-admin users immediately
-  if (ctx.from && ctx.from.id.toString() !== ADMIN_CHAT_ID) {
-    console.warn(`[SECURITY] Unauthorized access attempt from ${ctx.from.id} (${ctx.from.username || 'unknown'})`);
-    return ctx.reply('\ud83d\udeab Unauthorized. This bot is private. Access logged.');
+  // Layer 1: Allow admin + linked clinic staff; reject everyone else
+  if (ctx.from && !isAdmin(ctx)) {
+    const linked = await isLinkedClinicChat(ctx.chat?.id ?? ctx.from.id);
+    const isStartLinking = ctx.message?.text?.startsWith('/start'); // allow linking flow
+    if (!linked && !isStartLinking) {
+      console.warn(`[SECURITY] Unauthorized access attempt from ${ctx.from.id} (${ctx.from.username || 'unknown'})`);
+      return ctx.reply('\ud83d\udeab Unauthorized. This bot is private. Access logged.');
+    }
   }
   
   // Layer 2: Rate limiting (flood protection)
@@ -477,24 +521,155 @@ function safeHandler(commandName, handlerFn) {
   };
 }
 
-bot.help(safeHandler('/help', commands.handleHelp));
-bot.command('clients', safeHandler('/clients', commands.handleClients));
-bot.command('viewconfig', safeHandler('/viewconfig', commands.handleViewConfig));
-bot.command('addservice', safeHandler('/addservice', commands.handleAddService));
-bot.command('updateprice', safeHandler('/updateprice', commands.handleUpdatePrice));
-bot.command('removeservice', safeHandler('/removeservice', commands.handleRemoveService));
-bot.command('updatehours', safeHandler('/updatehours', commands.handleUpdateHours));
-bot.command('addfaq', safeHandler('/addfaq', commands.handleAddFaq));
-bot.command('removefaq', safeHandler('/removefaq', commands.handleRemoveFaq));
-bot.command('updatevoice', safeHandler('/updatevoice', commands.handleUpdateVoice));
-bot.command('pause', safeHandler('/pause', commands.handlePause));
-bot.command('resume', safeHandler('/resume', commands.handleResume));
-bot.command('usage', safeHandler('/usage', commands.handleUsage));
-bot.command('health', safeHandler('/health', commands.handleHealth));
-bot.command('security', safeHandler('/security', commands.handleSecurity));
-bot.command('threats', safeHandler('/threats', commands.handleThreats));
-bot.command('authlog', safeHandler('/authlog', commands.handleAuthLog));
-bot.command('debug', safeHandler('/debug', commands.handleDebug));
+// Admin-only command guard — clinic staff may NOT use these
+const adminCmd = (name, fn) => safeHandler(name, async (ctx) => {
+  if (!adminOnly(ctx)) return;
+  return fn(ctx);
+});
+
+bot.help(safeHandler('/help', async (ctx) => {
+  if (isAdmin(ctx)) return commands.handleHelp(ctx);
+  // Clinic staff help — their own command set
+  await ctx.reply(
+    '📖 *Clinic Staff Commands*\n\n' +
+    '*Daily ops:*\n' +
+    '`/patientpause <phone>` — Pause bot for a patient\n' +
+    '`/patientresume <phone>` — Resume bot\n' +
+    '`/patientstatus` — List paused conversations\n\n' +
+    '*Request changes (Moon Hands approves before going live):*\n' +
+    '`/req_addservice "Name" $price durationMin`\n' +
+    '`/req_updateprice "Name" $newPrice`\n' +
+    '`/req_hours Monday 09:00 18:00`\n' +
+    '`/req_faq Question? | Answer`\n' +
+    '`/req_voice greeting "Your new greeting"`',
+    { parse_mode: 'Markdown' }
+  );
+}));
+bot.command('clients', adminCmd('/clients', commands.handleClients));
+bot.command('viewconfig', adminCmd('/viewconfig', commands.handleViewConfig));
+bot.command('addservice', adminCmd('/addservice', commands.handleAddService));
+bot.command('updateprice', adminCmd('/updateprice', commands.handleUpdatePrice));
+bot.command('removeservice', adminCmd('/removeservice', commands.handleRemoveService));
+bot.command('updatehours', adminCmd('/updatehours', commands.handleUpdateHours));
+bot.command('addfaq', adminCmd('/addfaq', commands.handleAddFaq));
+bot.command('removefaq', adminCmd('/removefaq', commands.handleRemoveFaq));
+bot.command('updatevoice', adminCmd('/updatevoice', commands.handleUpdateVoice));
+bot.command('pause', adminCmd('/pause', commands.handlePause));
+bot.command('resume', adminCmd('/resume', commands.handleResume));
+bot.command('usage', adminCmd('/usage', commands.handleUsage));
+bot.command('health', adminCmd('/health', commands.handleHealth));
+bot.command('security', adminCmd('/security', commands.handleSecurity));
+bot.command('threats', adminCmd('/threats', commands.handleThreats));
+bot.command('authlog', adminCmd('/authlog', commands.handleAuthLog));
+bot.command('debug', adminCmd('/debug', commands.handleDebug));
+
+// ─── ADMIN: /requests — list pending change requests ─────────────
+bot.command('requests', adminCmd('/requests', async (ctx) => {
+  const { listPendingRequests, ACTION_LABELS } = require('./change-requests');
+  const pending = await listPendingRequests();
+  if (pending.length === 0) {
+    return ctx.reply('✅ No pending change requests.');
+  }
+  const lines = [`🔔 *PENDING CHANGE REQUESTS (${pending.length})*`, ''];
+  pending.forEach((r, i) => {
+    lines.push(`${i + 1}. *${r.clients?.name || 'Unknown'}* — ${ACTION_LABELS[r.action] || r.action}`);
+    lines.push(`   ID: \`${r.id.slice(0, 8)}\` · ${new Date(r.created_at).toLocaleString('en-SG')}`);
+  });
+  lines.push('', 'Approve/reject from the original request message buttons.');
+  await ctx.reply(lines.join('\n'), { parse_mode: 'Markdown' });
+}));
+
+// ─── CLINIC STAFF: CHANGE REQUEST COMMANDS ───────────────────────
+// These NEVER apply directly — they create a pending_changes row and
+// notify Moon Hands admin with Approve/Reject buttons. Slug is resolved
+// automatically from the staff chat's linked clinic.
+
+async function resolveStaffClinic(ctx) {
+  const chatId = ctx.chat.id;
+  const { supabase } = require('../supabase/client');
+  const { data: linked } = await supabase
+    .from('clients')
+    .select('id, name, slug')
+    .contains('telegram_chat_ids', [chatId]);
+  if (!linked || linked.length === 0) {
+    await ctx.reply('❌ Your Telegram is not linked to a clinic yet. Use the onboarding link (e.g. /start GLOW001) first.');
+    return null;
+  }
+  return linked[0]; // primary linked clinic
+}
+
+async function submitChangeRequest(ctx, action, payload) {
+  const clinic = await resolveStaffClinic(ctx);
+  if (!clinic) return;
+  const { createChangeRequest, ACTION_LABELS } = require('./change-requests');
+  const result = await createChangeRequest({
+    clinicId: clinic.id,
+    clinicName: clinic.name,
+    action,
+    payload,
+    requestedBy: ctx.from.id,
+  });
+  if (result.success) {
+    await ctx.reply(
+      `📨 *Request Submitted*\n\n` +
+      `🏥 ${clinic.name}\n` +
+      `Action: ${ACTION_LABELS[action] || action}\n\n` +
+      `Moon Hands will review and approve it. You'll be notified here once it's live (usually within 24h).`,
+      { parse_mode: 'Markdown' }
+    );
+  } else {
+    await ctx.reply(`❌ Could not submit request: ${result.error}`);
+  }
+}
+
+bot.command('req_addservice', safeHandler('/req_addservice', async (ctx) => {
+  const raw = ctx.message.text.replace('/req_addservice', '').trim();
+  const match = raw.match(/[“"]([^”"]+)[”"]\s+\$?(\S+)\s+(\d+)/);
+  if (!match) {
+    return ctx.reply('⚠️ Format: `/req_addservice "Service Name" $price durationMin`\nExample: `/req_addservice "HIFU Treatment" $350 60`', { parse_mode: 'Markdown' });
+  }
+  const [, name, price, duration] = match;
+  await submitChangeRequest(ctx, 'add_service', { name: name.trim(), price: price.trim(), duration: parseInt(duration) });
+}));
+
+bot.command('req_updateprice', safeHandler('/req_updateprice', async (ctx) => {
+  const raw = ctx.message.text.replace('/req_updateprice', '').trim();
+  const match = raw.match(/[“"]([^”"]+)[”"]\s+\$?(\S+)/);
+  if (!match) {
+    return ctx.reply('⚠️ Format: `/req_updateprice "Service Name" $newPrice`\nExample: `/req_updateprice "HIFU Treatment" $299`', { parse_mode: 'Markdown' });
+  }
+  const [, serviceName, newPrice] = match;
+  await submitChangeRequest(ctx, 'update_price', { service_name: serviceName.trim(), new_price: newPrice.trim() });
+}));
+
+bot.command('req_hours', safeHandler('/req_hours', async (ctx) => {
+  const args = ctx.message.text.split(/\s+/).slice(1);
+  if (args.length < 3) {
+    return ctx.reply('⚠️ Format: `/req_hours <day> HH:MM HH:MM`\nExample: `/req_hours Saturday 09:00 17:00`', { parse_mode: 'Markdown' });
+  }
+  const [day, openTime, closeTime] = args;
+  await submitChangeRequest(ctx, 'update_hours', { day, open_time: openTime, close_time: closeTime });
+}));
+
+bot.command('req_faq', safeHandler('/req_faq', async (ctx) => {
+  const raw = ctx.message.text.replace('/req_faq', '').trim();
+  const parts = raw.split(/\s*\|\s*/, 2);
+  if (parts.length !== 2) {
+    return ctx.reply('⚠️ Format: `/req_faq Question? | Answer`\nExample: `/req_faq Parking available? | Free parking at rear`', { parse_mode: 'Markdown' });
+  }
+  const question = parts[0].replace(/^[“"]/, '').replace(/[”"]$/g, '').trim();
+  await submitChangeRequest(ctx, 'add_faq', { question, answer: parts[1].trim() });
+}));
+
+bot.command('req_voice', safeHandler('/req_voice', async (ctx) => {
+  const args = ctx.message.text.split(/\s+/).slice(1);
+  if (args.length < 2) {
+    return ctx.reply('⚠️ Format: `/req_voice <field> <value>`\nFields: name, greeting, tone, enthusiasm, notes\nExample: `/req_voice greeting "Welcome to Glow!"`', { parse_mode: 'Markdown' });
+  }
+  const field = args[0].toLowerCase();
+  const value = args.slice(1).join(' ').replace(/^[“"]/, '').replace(/[”"]$/g, '');
+  await submitChangeRequest(ctx, 'update_voice', { field, value });
+}));
 
 // ─── TEST CLOSING SUMMARY ────────────────────────────────────────
 
@@ -614,7 +789,46 @@ async function callbackQueryRouter(ctx, next) {
   
   const data = ctx.callbackQuery.data;
   const chatId = ctx.callbackQuery.message.chat.id;
-  
+
+  // ── Admin-only callback areas: main menu, clinic management, change approvals ──
+  const ADMIN_CALLBACK_PREFIXES = ['menu_', 'act:', 'clinic_', 'chg_'];
+  if (ADMIN_CALLBACK_PREFIXES.some(p => data.startsWith(p))) {
+    if (!isAdmin(ctx)) {
+      await ctx.answerCbQuery('🔒 Moon Hands admin only').catch(() => {});
+      return;
+    }
+  }
+
+  // ── Change request approval: Approve & Apply ──
+  if (data.startsWith('chg_ok:')) {
+    const reqId = data.replace('chg_ok:', '');
+    await ctx.answerCbQuery('Applying change...');
+    const { applyChangeRequest } = require('./change-requests');
+    const result = await applyChangeRequest(reqId, ctx.from.id);
+    if (result.success) {
+      await ctx.editMessageReplyMarkup({ inline_keyboard: [] }).catch(() => {});
+      await ctx.reply(`✅ *APPROVED & APPLIED*\n\n🏥 ${result.clinicName}\n${result.summary}\n\n✓ Clinic notified · change is live`);
+    } else {
+      await ctx.reply(`⚠️ ${result.error || 'Failed to apply change'}`);
+    }
+    return;
+  }
+
+  // ── Change request approval: Reject ──
+  if (data.startsWith('chg_no:')) {
+    const reqId = data.replace('chg_no:', '');
+    await ctx.answerCbQuery('Rejecting...');
+    const { rejectChangeRequest } = require('./change-requests');
+    const result = await rejectChangeRequest(reqId, ctx.from.id);
+    if (result.success) {
+      await ctx.editMessageReplyMarkup({ inline_keyboard: [] }).catch(() => {});
+      await ctx.reply(`❌ *REQUEST REJECTED*\n\n🏥 ${result.clinicName}\n\n✓ Clinic notified · nothing was changed`);
+    } else {
+      await ctx.reply(`⚠️ ${result.error || 'Failed to reject'}`);
+    }
+    return;
+  }
+
   // ── Resume bot for patient ──
   if (data.startsWith('resume:')) {
     const phone = data.replace('resume:', '');
@@ -740,31 +954,28 @@ bot.hears('📊 Status', safeHandler('📊 Status', async (ctx) => {
 }));
 
 bot.hears('⚙️ View Config', safeHandler('⚙️ View Config', async (ctx) => {
-  await commands.handleViewConfig(ctx);
+  // Clinic staff see THEIR OWN clinic's config (read-only view)
+  const clinic = await resolveStaffClinic(ctx);
+  if (!clinic) return;
+  await commands.handleViewConfig(ctx, clinic.slug);
 }));
 
 bot.hears('📝 Request Changes', safeHandler('📝 Request Changes', async (ctx) => {
   await ctx.reply(
     '📝 *Request Changes to Your Clinic Setup*\n\n' +
-    'Moon Hands manages all changes to ensure your bot works perfectly.\n\n' +
-    '*Reply with your request in this format:*\n' +
-    '```\n' +
-    'ADD TREATMENT:\n' +
-    'Name: [treatment name]\n' +
-    'Price: [price]\n' +
-    'Duration: [minutes]\n' +
-    'Description: [brief description]\n\n' +
-    'OR\n\n' +
-    'UPDATE HOURS:\n' +
-    'Monday: 10:00-20:00\n' +
-    'Tuesday: 10:00-20:00\n' +
-    '(etc)\n\n' +
-    'OR\n\n' +
-    'UPDATE PRICE:\n' +
-    'Treatment: [name]\n' +
-    'New Price: [price]\n' +
-    '```\n\n' +
-    'Your request will be reviewed and applied within 24 hours.',
+    'Changes are reviewed and approved by Moon Hands before going live. ' +
+    'Send your request with one of these commands:\n\n' +
+    '*Add a treatment:*\n' +
+    '`/req_addservice "HIFU Treatment" $350 60`\n\n' +
+    '*Update a price:*\n' +
+    '`/req_updateprice "HIFU Treatment" $299`\n\n' +
+    '*Update operating hours:*\n' +
+    '`/req_hours Saturday 09:00 17:00`\n\n' +
+    '*Add an FAQ:*\n' +
+    '`/req_faq Parking available? | Free parking at rear`\n\n' +
+    '*Update bot voice/greeting:*\n' +
+    '`/req_voice greeting "Welcome to Glow!"`\n\n' +
+    'You\'ll get a Telegram notification here once approved (usually within 24h).',
     { parse_mode: 'Markdown' }
   );
 }));
