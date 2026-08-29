@@ -283,9 +283,9 @@ async function handleAddService(ctx) {
       `Service: ${escapeMarkdown(name)}\n` +
       `Price: ${escapeMarkdown(price)}\n` +
       `Duration: ${duration}min\n\n` +
-      `\u23f3 Forwarding to Moon Hands AI...`
+      `\u2705 *Live immediately* \u2014 the bot now uses this for all new patient messages.`
     );
-    // Store pending change for AI to process
+    // Audit record only (change is already live)
     await db.supabase.from('pending_changes').insert({
       client_id: client.id,
       action: 'add_service',
@@ -330,7 +330,7 @@ async function handleUpdatePrice(ctx) {
       `Action: Update Price\n` +
       `Service: ${escapeMarkdown(serviceName)}\n` +
       `New Price: ${escapeMarkdown(newPrice)}\n\n` +
-      `\u23f3 Forwarding to Moon Hands AI...`
+      `\u2705 *Live immediately* \u2014 the bot now uses this for all new patient messages.`
     );
     await db.supabase.from('pending_changes').insert({
       client_id: client.id,

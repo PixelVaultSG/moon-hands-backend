@@ -289,14 +289,13 @@ bot.action('menu_clients', safeHandler('menu_clients', async (ctx) => {
 }));
 
 bot.action('menu_usage', safeHandler('menu_usage', async (ctx) => {
-  await ctx.answerCbQuery('Loading usage...');
-  // Get the first clinic's slug or use 'pixelvault' as default
-  await commands.handleUsage(ctx, 'pixelvault');
+  await ctx.answerCbQuery();
+  await showClinicPicker(ctx, 'usage');
 }));
 
 bot.action('menu_viewconfig', safeHandler('menu_viewconfig', async (ctx) => {
-  await ctx.answerCbQuery('Loading config...');
-  await commands.handleViewConfig(ctx, 'pixelvault');
+  await ctx.answerCbQuery();
+  await showClinicPicker(ctx, 'viewconfig');
 }));
 
 bot.action('menu_security', safeHandler('menu_security', async (ctx) => {
@@ -310,54 +309,122 @@ bot.action('menu_help', safeHandler('menu_help', async (ctx) => {
 }));
 
 // Service management callbacks — these need slug + params, so show instruction
+// ─── CLINIC-FIRST ACTION FLOW ────────────────────────────────────
+// Every admin action (Add Service, Update Price, Hours, FAQ, Voice,
+// View Config, Usage, Pause, Resume) requires choosing a clinic FIRST.
+// Flow: tap action → clinic picker → action executes for that clinic
+// with the slug already pre-filled. No more hardcoded 'pixelvault'.
+
+const ACTION_LABELS = {
+  addservice: '➕ Add Service',
+  updateprice: '💰 Update Price',
+  updatehours: '🕐 Update Hours',
+  addfaq: '❓ Add FAQ',
+  voice: '🎤 Update Brand Voice',
+  viewconfig: '⚙️ View Config',
+  usage: '📈 Usage',
+  pause: '⏸ Pause AI',
+  resume: '▶️ Resume AI',
+};
+
+async function showClinicPicker(ctx, action) {
+  const { supabase } = require('../supabase/client');
+  const { data: clients, error } = await supabase
+    .from('clients')
+    .select('slug, name, status')
+    .order('created_at', { ascending: true });
+
+  if (error || !clients || clients.length === 0) {
+    return ctx.reply('❌ No clinics found.', BACK_TO_MENU);
+  }
+
+  const label = ACTION_LABELS[action] || action;
+  const buttons = clients.map(c => {
+    const statusEmoji = c.status === 'active' ? '✅' : c.status === 'paused' ? '⏸' : '⚡';
+    return [Markup.button.callback(`${statusEmoji} ${c.name}`, `act:${action}:${c.slug}`)];
+  });
+  buttons.push([Markup.button.callback('🔙 Back to Menu', 'menu_main')]);
+
+  await ctx.reply(
+    `${label}\n\nWhich clinic?`,
+    Markup.inlineKeyboard(buttons)
+  );
+}
+
+// Executes the chosen action for the chosen clinic
+bot.action(/^act:(\w+):(.+)$/, safeHandler('act', async (ctx) => {
+  const action = ctx.match[1];
+  const slug = ctx.match[2];
+  await ctx.answerCbQuery(`${ACTION_LABELS[action] || action} → ${slug}`);
+
+  switch (action) {
+    case 'viewconfig': return commands.handleViewConfig(ctx, slug);
+    case 'usage': return commands.handleUsage(ctx, slug);
+    case 'pause': return commands.handlePause(ctx, slug);
+    case 'resume': return commands.handleResume(ctx, slug);
+    case 'addservice':
+      return ctx.reply(
+        `➕ Add Service to *${slug}*\n\nType:\n/addservice ${slug} "Service Name" $price durationMin\n\nExample:\n/addservice ${slug} "HIFU Treatment" $350 60`,
+        BACK_TO_MENU
+      );
+    case 'updateprice':
+      return ctx.reply(
+        `💰 Update Price for *${slug}*\n\nType:\n/updateprice ${slug} "Service Name" $newPrice\n\nExample:\n/updateprice ${slug} "HIFU Treatment" $299`,
+        BACK_TO_MENU
+      );
+    case 'updatehours':
+      return ctx.reply(
+        `🕐 Update Hours for *${slug}*\n\nType:\n/updatehours ${slug} <day> HH:MM HH:MM\n\nExample:\n/updatehours ${slug} Saturday 09:00 17:00`,
+        BACK_TO_MENU
+      );
+    case 'addfaq':
+      return ctx.reply(
+        `❓ Add FAQ for *${slug}*\n\nType:\n/addfaq ${slug} "Question?" | "Answer"\n\nExample:\n/addfaq ${slug} "Parking available?" | "Free parking at rear"`,
+        BACK_TO_MENU
+      );
+    case 'voice':
+      return ctx.reply(
+        `🎤 Update Brand Voice for *${slug}*\n\nType:\n/updatevoice ${slug} <field> <value>\n\nFields: name, greeting, tone, enthusiasm, notes\n\nExample:\n/updatevoice ${slug} greeting "Welcome to Glow!"`,
+        BACK_TO_MENU
+      );
+    default:
+      return ctx.reply('⚠️ Unknown action.', BACK_TO_MENU);
+  }
+}));
+
 bot.action('menu_addservice', safeHandler('menu_addservice', async (ctx) => {
   await ctx.answerCbQuery();
-  await ctx.reply(
-    `➕ Add Service\n\nType:\n/addservice <slug> "Service Name" $price durationMin\n\nExample:\n/addservice pixelvault "HIFU Treatment" $350 60`,
-    BACK_TO_MENU
-  );
+  await showClinicPicker(ctx, 'addservice');
 }));
 
 bot.action('menu_updateprice', safeHandler('menu_updateprice', async (ctx) => {
   await ctx.answerCbQuery();
-  await ctx.reply(
-    `💰 Update Price\n\nType:\n/updateprice <slug> "Service Name" $newPrice\n\nExample:\n/updateprice pixelvault "HIFU Treatment" $299`,
-    BACK_TO_MENU
-  );
+  await showClinicPicker(ctx, 'updateprice');
 }));
 
 bot.action('menu_updatehours', safeHandler('menu_updatehours', async (ctx) => {
   await ctx.answerCbQuery();
-  await ctx.reply(
-    `🕐 Update Hours\n\nType:\n/updatehours <slug> <day> HH:MM HH:MM\n\nExample:\n/updatehours pixelvault Saturday 09:00 17:00`,
-    BACK_TO_MENU
-  );
+  await showClinicPicker(ctx, 'updatehours');
 }));
 
 bot.action('menu_addfaq', safeHandler('menu_addfaq', async (ctx) => {
   await ctx.answerCbQuery();
-  await ctx.reply(
-    `❓ Add FAQ\n\nType:\n/addfaq <slug> "Question?" | "Answer"\n\nExample:\n/addfaq pixelvault "Parking available?" | "Free parking at rear"`,
-    BACK_TO_MENU
-  );
+  await showClinicPicker(ctx, 'addfaq');
 }));
 
 bot.action('menu_voice', safeHandler('menu_voice', async (ctx) => {
   await ctx.answerCbQuery();
-  await ctx.reply(
-    `🎤 Update Brand Voice\n\nType:\n/updatevoice <slug> <field> <value>\n\nFields: name, greeting, tone, enthusiasm, notes\n\nExample:\n/updatevoice pixelvault greeting "Welcome to Glow!"`,
-    BACK_TO_MENU
-  );
+  await showClinicPicker(ctx, 'voice');
 }));
 
 bot.action('menu_pause', safeHandler('menu_pause', async (ctx) => {
-  await ctx.answerCbQuery('Pausing AI...');
-  await commands.handlePause(ctx, 'pixelvault');
+  await ctx.answerCbQuery();
+  await showClinicPicker(ctx, 'pause');
 }));
 
 bot.action('menu_resume', safeHandler('menu_resume', async (ctx) => {
-  await ctx.answerCbQuery('Resuming AI...');
-  await commands.handleResume(ctx, 'pixelvault');
+  await ctx.answerCbQuery();
+  await showClinicPicker(ctx, 'resume');
 }));
 
 // ─── BOOKING APPROVAL INLINE BUTTONS ─────────────────────────────
