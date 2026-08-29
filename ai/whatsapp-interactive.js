@@ -9,27 +9,56 @@
  * structured choices — key for top 3% SaaS bot UX.
  */
 
+// ─── WHATSAPP API LIMITS ─────────────────────────────────────────
+// WhatsApp rejects the ENTIRE list/button message if any row violates
+// these limits — the customer then sees nothing at all (silent failure).
+//   row title ≤ 24 chars · row description ≤ 72 · row id ≤ 200
+//   ≤ 10 rows per section · button title ≤ 20 chars · ≤ 3 buttons
+// We clamp everything here so one bad service name can never kill a menu.
+// Also: duplicate row IDs (e.g. a service added twice) reject the message,
+// so IDs are deduplicated with a numeric suffix.
+
+function clampText(s, max) {
+  const str = String(s ?? '');
+  return str.length > max ? str.slice(0, max - 1) + '…' : str;
+}
+
+function uniqueIds(rows) {
+  const seen = new Set();
+  return rows.map(r => {
+    let id = clampText(r.id, 200) || 'row';
+    if (seen.has(id)) {
+      let i = 2;
+      while (seen.has(`${id}_${i}`)) i++;
+      id = `${id}_${i}`;
+    }
+    seen.add(id);
+    return { ...r, id };
+  });
+}
+
 /**
  * Build a List Message payload for 360dialog
  * Used for: Welcome menu, service categories, treatment selection
  */
 function buildListMessage({ header, body, footer, buttonText, rows }) {
+  const safeRows = uniqueIds(rows || []).slice(0, 10).map(r => ({
+    id: r.id,
+    title: clampText(r.title, 24),
+    description: r.description ? clampText(r.description, 72) : undefined
+  }));
   return {
     type: 'interactive',
     interactive: {
       type: 'list',
-      header: header ? { type: 'text', text: header } : undefined,
-      body: { text: body },
-      footer: footer ? { text: footer } : undefined,
+      header: header ? { type: 'text', text: clampText(header, 60) } : undefined,
+      body: { text: clampText(body, 1024) },
+      footer: footer ? { text: clampText(footer, 60) } : undefined,
       action: {
-        button: buttonText || 'View Menu',
+        button: clampText(buttonText || 'View Menu', 20),
         sections: [{
           title: 'Menu',
-          rows: rows.map(r => ({
-            id: r.id,
-            title: r.title,
-            description: r.description || undefined
-          }))
+          rows: safeRows
         }]
       }
     }
@@ -41,20 +70,21 @@ function buildListMessage({ header, body, footer, buttonText, rows }) {
  * Used for: Yes/No confirmations, cancel/keep, reschedule options
  */
 function buildQuickReplyButtons({ body, footer, buttons }) {
+  const safeButtons = uniqueIds((buttons || []).slice(0, 3)).map(b => ({
+    type: 'reply',
+    reply: {
+      id: b.id,
+      title: clampText(b.title, 20)
+    }
+  }));
   return {
     type: 'interactive',
     interactive: {
       type: 'button',
-      body: { text: body },
-      footer: footer ? { text: footer } : undefined,
+      body: { text: clampText(body, 1024) },
+      footer: footer ? { text: clampText(footer, 60) } : undefined,
       action: {
-        buttons: buttons.map(b => ({
-          type: 'reply',
-          reply: {
-            id: b.id,
-            title: b.title
-          }
-        }))
+        buttons: safeButtons
       }
     }
   };
