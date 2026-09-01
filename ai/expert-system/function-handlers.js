@@ -590,7 +590,7 @@ async function getTreatmentInfo({ client_id, treatment_name, treatment }) {
     return {
       success: true,
       treatment: match,
-      message: `${match.name}: ${match.description || ''} ${match.duration}min. $${match.price}${match.price_unit ? '/' + match.price_unit : ''}.`
+      message: `${match.name}: ${match.description || ''} ${match.duration}min. $${String(match.price).replace(/^\$+/, '')}${match.price_unit ? '/' + match.price_unit : ''}.`
     };
     
   } catch (err) {
@@ -622,7 +622,7 @@ async function getPricing({ client_id, treatment_name, treatment, include_packag
     // Full price list
     const priceList = services.map(s => ({
       name: s.name,
-      price: `$${s.price}${s.price_unit ? '/' + s.price_unit : ''}`,
+      price: `$${String(s.price).replace(/^\$+/, '')}${s.price_unit ? '/' + s.price_unit : ''}`,
       duration: `${s.duration}min`,
     }));
     

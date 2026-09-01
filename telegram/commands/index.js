@@ -232,8 +232,8 @@ async function handleViewConfig(ctx, providedSlug = null) {
   try {
     await ctx.replyWithMarkdownV2(replyText);
   } catch {
-    // Fallback: strip markdown and send plain text
-    await ctx.reply(replyText.replace(/[*_]/g, ''));
+    // Fallback: strip markdown AND escape backslashes, then send plain text
+    await ctx.reply(replyText.replace(/\\([_*[\]()~`>#+\-=|{}.!])/g, '$1').replace(/[*_]/g, ''));
   }
 }
 
@@ -522,7 +522,7 @@ async function handlePause(ctx, providedSlug = null) {
     try {
       await ctx.replyWithMarkdownV2(msg);
     } catch {
-      await ctx.reply(msg.replace(/[*_]/g, ''));
+      await ctx.reply(msg.replace(/\\([_*[\]()~`>#+\-=|{}.!])/g, '$1').replace(/[*_]/g, ''));
     }
   } else {
     await ctx.reply(`\u274c Error: ${result.error}`);
@@ -546,7 +546,7 @@ async function handleResume(ctx, providedSlug = null) {
     try {
       await ctx.replyWithMarkdownV2(msg);
     } catch {
-      await ctx.reply(msg.replace(/[*_]/g, ''));
+      await ctx.reply(msg.replace(/\\([_*[\]()~`>#+\-=|{}.!])/g, '$1').replace(/[*_]/g, ''));
     }
   } else {
     await ctx.reply(`\u274c Error: ${result.error}`);

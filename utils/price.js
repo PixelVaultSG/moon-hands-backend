@@ -31,15 +31,15 @@ function parsePrice(str) {
 }
 
 /**
- * Canonical storage format: "350" or "50-100" (no currency symbol —
- * display layers add the '$' themselves; storing it would render "$$350").
+ * Canonical storage format: "$350" or "$50-$100" — currency symbol kept,
+ * matching the existing services in client configs ("$380" etc.).
  * Returns null when the input has no usable number.
  */
 function normalizePrice(str) {
   const p = parsePrice(str);
   if (!p) return null;
   const fmt = (n) => (Number.isInteger(n) ? String(n) : n.toFixed(2));
-  return p.isRange ? `${fmt(p.min)}-${fmt(p.max)}` : fmt(p.min);
+  return p.isRange ? `$${fmt(p.min)}-$${fmt(p.max)}` : `$${fmt(p.min)}`;
 }
 
 /**
