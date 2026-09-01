@@ -645,7 +645,10 @@ function similarityScore(a, b) {
 function formatPrice(price, unit) {
   if (!price) return 'Price on request';
   const unitStr = unit ? `/${unit}` : '';
-  return `$${price}${unitStr}`;
+  // Strip any existing $ so stored prices render the same whether they
+  // were saved as "380" or "$380" / "$50-$100" — never "$$380"
+  const p = String(price).replace(/^\$+/, '');
+  return `$${p}${unitStr}`;
 }
 
 function formatDate(dateStr) {
