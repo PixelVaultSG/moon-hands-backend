@@ -29,7 +29,7 @@ function formatConfig(config, client) {
   return [
     `\ud83d\udccb *Client: ${escapeMarkdown(client.name)}*`,
     `Status: ${client.status || 'active'}`,
-    `Plan: ${escapeMarkdown(client.plan || 'N/A')}`,
+    `Plan: ${client.plan === 'premium' ? 'Premium' : 'Basic'} \(${client.plan === 'premium' ? '547' : '347'}/mo\)`,
     ``,
     `\ud83e\udd16 AI Agent: *${escapeMarkdown(config.agent_name || 'Default')}*`,
     `Voice: ${escapeMarkdown(config.tone || 'friendly')} / ${config.enthusiasm || 'medium'} enthusiasm`,
@@ -101,6 +101,9 @@ async function handleHelp(ctx) {
     '/security \u2014 Security dashboard',
     '/threats \u2014 Active threats',
     '/authlog \u2014 Failed logins (1h)',
+    '',
+    '\ud83e\uddea SAMPLES',
+    '/testalerts \u2014 Fire all sample message types here',
     '',
     '\ud83d\udd27 SYSTEM',
     '/debug \u2014 Server diagnostics',
@@ -732,6 +735,31 @@ async function handleDebug(ctx) {
   }
 }
 
+
+// ─── SAMPLE ALERTS (/testalerts) ─────────────────────────────────
+// Fires the full sample message catalogue to the admin chat so the
+// owner can review every Telegram message type. Admin-only.
+async function handleTestAlerts(ctx) {
+  const { SAMPLES } = require('../sample-alerts');
+  await ctx.reply(`🧪 Firing ${SAMPLES.length} sample messages... (about ${Math.ceil(SAMPLES.length * 0.7)}s)`);
+  await ctx.reply(`🧪 *SAMPLE ALERT RUN — ${SAMPLES.length} message types*
+Synced 2026-09-05: basic/premium plans, WhatsApp-only, admin-only free/payable split.`,
+    { parse_mode: 'Markdown' }).catch(() => {});
+  for (let i = 0; i < SAMPLES.length; i++) {
+    const s = SAMPLES[i];
+    const text = `[${i + 1}/${SAMPLES.length}] ${s.name}
+
+${s.text}`;
+    try {
+      await ctx.reply(text, { parse_mode: 'Markdown' });
+    } catch {
+      await ctx.reply(text.replace(/[*_`]/g, ''));
+    }
+    await new Promise(r => setTimeout(r, 700)); // stay under Telegram rate limits
+  }
+  await ctx.reply('🧪 END OF SAMPLE RUN');
+}
+
 // ─── EXPORT COMMAND MAP ──────────────────────────────────────────
 
 module.exports = {
@@ -753,5 +781,6 @@ module.exports = {
   handleSecurity,
   handleThreats,
   handleAuthLog,
-  handleDebug
+  handleDebug,
+  handleTestAlerts
 };

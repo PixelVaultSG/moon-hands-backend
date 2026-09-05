@@ -40,29 +40,31 @@ function highValueLead({ clientName, time, customerPhone, summary, recommendedAc
 
 // ─── USAGE LIMIT ALERT ──────────────────────────────────────────
 
-function usageAlert({ clientName, plan, voiceUsed, voiceLimit, waUsed, waLimit, severity }) {
-  const voicePct = Math.round((voiceUsed / voiceLimit) * 100);
+function usageAlert({ clientName, plan, waUsed, waLimit, hardcoded = 0, ai = 0, severity }) {
   const waPct = Math.round((waUsed / waLimit) * 100);
-  const highestPct = Math.max(voicePct, waPct);
 
   const emoji = severity === 'critical' ? '\ud83d\udd34' : severity === 'warning' ? '\ud83d\udfe1' : '\ud83d\udfe0';
   const title = severity === 'critical' ? 'LIMIT EXCEEDED' : severity === 'warning' ? 'APPROACHING LIMIT' : 'USAGE NOTICE';
+  const planLabel = plan === 'premium' ? 'Premium' : 'Basic';
 
-  return [
+  const lines = [
     `${emoji} *${title}*`,
     '',
     `Client: ${escapeMarkdown(clientName)}`,
-    `Plan: ${escapeMarkdown(plan)}`,
+    `Plan: ${planLabel}`,
     '',
-    `\ud83d\udcde Voice: ${voiceUsed} / ${voiceLimit} min \(${voicePct}%\)`,
     `\ud83d\udcac WhatsApp: ${waUsed} / ${waLimit} msgs \(${waPct}%\)`,
+    // Internal split — Moon Hands admin eyes only, never sent to clinics
+    `   \u251c \ud83d\udccc Template \(free\): ${hardcoded}`,
+    `   \u2514 \ud83e\udd16 AI-powered \(payable\): ${ai}`,
     ``,
-    highestPct > 100
-      ? `\u26a0\ufe0f Client has exceeded plan limits. Consider upgrade.`
-      : highestPct > 80
+    waPct > 100
+      ? `\u26a0\ufe0f Client has exceeded plan limits. Consider upgrade to Premium.`
+      : waPct > 80
         ? `\u26a0\ufe0f Client approaching limit. Monitor closely.`
         : `\ud83d\udcc8 On track. No action needed.`
-  ].join('\n');
+  ];
+  return lines.join('\n');
 }
 
 // ─── FAILED BOOKING ALERT ───────────────────────────────────────
@@ -103,61 +105,64 @@ function newClientOnboarded({ clientName, contactName, plan, agentName, services
 
 // ─── DAILY USAGE REPORT (8pm) ──────────────────────────────────
 
-function dailyUsageReport({ date, totalCost, clients, monthToDate }) {
+function dailyUsageReport({ date, clients, monthToDate }) {
   const lines = [
     '\ud83d\udcca *MOON HANDS DAILY USAGE REPORT*',
     `\ud83d\udcc5 ${date} \u2013 8:00 PM`,
     '',
-    '\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501',
-    '\ud83d\udcb0 *TODAY\'S COSTS*',
-    '\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501',
+    '\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501',
+    '\ud83d\udcb0 *TODAY\u2019S USAGE*',
+    '\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501',
     ''
   ];
 
-  let totalVoice = 0, totalWA = 0, totalClientCost = 0;
+  let totalWA = 0, totalClientCost = 0, totalHardcoded = 0, totalAI = 0;
   const alerts = [];
 
   clients.forEach(c => {
-    totalVoice += c.voice_minutes;
     totalWA += c.whatsapp_messages;
     totalClientCost += c.cost || 0;
+    totalHardcoded += c.hardcoded_messages || 0;
+    totalAI += c.ai_messages || 0;
 
-    const voiceLimit = c.plan === 'premium' ? 2000 : 500;
     const waLimit = c.plan === 'premium' ? 5000 : 1000;
-    const vPct = Math.round((c.voice_minutes / voiceLimit) * 100);
     const wPct = Math.round((c.whatsapp_messages / waLimit) * 100);
+    const planLabel = c.plan === 'premium' ? 'Premium' : 'Basic';
 
-    const status = vPct > 100 || wPct > 100 ? '\ud83d\udd34' : vPct > 80 || wPct > 80 ? '\ud83d\udfe1' : '\ud83d\udfe2';
-    const warning = vPct > 100 || wPct > 100 ? ' \u26a0\ufe0f' : '';
+    const status = wPct > 100 ? '\ud83d\udd34' : wPct > 80 ? '\ud83d\udfe1' : '\ud83d\udfe2';
+    const warning = wPct > 100 ? ' \u26a0\ufe0f' : '';
 
-    lines.push(`${status} ${escapeMarkdown(c.name)} \(${escapeMarkdown(c.plan)}\)${warning}`);
-    lines.push(`   Voice: ${c.voice_minutes}min | WA: ${c.whatsapp_messages}msgs`);
-    lines.push(`   Cost: $${(c.cost || 0).toFixed(2)}`);
+    lines.push(`${status} ${escapeMarkdown(c.name)} \(${planLabel}\)${warning}`);
+    lines.push(`   WhatsApp: ${c.whatsapp_messages} / ${waLimit} msgs \(${wPct}%\)`);
+    // Internal split — Moon Hands admin eyes only, never exposed to clinics
+    lines.push(`   \u251c \ud83d\udccc Template \(free\): ${c.hardcoded_messages || 0}`);
+    lines.push(`   \u2514 \ud83e\udd16 AI-powered \(payable\): ${c.ai_messages || 0}`);
+    lines.push(`   AI cost: $${(c.cost || 0).toFixed(2)} | Bookings: ${c.bookings || 0}`);
     lines.push('');
 
-    if (vPct > 100 || wPct > 100) {
-      alerts.push(`\u2022 ${escapeMarkdown(c.name)} exceeded limits \u2192 recommend upgrade`);
-    } else if (vPct > 80 || wPct > 80) {
-      alerts.push(`\u2022 ${escapeMarkdown(c.name)} at ${Math.max(vPct, wPct)}% \u2192 monitor`);
+    if (wPct > 100) {
+      alerts.push(`\u2022 ${escapeMarkdown(c.name)} exceeded limits \u2192 recommend Premium upgrade`);
+    } else if (wPct > 80) {
+      alerts.push(`\u2022 ${escapeMarkdown(c.name)} at ${wPct}% \u2192 monitor`);
     }
   });
 
-  lines.push(`TOTAL TODAY: $${totalClientCost.toFixed(2)}`);
-  lines.push(`\n\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501`);
+  lines.push(`TOTAL TODAY: ${totalWA} msgs \(${totalHardcoded} template free / ${totalAI} AI\) \u2014 AI cost $${totalClientCost.toFixed(2)}`);
+  lines.push(`\n\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501`);
   lines.push('\ud83d\udcc8 *MONTH-TO-DATE*');
-  lines.push('\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501');
+  lines.push('\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501');
   lines.push(`Spent: $${monthToDate.spent.toFixed(2)}`);
   lines.push(`Budget: $${monthToDate.budget.toFixed(2)}`);
   lines.push(`Remaining: $${monthToDate.remaining.toFixed(2)} \(${Math.round(monthToDate.remaining/monthToDate.budget*100)}%\)`);
 
   if (alerts.length) {
-    lines.push(`\n\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501`);
+    lines.push(`\n\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501`);
     lines.push('\u26a0\ufe0f *ALERTS*');
-    lines.push('\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501');
+    lines.push('\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501');
     alerts.forEach(a => lines.push(a));
   }
 
-  lines.push('\nReply `/details <client-id>` for detailed report.');
+  lines.push('\nReply `/usage <slug>` for a per-clinic breakdown.');
 
   return lines.join('\n');
 }

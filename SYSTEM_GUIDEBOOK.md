@@ -225,3 +225,8 @@ Markdown v1 escaper `esc1` (`\_\*\`\[`) for v1 messages; safeReplyMD fallback st
 - Supabase realtime fails on Node 20 (sandbox) — production Node 22 is fine.
 - Booking state is in-memory (60-min TTL) — restarts clear in-flight bookings; customers simply restart the flow.
 - Existing DB rows created before the `$`-storage fix may show `50-100`; re-adding the same service name updates in place to `$50-$100`.
+
+### Sample Alert Catalogue (added 2026-09-05)
+- `telegram/sample-alerts.js` is the single source of truth for every Telegram message type (bookings, cost alerts, safety/security, health, lifecycle).
+- Fire the whole catalogue to the Moon Hands admin chat anytime with the admin-only command `/testalerts`, or run `node scripts/send-all-telegram-alerts.js` locally with `TELEGRAM_BOT_TOKEN` + `TELEGRAM_ADMIN_CHAT_ID` set.
+- `supabase/migration_normalize_plan_names.sql` rewrites legacy plan values (`professional`→`premium`, `starter`→`basic`) in `clients.plan`. Run once; idempotent.

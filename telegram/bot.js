@@ -590,6 +590,7 @@ bot.help(safeHandler('/help', async (ctx) => {
   );
 }));
 bot.command('clients', adminCmd('/clients', commands.handleClients));
+bot.command('testalerts', adminCmd('/testalerts', commands.handleTestAlerts));
 bot.command('viewconfig', adminCmd('/viewconfig', commands.handleViewConfig));
 bot.command('addservice', adminCmd('/addservice', commands.handleAddService));
 bot.command('updateprice', adminCmd('/updateprice', commands.handleUpdatePrice));
