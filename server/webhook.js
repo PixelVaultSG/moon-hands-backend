@@ -1166,7 +1166,16 @@ async function routeToAI(text, message, channel, preResolvedClientId = null, int
     const estimatedTokens = Math.ceil((result.text?.length || 0) / 4); // ~4 chars per token
     const estimatedCost = 0.005 + (estimatedTokens / 1000) * 0.003;
     trackSpend(clientId, estimatedCost);
-    
+
+    // Usage counter: total includes hardcoded + AI replies; split tracked for Moon Hands admin only.
+    // Hardcoded/template replies (result.model === 'hardcoded') cost $0 — clinics see only the total.
+    if (channel === 'whatsapp') {
+      const isHardcoded = result.model === 'hardcoded';
+      const { incrementDailyUsage } = require('../supabase/client');
+      incrementDailyUsage(clientId, { isAI: !isHardcoded, cost: isHardcoded ? 0 : estimatedCost })
+        .catch(err => console.error('[USAGE] track failed:', err.message));
+    }
+
     // Cache conversation turn (raw AI response for context)
     addConversationTurn(message.from, text, result.text);
     

@@ -572,17 +572,32 @@ async function handleUsage(ctx, providedSlug = null) {
     return ctx.reply(`📊 No usage recorded for ${client.name} today.\n\nThis is normal — usage data appears after the first patient message.`);
   }
 
-  const waLimit = client.plan === 'professional' ? 5000 : 1000;
-  const waPct = Math.round((clientUsage.whatsapp_messages / waLimit) * 100);
+  const waLimit = client.plan === 'premium' ? 5000 : 1000;
+  const total = clientUsage.whatsapp_messages || 0;
+  const waPct = Math.round((total / waLimit) * 100);
   const status = (pct) => pct > 100 ? '🔴' : pct > 80 ? '🟡' : '🟢';
 
-  await ctx.reply(
-    `📊 Usage: ${client.name}\n` +
-    `Date: ${today}\n\n` +
-    `💬 WhatsApp: ${clientUsage.whatsapp_messages} / ${waLimit} msgs (${waPct}%) ${status(waPct)}\n` +
-    `💰 Cost: $${clientUsage.cost?.toFixed(2) || '0.00'}\n` +
-    `📅 Bookings: ${clientUsage.bookings || 0}`
-  );
+  // Moon Hands admin sees the internal split (template = free, AI = payable).
+  // Clinic staff see ONLY the total — the hardcoded/AI split is never exposed to clinics,
+  // so message value stays flat and Premium (unlimited) remains the obvious upgrade.
+  const isRequesterAdmin = ctx.from && String(ctx.from.id) === String(process.env.TELEGRAM_ADMIN_CHAT_ID);
+
+  const lines = [
+    `📊 Usage: ${client.name}`,
+    `Date: ${today}`,
+    ``,
+    `💬 WhatsApp: ${total} / ${waLimit} msgs (${waPct}%) ${status(waPct)}`,
+  ];
+  if (isRequesterAdmin) {
+    const hardcoded = clientUsage.hardcoded_messages || 0;
+    const ai = clientUsage.ai_messages || 0;
+    lines.push(`   ├ 📌 Template (free): ${hardcoded}`);
+    lines.push(`   └ 🤖 AI-powered (payable): ${ai}`);
+    lines.push(`💰 AI cost today: $${clientUsage.cost?.toFixed(2) || '0.00'}`);
+  }
+  lines.push(`📅 Bookings: ${clientUsage.bookings || 0}`);
+
+  await ctx.reply(lines.join('\n'));
 }
 
 async function handleHealth(ctx) {

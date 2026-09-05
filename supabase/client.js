@@ -214,6 +214,47 @@ async function getDailyUsage(date) {
   return data || [];
 }
 
+/**
+ * Increment today's usage counter for a clinic (fire-and-forget from webhook).
+ * whatsapp_messages = TOTAL (hardcoded + AI) — this is what clinics see.
+ * hardcoded_messages / ai_messages = internal split for Moon Hands admin only.
+ * @param {string} clientId — clinic UUID
+ * @param {object} opts — { isAI: boolean, cost: number (USD, AI replies only) }
+ */
+async function incrementDailyUsage(clientId, { isAI = false, cost = 0 } = {}) {
+  if (!clientId) return;
+  const today = new Date().toISOString().split('T')[0];
+  try {
+    const { data: existing } = await supabase
+      .from('daily_usage')
+      .select('*')
+      .eq('date', today)
+      .eq('client_id', clientId)
+      .maybeSingle();
+
+    const payload = existing ? {
+      whatsapp_messages: (existing.whatsapp_messages || 0) + 1,
+      hardcoded_messages: (existing.hardcoded_messages || 0) + (isAI ? 0 : 1),
+      ai_messages: (existing.ai_messages || 0) + (isAI ? 1 : 0),
+      cost: parseFloat(((Number(existing.cost) || 0) + (isAI ? cost : 0)).toFixed(4)),
+    } : {
+      date: today,
+      client_id: clientId,
+      whatsapp_messages: 1,
+      hardcoded_messages: isAI ? 0 : 1,
+      ai_messages: isAI ? 1 : 0,
+      cost: isAI ? cost : 0,
+    };
+
+    const { error } = await supabase
+      .from('daily_usage')
+      .upsert(payload, { onConflict: 'date,client_id' });
+    if (error) console.error('[USAGE] increment failed:', error.message);
+  } catch (err) {
+    console.error('[USAGE] increment exception:', err.message);
+  }
+}
+
 async function getMonthlyUsage(month) {
   const { data, error } = await supabase
     .from('monthly_usage')
@@ -319,6 +360,7 @@ module.exports = {
   pauseClient,
   resumeClient,
   getDailyUsage,
+  incrementDailyUsage,
   getMonthlyUsage,
   getFutureAppointments,
   getRecentConversations,

@@ -27,14 +27,14 @@ async function sendDailyUsageReport() {
     // Calculate month-to-date
     const monthSpent = monthlyData.reduce((sum, m) => sum + (m.cost || 0), 0);
     const monthBudget = monthlyData.reduce((sum, m) => {
-      const limit = m.plan === 'professional' ? 497 : 297;
+      const limit = m.plan === 'premium' ? 497 : 297;
       return sum + limit;
     }, 0);
 
     const clients = usageData.map(u => ({
       name: u.clients?.name || 'Unknown',
       slug: u.clients?.slug || 'unknown',
-      plan: u.clients?.plan || 'starter',
+      plan: u.clients?.plan || 'basic',
       voice_minutes: u.voice_minutes || 0,
       whatsapp_messages: u.whatsapp_messages || 0,
       cost: u.cost || 0,

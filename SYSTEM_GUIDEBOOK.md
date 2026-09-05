@@ -82,14 +82,15 @@ docs/            Design + operations docs
 | Treatment knowledge / clinic profile / languages | Standard | Advanced / Custom / Priority |
 | Trial | 14-day free, no credit card | same |
 
-**Technical reality (be honest internally):**
+**Technical reality (as of 2026-09-05):**
 - Onboarding captures the choice and stores it: `onboarding_submissions.selected_plan` = `'basic'|'premium'` → copied to `clients.plan`.
-- ⚠️ **Naming is inconsistent:** schema default is `'starter'`, onboarding writes `'basic'/'premium'`, and `middleware/usage-tracker.js` expects `'starter'|'professional'`. Pick one vocabulary before enforcing anything (recommend `basic`/`premium`).
+- ✅ **Naming standardised (2026-09-05):** `basic|premium` everywhere — schema default, usage-tracker, Telegram alerts/scheduler/commands, onboarding. `starter`/`professional` are retired.
+- **Usage counters (2026-09-05):** every WhatsApp reply increments `daily_usage.whatsapp_messages` (the **total**, incl. hardcoded) plus an internal split: `hardcoded_messages` (template replies, free) and `ai_messages` (OpenAI, payable, with cost). **Clinics see only the total** (`/usage` for clinic staff); **Moon Hands admin sees the split + AI cost** (`/usage` from the admin account). Rationale: clinics shouldn't know template replies are free — flat perceived value keeps Premium (unlimited) the obvious upgrade.
 - ⚠️ **No per-plan feature gating is live.** What actually runs in production:
   - `middleware/cost-protection.js` — **same hard caps for every clinic** (1,000 WhatsApp msgs/day, 500 AI calls/day, US$20/day spend, 100 booking ops/day). Reaching a cap sends Telegram alerts (at 1× and 2×) but **never blocks service** (`allowed: true` always).
-  - `middleware/usage-tracker.js` — contains the designed per-plan logic (Basic ≈ 500 msgs/mo ≈ 17/day with rollover; Premium unlimited) but is **not wired into the webhook pipeline** (self-test/dead code).
+  - `middleware/usage-tracker.js` — contains the designed per-plan logic (basic ≈ 500 msgs/mo ≈ 17/day with rollover; premium unlimited) but is **not wired into the webhook pipeline** (self-test/dead code).
   - Multi-location, languages, treatment knowledge depth: all config-driven, identical for every clinic regardless of plan.
-- **Consequence:** today every clinic gets the full system with uniform safety caps; plans differ only on the invoice. To make plans real: (1) normalise `clients.plan` to `basic|premium`, (2) wire `usage-tracker` (or cost-protection tiers) into `server/webhook.js` keyed by plan, (3) gate multi-location creation and priority-support SLA by plan.
+- **To make plans real:** (1) wire `usage-tracker` per-plan limits into `server/webhook.js` keyed by `clients.plan` (keep alert-first, never hard-block), (2) gate multi-location creation and priority-support SLA by plan.
 
 ### `client_configs` (one row per clinic — the entire personality & menu)
 | Field | Type | Notes |

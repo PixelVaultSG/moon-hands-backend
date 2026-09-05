@@ -122,8 +122,8 @@ function dailyUsageReport({ date, totalCost, clients, monthToDate }) {
     totalWA += c.whatsapp_messages;
     totalClientCost += c.cost || 0;
 
-    const voiceLimit = c.plan === 'professional' ? 2000 : 500;
-    const waLimit = c.plan === 'professional' ? 5000 : 1000;
+    const voiceLimit = c.plan === 'premium' ? 2000 : 500;
+    const waLimit = c.plan === 'premium' ? 5000 : 1000;
     const vPct = Math.round((c.voice_minutes / voiceLimit) * 100);
     const wPct = Math.round((c.whatsapp_messages / waLimit) * 100);
 
