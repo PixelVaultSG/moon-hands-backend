@@ -196,7 +196,7 @@ Message: "Your bot is useless, I want to speak to a real person"
 The bot has automatically paused and will NOT reply to this patient until you resume it.
 
 What you can do:
-1️⃣ Reply to the patient via your 360dialog dashboard
+1️⃣ Reply to the patient from your WhatsApp Business app (same WABA number your patients message)
 2️⃣ When done, send /patientresume +6581234567
 3️⃣ Or send /takeover +6581234567 to keep bot paused
 
@@ -213,7 +213,7 @@ Message: "Can I speak to a real person please?"
 The bot has automatically paused and will NOT reply to this patient until you resume it.
 
 What you can do:
-1️⃣ Reply to the patient via your 360dialog dashboard
+1️⃣ Reply to the patient from your WhatsApp Business app (same WABA number your patients message)
 2️⃣ When done, send /patientresume +6587654321
 3️⃣ Or send /takeover +6587654321 to keep bot paused
 
@@ -224,7 +224,7 @@ What you can do:
     text: `🔇 *Bot paused for 4567*
 
 The bot will NOT auto-reply to this patient.
-You can now reply manually via your 360dialog dashboard.
+You can now reply manually from your WhatsApp Business app (same WABA number).
 
 Auto-resumes in 30 minutes, or use /patientresume +6581234567`,
   },
