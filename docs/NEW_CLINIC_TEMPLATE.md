@@ -1,5 +1,7 @@
 # 🧩 New Clinic Template & Provisioning Guide
 
+> **Last synced:** 2026-09-05
+
 > Every new clinic starts as an exact copy of the **Pixel Vault mould** (see `SYSTEM_GUIDEBOOK.md`). A clinic = 2 database rows + channel wiring. **No code changes are needed to onboard a clinic.**
 
 ---
@@ -81,8 +83,9 @@ Everything in `client_configs` is per-clinic by construction. For **behavioural*
 
 | Item | Why | How to add |
 |---|---|---|
-| Voice AI number | Per-clinic VAPI assistant + phone | Provision in VAPI, save `vapi_assistant_id` |
-| SMS | Per-clinic Twilio number | Provision in Twilio, save `twilio_phone_sid` |
 | Google Calendar | Per-clinic OAuth consent | Owner completes OAuth link |
 | Custom booking rules | Vary by clinic | Set `appointment_duration`, `buffer_time`, `max_per_day` |
-| Non-English replies | Per-clinic | Set `languages` array |
+| Non-English replies | Per-clinic | Set `languages` array (EN/ZH/MS offered) |
+| ~~Voice AI / SMS~~ | ⚠️ Not part of the current offering (2026-09-05) | Do not provision without a product decision |
+
+**Plan field:** set `clients.plan` to the purchased tier (`basic` = S$347, `premium` = S$547). Note: plan is currently billing/record-keeping only — no per-plan feature gating is live yet (see `SYSTEM_GUIDEBOOK.md` §4a).

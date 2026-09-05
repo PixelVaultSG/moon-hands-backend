@@ -16,7 +16,7 @@ INSERT INTO clients (
     '{{owner@email.com}}',
     '{{+65 XXXX XXXX}}',
     '{{+65 XXXX XXXX}}',        -- WhatsApp business number (360dialog)
-    'starter',                  -- starter | professional
+    'basic',                      -- basic (S$347) | premium (S$547) — billing tier
     'setup',                    -- setup → active after go-live checks
     'aesthetic'
 )

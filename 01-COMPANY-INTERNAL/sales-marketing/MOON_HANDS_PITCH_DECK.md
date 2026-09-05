@@ -1,119 +1,129 @@
-# 🎯 Moon Hands — Pitch Deck (Updated 2026-09)
+# 🎯 Moon Hands — Pitch Deck (Speaker Notes Version)
 ## AI Receptionist & WhatsApp Booking Automation for Singapore Aesthetic Clinics
 
-> This deck reflects the **live, production-verified platform** as of Sept 2026. Pair with the PPTX version for presentations.
+> **Last synced:** 2026-09-05 · Aligned with live website (moonhands.space) and the PPTX deck (`moon-hands-pitch-deck.pptd`).
+> **Fact rules:** WhatsApp only (no voice call service). Real pricing: Basic S$347/mo, Premium S$547/mo, 14-day free trial. Languages: English, Mandarin, Malay. PDPA compliant.
 
 ---
 
-## 📊 SLIDE 1: The Problem
+## 🌙 SLIDE 1: Cover
 
-### Clinics Are Losing Bookings Every Day
+**Your 24/7 Receptionist — Among the Stars**
 
-- 📞 **62% of calls to small businesses go unanswered**
-- ⏰ **After-hours WhatsApp inquiries = lost revenue** — customers book with whoever replies first
-- 💬 **Customers expect instant replies** — and want to *book in the chat*, not fill a form
-- 😤 **Front desk is busy with in-clinic patients** — messages pile up unanswered
+*Moon Hands answers every WhatsApp enquiry, books consultations, and handles patient questions — while you focus on the treatments that matter.*
 
-> *"I was losing 5–10 potential customers every week because I couldn't reply while treating a patient."*
+Built in Singapore for Singapore aesthetic clinics · By Pixel Vault Pte Ltd
 
 ---
 
-## 💡 SLIDE 2: The Solution
+## 📊 SLIDE 2: The Problem
 
-### Meet Moon Hands — Your AI Receptionist That Never Sleeps
+### Your patients message after hours. Who answers?
+
+- 💬 **Patients expect instant replies** — they enquire on WhatsApp and book with whichever clinic answers first
+- 🌙 **Evenings & weekends go quiet** — most aesthetic enquiries arrive after work, exactly when nobody is replying
+- 👩‍⚕️ **Your team is with patients** — while treating patients in-clinic, messages pile up unanswered for hours
+- 📅 **Every missed chat is a missed booking** — a slow reply loses the consultation, the treatment plan, and the repeat visits
+
+> *Moon Hands makes sure someone always answers.*
+
+---
+
+## 💡 SLIDE 3: Built for Clinics That Never Sleep
 
 | Feature | What It Does |
 |---|---|
-| 💬 **WhatsApp AI** | Replies instantly 24/7, answers FAQs, shows your treatment menu, books appointments with guided buttons |
-| 📅 **Smart Booking** | Guided flow: date → time → category → treatment → **captures name & phone** → confirmation card with total cost |
-| 💰 **Real Pricing** | Fixed prices *and* ranges (`$50–$100`); total computed live and shown before confirming |
-| 📱 **Telegram Staff Bot** | Instant booking alerts, daily summaries, one-tap human takeover |
-| 📆 **Google Calendar** | Bookings land in your calendar automatically |
-| 🌍 **Multi-Language** | English, Mandarin, Malay, Tamil |
-| 📞 **Voice AI (optional)** | Answers calls 24/7, sounds human, books appointments |
+| ⚡ **Never Miss an Enquiry** | Replies to every WhatsApp message in **under 5 seconds** — 24/7, even while you sleep |
+| 🛡️ **Knows Aesthetic Treatments** | Trained on Botox, fillers, Pico/CO2/Nd:YAG lasers, HIFU, thread lifts, Rejuran, Profhilo and more — customised to your menu |
+| 🌏 **Singapore-Focused** | English, Mandarin and Malay. PDPA compliant. Built by a Singapore-based team |
+| 📅 **Books in the Chat** | Guided booking with real slots, **name & phone capture**, and a confirmation card with the total price — no forms, no apps |
+| ✈️ **Telegram Staff Bot** | Instant booking alerts in your staff group, daily summaries, one-tap human takeover of any chat |
+| 🏷️ **Your Real Prices** | Fixed or range pricing (`$50–$100`). Totals computed live and shown before the patient confirms |
 
 ---
 
-## 🔄 SLIDE 3: How a Booking Actually Happens (live demo flow)
+## 🔄 SLIDE 4: A Complete Booking — Inside One WhatsApp Chat
 
-1. Customer: *"Hi, how much is HIFU?"* → instant answer: **$350, 60 min**
-2. *"Can I book?"* → date picker → time slots (respects your hours, buffers, daily cap)
-3. Treatment menu → tap category → tap treatment
-4. AI asks for their **name** (phone captured automatically) — so your team can call back
-5. **Confirmation card:** 👤 Name · 📱 Phone · 📅 Date · 🕐 Time · 💆 Treatments · 💰 Total
-6. ✅ Customer confirms → your **Telegram staff group is notified instantly**
+1. **Instant price answer** — "How much is HIFU?" → "S$350, 60 min"
+2. **Real date & time slots** — respects your hours, buffers and daily cap
+3. **Your treatment menu** — tap a category → tap a treatment, with your prices
+4. **Name & phone captured** — so your team can schedule or call back
+5. **Confirmation card** — name · phone · date · time · treatments · total cost
+6. **Your team is notified** — instant alert in your Telegram staff group
 
-**No app downloads. No forms. All inside WhatsApp.**
-
----
-
-## 🏆 SLIDE 4: Why Moon Hands?
-
-### The ONLY service that does WhatsApp + Voice + Bookings, fully managed
-
-| Competitor | Voice | WhatsApp | In-chat booking | Managed |
-|---|---|---|---|---|
-| SetSmart ($99/mo) | ❌ | IG only | ❌ | ✅ |
-| Instaset ($149/mo) | ❌ | IG only | ❌ | ✅ |
-| Appointwise ($347/mo) | ❌ | ✅ | Partial | ✅ |
-| Autocalls ($337/mo) | ✅ | ❌ | ❌ | ✅ |
-| **Moon Hands** | **✅** | **✅** | **✅ Full flow** | **✅** |
-
-### The Difference
-1. **Complete coverage** — callers and texters both handled
-2. **Managed, not DIY** — we build, host, monitor, and update; you just approve changes in Telegram
-3. **Built for Singapore** — multi-language, local market, local support
-4. **You're in control** — staff can pause the AI for any customer and take over anytime
+*No app downloads. No forms. No missed messages.*
 
 ---
 
-## 💰 SLIDE 5: The Value Proposition
+## 📱 SLIDE 5: See It In Action
 
-### A receptionist for a fraction of the cost
+**Try It Right Now** — message our demo number and experience how Moon Hands replies to real patient enquiries:
 
-| | Full-time receptionist | Moon Hands |
+- What treatments do you offer?
+- How much is Botox?
+- What are your opening hours?
+- Where is your clinic located?
+
+👉 **moonhands.space** — live simulator, no signup needed
+
+---
+
+## 💰 SLIDE 6: Simple Pricing
+
+### One flat fee. No per-message charges. No hidden costs.
+
+| | 🌟 **BASIC — S$347/mo** | ⭐ **PREMIUM — S$547/mo** (Most Popular) |
 |---|---|---|
-| Cost | $2,500–3,500/mo | From $XXX/mo |
-| Hours | 8h/day, weekdays | **24/7/365** |
-| Response time | Minutes to hours | **Seconds** |
-| Simultaneous chats | 1 | **Unlimited** |
-| Sick days / turnover | Yes | **Never** |
+| Patient messages | Up to 500/mo | **Unlimited** |
+| Clinic locations | 1 | **Unlimited** |
+| WhatsApp Business integration | ✓ | ✓ |
+| Appointment booking | ✓ | ✓ |
+| Treatment knowledge | Basic | **Advanced** |
+| Language support | Standard | **Priority** |
+| Clinic profile | Standard | **Custom** |
+| Support | Email | **Priority** |
 
-**One recovered booking per week pays for the service.**
-
----
-
-## 🛡️ SLIDE 6: Safety & Control (why clinics trust it)
-
-- ✅ AI only knows your **approved** menu, prices & FAQs — it can't invent discounts
-- ✅ Every booking captures **name + phone** for your team to call back
-- ✅ Respects your hours, buffers & daily caps — no overbooking
-- ✅ **Human takeover** any time from Telegram; pause/resume per customer
-- ✅ Change requests require **admin approval** — your live agent stays consistent
-- ✅ Rate limiting, cost caps & loop protection built in
-- ✅ Your data stays yours (Supabase, encrypted at rest)
+**All plans include a 14-day free trial. No credit card required. Cancel anytime.**
+*Under S$12 a day — less than a cup of coffee to never miss a patient again.*
 
 ---
 
-## 🚀 SLIDE 7: Getting Started
+## 🛡️ SLIDE 7: Trust & Control
 
-### Live in 1–2 working days
-
-1. **15-min kickoff** — you send us your menu, hours, FAQs (a photo of your price list works)
-2. **We build it** — your clinic is provisioned from our proven template
-3. **Test drive together** — you WhatsApp your own clinic and book a test appointment
-4. **Go live** — your AI receptionist answers every message from that moment
-
-**Ongoing:** change anything with a message — e.g. *"Add Gold Facial $188 90min"* — approved in Telegram, live same day.
+- ✓ **Only your approved content** — answers come from your menu, prices, hours and FAQs; it can't invent treatments or discounts
+- ✓ **PDPA compliant, encrypted** — enterprise-grade encryption, fully compliant with Singapore's PDPA; patient data never shared
+- ✓ **Name + phone on every booking** — captured before confirmation, so your team can always call back
+- ✓ **No overbooking** — respects your operating hours, buffers between slots and daily caps
+- ✓ **Human takeover anytime** — pause the AI for any patient from Telegram and reply personally
+- ✓ **Approval-gated changes** — staff request menu/price changes; nothing goes live without approval
 
 ---
 
-## 📞 SLIDE 8: Call to Action
+## 🚀 SLIDE 8: Three Steps to Launch
 
-### Stop losing after-hours bookings.
+1. **Connect Your WhatsApp** — link your clinic's existing WhatsApp Business number; patients message the same number they already trust
+2. **We Answer Every Message** — consultation requests, pricing enquiries, treatment questions and bookings — all day, every day
+3. **You Focus on Treatments** — Moon Hands handles the rest, from follow-ups to rebooking reminders
 
-**Free pilot for your clinic this month.**
-📱 WhatsApp us: +65 XXXX XXXX
-🌐 moonhands.sg
+**10-minute setup. No technical knowledge required.** We load your menu, prices and FAQs — you just review and approve.
 
-*Your receptionist never sleeps.* 🌙
+---
+
+## 📞 SLIDE 9: Call to Action
+
+# Never Miss a Patient Again
+
+Join Singapore aesthetic clinics already using Moon Hands to capture enquiries 24/7. Start your free trial today.
+
+**[ START FREE TRIAL ]**
+
+🌐 www.moonhands.space · 💬 WhatsApp +65 8139 8272 · ✉️ pixelvaultsg@gmail.com
+Pixel Vault Pte Ltd · Singapore
+
+---
+
+### ⛔ Retired claims (do not reuse in sales material)
+- ~~Voice AI / phone call answering~~ — not part of the current offering
+- ~~Tamil language support~~ — site commits to EN/ZH/MS only
+- ~~Google Calendar sync as a marketed feature~~ — available, but not advertised on the site
+- Any pricing other than S$347 / S$547 with the 14-day free trial

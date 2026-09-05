@@ -12,8 +12,9 @@ Moon Hands is a managed AI receptionist platform for Singapore aesthetic clinics
 - **WhatsApp AI receptionist** (via 360dialog) — chats with customers, answers questions, books appointments with a guided, button-driven flow, captures name + phone, computes price totals (incl. ranges), and confirms bookings.
 - **Telegram Admin Bot** (Moon Hands team) — clinic-first dashboard to view/edit any clinic's config, monitor health/security/usage, and approve clinic change requests.
 - **Telegram Clinic Bot** (per-clinic staff) — booking notifications, daily summaries, staff takeover, and `/req_*` change requests that require Moon Hands admin approval.
-- **Voice AI** (VAPI) and **SMS** (Twilio) — optional per-clinic channels.
 - **Google Calendar** sync — per-clinic OAuth, bookings written to the clinic's calendar with .ics invites.
+
+> ⚠️ **Voice (VAPI) and SMS (Twilio) code paths exist but are NOT part of the current offering** (removed from sales material 2026-09-05). Do not market or provision them without a product decision.
 
 Everything is **config-driven per clinic**: one codebase, one deployment, N clinics. Clinics differ only by their database rows (`clients` + `client_configs`), never by code forks (see `docs/PER_CLINIC_CONTAINERIZATION.md`).
 
@@ -68,7 +69,27 @@ docs/            Design + operations docs
 ## 4. Data Model (the mould every clinic is stamped from)
 
 ### `clients` (one row per clinic)
-`slug` (unique, e.g. `pixelvault`) · `name` · `contact_name/email/phone` · `industry` · `plan` (`starter|professional`) · `status` (`setup|active|paused|cancelled`) · `whatsapp_number` · `google_calendar_id`
+`slug` (unique, e.g. `pixelvault`) · `name` · `contact_name/email/phone` · `industry` · `plan` (⚠️ see §4a — values are inconsistent today) · `status` (`setup|active|paused|cancelled`) · `whatsapp_number` · `google_calendar_id`
+
+### 4a. Subscription plans — how clinics are differentiated (as of 2026-09-05)
+
+**Sales layer (website moonhands.space + onboarding form):**
+| | 🌟 Basic — S$347/mo | ⭐ Premium — S$547/mo |
+|---|---|---|
+| Patient messages | Up to 500/mo | Unlimited |
+| Clinic locations | 1 | Unlimited |
+| Support | Email | Priority |
+| Treatment knowledge / clinic profile / languages | Standard | Advanced / Custom / Priority |
+| Trial | 14-day free, no credit card | same |
+
+**Technical reality (be honest internally):**
+- Onboarding captures the choice and stores it: `onboarding_submissions.selected_plan` = `'basic'|'premium'` → copied to `clients.plan`.
+- ⚠️ **Naming is inconsistent:** schema default is `'starter'`, onboarding writes `'basic'/'premium'`, and `middleware/usage-tracker.js` expects `'starter'|'professional'`. Pick one vocabulary before enforcing anything (recommend `basic`/`premium`).
+- ⚠️ **No per-plan feature gating is live.** What actually runs in production:
+  - `middleware/cost-protection.js` — **same hard caps for every clinic** (1,000 WhatsApp msgs/day, 500 AI calls/day, US$20/day spend, 100 booking ops/day). Reaching a cap sends Telegram alerts (at 1× and 2×) but **never blocks service** (`allowed: true` always).
+  - `middleware/usage-tracker.js` — contains the designed per-plan logic (Basic ≈ 500 msgs/mo ≈ 17/day with rollover; Premium unlimited) but is **not wired into the webhook pipeline** (self-test/dead code).
+  - Multi-location, languages, treatment knowledge depth: all config-driven, identical for every clinic regardless of plan.
+- **Consequence:** today every clinic gets the full system with uniform safety caps; plans differ only on the invoice. To make plans real: (1) normalise `clients.plan` to `basic|premium`, (2) wire `usage-tracker` (or cost-protection tiers) into `server/webhook.js` keyed by plan, (3) gate multi-location creation and priority-support SLA by plan.
 
 ### `client_configs` (one row per clinic — the entire personality & menu)
 | Field | Type | Notes |
@@ -85,7 +106,7 @@ docs/            Design + operations docs
 | `cancellation_policy` | text | |
 | `languages` | text[] | Default `['en']` |
 | `automations` | JSONB | bookingConfirmation, reminder24h, reminder1h, followup48h |
-| `vapi_assistant_id`, `twilio_phone_sid`, … | text | Optional channel wiring |
+| `vapi_assistant_id`, `twilio_phone_sid`, … | text | ⚠️ Not offered currently (see §1 warning) — columns retained for future use |
 
 Other tables: `bookings` (pending/confirmed), `change_requests` (two-sided approval), usage tracking, security events, audit log, kv_store, onboarding submissions.
 

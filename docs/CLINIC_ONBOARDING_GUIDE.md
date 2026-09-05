@@ -1,5 +1,7 @@
 # 🌱 Clinic Onboarding Guide (Client-Facing)
 
+> **Last synced:** 2026-09-05 · moonhands.space
+
 > **Welcome to Moon Hands.** This guide takes your clinic from sign-up to a live AI receptionist on WhatsApp — typically within 1–2 working days. You need **no technical skills**; we do the setup with you.
 
 ---
