@@ -92,6 +92,63 @@ docs/            Design + operations docs
   - Multi-location, languages, treatment knowledge depth: all config-driven, identical for every clinic regardless of plan.
 - **To make plans real:** (1) wire `usage-tracker` per-plan limits into `server/webhook.js` keyed by `clients.plan` (keep alert-first, never hard-block), (2) gate multi-location creation and priority-support SLA by plan.
 
+**✅ DONE (2026-09-09):** Per-plan limits are now live via `middleware/plan-limits.js`:
+- Basic: 500 msgs/mo + 200/day safety cap
+- Premium: unlimited + 1,000/day safety cap
+- Alerts at 50%, 80%, 95%, 100% (Basic only; see §4b for full details)
+
+### 4b. Per-plan usage limits — LIVE (2026-09-09)
+
+`middleware/plan-limits.js` checks every WhatsApp reply against the clinic's plan:
+
+| Plan | Monthly limit | Daily safety cap |
+|------|--------------|------------------|
+| Basic | 500 msgs/mo | 200 msgs/day (internal only) |
+| Premium | Unlimited | 1,000 msgs/day (internal only) |
+
+**Alert tiers (% of monthly limit, Basic only):**
+- **50%** → Admin heads-up only. Clinic not notified.
+- **80%** → Clinic gets friendly nudge + Premium upgrade suggestion.
+- **95%** → Clinic + admin both alerted. Strong upgrade recommendation.
+- **100%** → Clinic: "Service continues uninterrupted. Consider upgrading to Premium." Admin: overage logged with cost breakdown.
+
+**Clinic NEVER sees:** the hardcoded/AI split, actual AI cost, or the daily safety cap.
+**Clinic sees:** friendly percentage-based message + clear upgrade path.
+
+**Daily safety cap** (admin-only): prevents one viral day from eating the whole month. Basic = 200/day, Premium = 1,000/day. Admin gets an internal alert if hit; clinic is never notified.
+
+The `cost-protection.js` WhatsApp cap (1,000/day uniform) has been **removed** — cost protection now only tracks AI calls ($20/day) and booking ops.
+
+### 4c. Subscription payment monitoring (2026-09-09)
+
+**Schema additions:**
+- `clients.billing_day` — day of month payment is due (1-31)
+- `clients.last_paid_date` — most recent payment received
+- `clients.payment_status` — active | grace_period | overdue | suspended
+- `clients.monthly_amount` — SGD amount (347 or 547)
+- `payments` table — id, client_id, amount, method, reference, status, billing_period
+
+**Payment lifecycle:**
+1. **Active** → paying normally
+2. **Grace period** (1-3 days after due) → service continues; daily admin alerts
+3. **Overdue** (4-7 days) → escalated admin alert; manual decision to suspend
+4. **Suspended** → bot stops auto-replying; patient sees "Please contact the clinic directly"
+
+**Admin commands:**
+- `/billing` — all clinics: status, days until due / overdue, amount
+- `/markpaid <slug> <amount> [YYYY-MM]` — record a payment
+- `/setbilling <slug> <day> <amount>` — set billing cycle
+
+**Daily cron** (`jobs/billing-reminders.js`):
+- Runs at 9 AM daily
+- 7 days before due → upcoming alert
+- Due today → due alert
+- 1-3 days overdue → grace period alert
+- 4-7 days overdue → overdue alert
+- 7+ days overdue → critical alert (recommend suspension)
+
+**Philosophy:** Start with manual tracking (bank transfer / PayNow typical for Singapore B2B). Stripe auto-billing can be added later without schema changes.
+
 ### `client_configs` (one row per clinic — the entire personality & menu)
 | Field | Type | Notes |
 |---|---|---|

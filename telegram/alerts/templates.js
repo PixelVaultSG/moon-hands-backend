@@ -254,6 +254,78 @@ function changeConfirmed({ clientName, action, details, deployedBy, timestamp })
   ].filter(Boolean).join('\n');
 }
 
+// ─── PLAN LIMIT ALERTS (percentage-based, clinic-facing) ─────────
+
+function planLimitAlert({ clientName, plan, monthlyUsed, monthlyLimit, percentUsed, alertLevel }) {
+  const lines = [
+    `⚠️ *Usage Alert — ${escapeMarkdown(clientName)}*`,
+    '',
+  ];
+
+  if (alertLevel === '100') {
+    lines.push(
+      `You've reached your monthly message limit.`,
+      '',
+      `📊 ${monthlyUsed} / ${monthlyLimit} messages used (${percentUsed}%)`,
+      '',
+      `✅ Service continues uninterrupted — your patients are not affected.`,
+      '',
+      `💡 *Consider upgrading to Premium for unlimited messages.*`,
+      `Contact Pixel Vault support to learn more.`
+    );
+  } else if (alertLevel === '95') {
+    lines.push(
+      `You're almost at your monthly message limit.`,
+      '',
+      `📊 ${monthlyUsed} / ${monthlyLimit} messages used (${percentUsed}%)`,
+      '',
+      `✅ Service continues uninterrupted.`,
+      '',
+      `💡 You're just 5% away from your plan limit. Upgrading to Premium gives you unlimited messages and peace of mind.`
+    );
+  } else if (alertLevel === '80') {
+    lines.push(
+      `You're approaching your monthly message limit.`,
+      '',
+      `📊 ${monthlyUsed} / ${monthlyLimit} messages used (${percentUsed}%)`,
+      '',
+      `✅ No action needed — you're still well within your plan.`,
+      '',
+      `💡 As your clinic grows, Premium ($547/mo) gives you unlimited messages, multiple locations, and priority support.`
+    );
+  }
+
+  return lines.join('\n');
+}
+
+// ─── PLAN LIMIT ALERT (admin-only, with cost breakdown) ──────────
+
+function planLimitAdminAlert({ clientName, slug, plan, monthlyUsed, monthlyLimit, percentUsed, alertLevel, hardcoded, ai, cost }) {
+  const planLabel = plan === 'premium' ? 'Premium' : 'Basic';
+  const lines = [
+    `📊 *Plan Limit Alert — ${escapeMarkdown(clientName)}*`,
+    '',
+    `Plan: ${planLabel} | ${monthlyUsed} / ${monthlyLimit} msgs (${percentUsed}%)`,
+    `   ├ 📌 Template (free): ${hardcoded}`,
+    `   └ 🤖 AI-powered (payable): ${ai}`,
+    `💰 AI cost this month: $${cost.toFixed(2)}`,
+    '',
+  ];
+
+  if (alertLevel === '100') {
+    lines.push(`🔴 LIMIT EXCEEDED — clinic has gone over their Basic plan.`);
+    lines.push(`Recommend: upgrade conversation. Service continues (never block).`);
+  } else if (alertLevel === '95') {
+    lines.push(`🟡 CRITICAL APPROACH — 95% used. Strong upgrade nudge recommended.`);
+  } else if (alertLevel === '80') {
+    lines.push(`🟡 APPROACHING — 80% used. Clinic got a friendly Premium nudge.`);
+  } else if (alertLevel === '50') {
+    lines.push(`🟢 HALFWAY — 50% used. Admin heads-up only.`);
+  }
+
+  return lines.join('\n');
+}
+
 // ─── EXPORTS ─────────────────────────────────────────────────────
 
 module.exports = {
@@ -264,5 +336,7 @@ module.exports = {
   dailyUsageReport,
   dailyHealthReport,
   criticalAlert,
-  changeConfirmed
+  changeConfirmed,
+  planLimitAlert,
+  planLimitAdminAlert
 };

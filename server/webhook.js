@@ -664,7 +664,9 @@ async function handleWebhook(req, res, channel, url) {
     // Layer 9.5: Resolve client ID for cost tracking and AI routing
     // If query param auth already resolved the clinic (WhatsApp), use that directly.
     // Otherwise fall back to phone number lookup (voice channel).
-    const clientId = preResolvedClientId || await resolveClientId(message.to, channel);
+    const { id: clientId, plan: clientPlan, name: clientName, slug: clientSlug } = preResolvedClientId
+      ? { id: preResolvedClientId, plan: 'basic', name: 'Clinic', slug: 'clinic' }
+      : await resolveClientId(message.to, channel);
     const clinicName = preResolvedClinicName || null;
     addTrace(message.from, 'CLIENT', clientId ? 'RESOLVED' : 'NOT_FOUND', `${clinicName || ''} ${clientId || ''}`.trim());
     
@@ -760,23 +762,10 @@ async function handleWebhook(req, res, channel, url) {
     // CRITICAL: The webhook receives messages from 360dialog, but we must explicitly
     // call their /messages API to send replies back to the user.
     // COST PROTECTION: We NEVER block outbound messages — clinics must operate.
-    // Instead, we alert both Moon Hands admin and clinic admin when limits are hit.
+    // Per-plan limits (Basic 500/mo, Premium unlimited) are checked in the
+    // plan-limits middleware after incrementDailyUsage. Alerts only; never block.
     let replySent = false;
     if (channel === 'whatsapp' && message.from && response.text && clientId) {
-      const whatsappBudget = checkLimit(clientId, 'daily_whatsapp_msgs', 1);
-      
-      // Alert on cost limits (but never block)
-      if (whatsappBudget.alerted) {
-        const isDouble = whatsappBudget.threshold === 'double';
-        const alertMsg = isDouble
-          ? `🚨 Clinic ${clientId.slice(0,8)} hit DOUBLE WhatsApp limit\n${whatsappBudget.reason}\nPatient ${message.from.slice(-4)} still received reply (service never blocked).`
-          : `⚠️ Clinic ${clientId.slice(0,8)} hit WhatsApp daily limit\n${whatsappBudget.reason}\nPatient ${message.from.slice(-4)} still received reply (service never blocked).`;
-        addTrace(message.from, 'WHATSAPP', isDouble ? 'COST_ALERT_DOUBLE' : 'COST_ALERT', whatsappBudget.reason);
-        sendAdminAlert(alertMsg, isDouble ? 'critical' : 'warning');
-        // Also notify clinic admin of overusage
-        sendClinicCostAlert(clientId, 'whatsapp', whatsappBudget.reason, isDouble);
-      }
-      
       try {
         // ── TYPING INDICATOR ─────────────────────────────────────
         // Send "Luna is typing..." for human-like UX (non-blocking)
@@ -1109,7 +1098,9 @@ function addConversationTurn(phone, userMsg, aiMsg) {
 
 async function routeToAI(text, message, channel, preResolvedClientId = null, interactiveId = null) {
   // Determine client ID from the webhook path or phone number
-  const clientId = preResolvedClientId || await resolveClientId(message.to, channel);
+  const { id: clientId, plan: clientPlan, name: clientName, slug: clientSlug } = preResolvedClientId
+    ? { id: preResolvedClientId, plan: 'basic', name: 'Clinic', slug: 'clinic' }
+    : await resolveClientId(message.to, channel);
   
   if (!clientId) {
     return {
@@ -1176,6 +1167,76 @@ async function routeToAI(text, message, channel, preResolvedClientId = null, int
         .catch(err => console.error('[USAGE] track failed:', err.message));
     }
 
+    // ── PER-PLAN LIMIT CHECK (live monthly % alerts + daily safety cap) ──
+    if (channel === 'whatsapp' && clientPlan) {
+      const { checkMonthlyLimit, checkDailySafetyCap } = require('../middleware/plan-limits');
+      const { planLimitAlert, planLimitAdminAlert } = require('../telegram/alerts/templates');
+
+      checkMonthlyLimit(clientId, clientPlan).then(monthly => {
+        if (!monthly.alertLevel) return;
+
+        // Admin alert (with cost split — Moon Hands eyes only)
+        if (monthly.shouldAlertAdmin) {
+          const { getTodayUsage } = require('../middleware/plan-limits');
+          getTodayUsage(clientId).then(today => {
+            const adminText = planLimitAdminAlert({
+              clientName,
+              slug: clientSlug,
+              plan: clientPlan,
+              monthlyUsed: monthly.monthlyUsed,
+              monthlyLimit: monthly.monthlyLimit,
+              percentUsed: monthly.percentUsed,
+              alertLevel: monthly.alertLevel,
+              hardcoded: today.hardcoded_messages,
+              ai: today.ai_messages,
+              cost: today.cost,
+            });
+            sendAdminAlert(adminText).catch(() => {});
+          }).catch(() => {});
+        }
+
+        // Clinic alert (friendly, percentage-based, upgrade-nudging)
+        if (monthly.shouldAlertClinic) {
+          const clinicText = planLimitAlert({
+            clientName,
+            plan: clientPlan,
+            monthlyUsed: monthly.monthlyUsed,
+            monthlyLimit: monthly.monthlyLimit,
+            percentUsed: monthly.percentUsed,
+            alertLevel: monthly.alertLevel,
+          });
+          // Send directly to clinic's Telegram chat (same channel as cost alerts)
+          const botToken = process.env.TELEGRAM_BOT_TOKEN;
+          if (botToken) {
+            const { supabase } = require('../supabase/client');
+            supabase.from('clients').select('telegram_chat_id').eq('id', clientId).single()
+              .then(({ data }) => {
+                if (data?.telegram_chat_id) {
+                  fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      chat_id: data.telegram_chat_id,
+                      text: clinicText,
+                      parse_mode: 'Markdown'
+                    })
+                  }).catch(() => {});
+                }
+              }).catch(() => {});
+          }
+        }
+      }).catch(err => console.error('[PLAN_LIMITS] monthly check error:', err.message));
+
+      // Daily safety cap — admin-only, never sent to clinic
+      checkDailySafetyCap(clientId, clientPlan).then(daily => {
+        if (daily.shouldAlertAdmin) {
+          const planLabel = clientPlan === 'premium' ? 'Premium' : 'Basic';
+          const adminText = `⚠️ *Daily Safety Cap — ${planLabel} Clinic*\n\n${daily.dailyUsed} / ${daily.dailyLimit} msgs today (${daily.percentUsed}%)\n\n_Internal Moon Hands cost protection. Clinics are NOT notified._`;
+          sendAdminAlert(adminText).catch(() => {});
+        }
+      }).catch(err => console.error('[PLAN_LIMITS] daily check error:', err.message));
+    }
+
     // Cache conversation turn (raw AI response for context)
     addConversationTurn(message.from, text, result.text);
     
@@ -1211,18 +1272,26 @@ async function routeToAI(text, message, channel, preResolvedClientId = null, int
 
 // Resolve client ID from phone number or webhook path
 async function resolveClientId(phoneOrId, channel) {
-  // Check if we have a client with this WhatsApp number
   const { data } = await require('../supabase/client').supabase
     .from('clients')
-    .select('id')
+    .select('id, plan, name, slug')
     .eq('whatsapp_number', phoneOrId)
     .eq('status', 'active')
     .single();
   
-  if (data) return data.id;
+  if (data) return { id: data.id, plan: data.plan || 'basic', name: data.name, slug: data.slug };
   
   // Fallback: use environment variable for single-client deployments
-  return process.env.DEFAULT_CLIENT_ID || null;
+  const fallbackId = process.env.DEFAULT_CLIENT_ID || null;
+  if (fallbackId) {
+    const { data: fb } = await require('../supabase/client').supabase
+      .from('clients')
+      .select('plan, name, slug')
+      .eq('id', fallbackId)
+      .single();
+    return { id: fallbackId, plan: fb?.plan || 'basic', name: fb?.name || 'Clinic', slug: fb?.slug || 'clinic' };
+  }
+  return { id: null, plan: 'basic', name: 'Clinic', slug: 'clinic' };
 }
 
 function getSafeResponse() {

@@ -94,6 +94,13 @@ async function handleHelp(ctx) {
     '/pause <clinic> \u2014 Stop AI responses',
     '/resume <clinic> \u2014 Resume AI',
     '',
+    '\ud83d\udcb0 BILLING',
+    '/billing \u2014 All clinics: payment status & due dates',
+    '/markpaid <slug> <amount> [YYYY-MM] \u2014 Record payment received',
+    '  \u2192 /markpaid pixelvault 347 2026-09',
+    '/setbilling <slug> <day> <amount> \u2014 Set billing cycle',
+    '  \u2192 /setbilling pixelvault 15 547',
+    '',
     '\ud83d\udcca REPORTS',
     '/usage <clinic> \u2014 Today\'s usage',
     '',
@@ -760,6 +767,106 @@ ${s.text}`;
   await ctx.reply('🧪 END OF SAMPLE RUN');
 }
 
+// ─── BILLING COMMANDS ────────────────────────────────────────────
+
+async function handleBilling(ctx) {
+  const isAdmin = ctx.from && String(ctx.from.id) === String(process.env.TELEGRAM_ADMIN_CHAT_ID);
+  if (!isAdmin) {
+    return ctx.reply('⚠️ Sorry, only the Moon Hands admin can use billing commands.');
+  }
+  try {
+    const { checkAllClinics } = require('../../middleware/billing-monitor');
+    const all = await checkAllClinics();
+    if (!all.length) return ctx.reply('No clinics found.');
+
+    const lines = ['💰 *BILLING STATUS*', '', `Total clinics: ${all.length}`, ''];
+    for (const r of all) {
+      const c = r.client;
+      const planLabel = c.plan === 'premium' ? 'Premium' : 'Basic';
+      const amount = c.monthly_amount || (c.plan === 'premium' ? 547 : 347);
+      const emoji = r.status === 'active' ? '🟢' : r.status === 'grace_period' ? '🟡' : r.status === 'overdue' ? '🔴' : '⚫';
+      lines.push(`${emoji} ${c.name} (${c.slug})`);
+      lines.push(`   Plan: ${planLabel} | S$${amount}/mo`);
+      if (r.daysOverdue > 0) {
+        lines.push(`   Status: ${r.status} | ${r.daysOverdue} day${r.daysOverdue === 1 ? '' : 's'} overdue`);
+      } else {
+        lines.push(`   Status: ${r.status} | Due in ${r.daysUntilDue} day${r.daysUntilDue === 1 ? '' : 's'}`);
+      }
+      lines.push('');
+    }
+    await ctx.reply(lines.join('\n'), { parse_mode: 'Markdown' }).catch(() => ctx.reply(lines.join('\n').replace(/[*_`]/g, '')));
+  } catch (err) {
+    console.error('[BILLING_CMD] handleBilling error:', err.message);
+    ctx.reply(`Error: ${err.message}`);
+  }
+}
+
+async function handleMarkPaid(ctx) {
+  const isAdmin = ctx.from && String(ctx.from.id) === String(process.env.TELEGRAM_ADMIN_CHAT_ID);
+  if (!isAdmin) {
+    return ctx.reply('⚠️ Sorry, only the Moon Hands admin can use billing commands.');
+  }
+  const args = ctx.message.text.split(' ').slice(1);
+  if (args.length < 2) {
+    return ctx.reply('Usage: /markpaid <slug> <amount> [YYYY-MM]\n→ /markpaid pixelvault 347 2026-09');
+  }
+  const [slug, amountStr, period] = args;
+  const amount = parseFloat(amountStr);
+  if (isNaN(amount) || amount <= 0) {
+    return ctx.reply('Amount must be a positive number.');
+  }
+  try {
+    const { getClientBySlug } = require('../../supabase/client');
+    const { recordPayment } = require('../../middleware/billing-monitor');
+    const client = await getClientBySlug(slug);
+    if (!client) return ctx.reply(`Clinic "${slug}" not found.`);
+
+    const now = new Date();
+    const billingPeriod = period || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const result = await recordPayment(client.id, amount, 'bank_transfer', `Manual-${Date.now()}`, billingPeriod, `Recorded by admin via Telegram`);
+    if (!result.success) throw new Error(result.error);
+
+    ctx.reply(`✅ Payment recorded for ${client.name}\nAmount: S$${amount}\nPeriod: ${billingPeriod}\nStatus: Active`);
+  } catch (err) {
+    console.error('[BILLING_CMD] handleMarkPaid error:', err.message);
+    ctx.reply(`Error: ${err.message}`);
+  }
+}
+
+async function handleSetBilling(ctx) {
+  const isAdmin = ctx.from && String(ctx.from.id) === String(process.env.TELEGRAM_ADMIN_CHAT_ID);
+  if (!isAdmin) {
+    return ctx.reply('⚠️ Sorry, only the Moon Hands admin can use billing commands.');
+  }
+  const args = ctx.message.text.split(' ').slice(1);
+  if (args.length < 3) {
+    return ctx.reply('Usage: /setbilling <slug> <day_of_month> <amount>\n→ /setbilling pixelvault 15 547');
+  }
+  const [slug, dayStr, amountStr] = args;
+  const day = parseInt(dayStr, 10);
+  const amount = parseInt(amountStr, 10);
+  if (isNaN(day) || day < 1 || day > 31) {
+    return ctx.reply('Billing day must be 1-31.');
+  }
+  if (isNaN(amount) || amount < 1) {
+    return ctx.reply('Amount must be a positive number.');
+  }
+  try {
+    const { getClientBySlug } = require('../../supabase/client');
+    const { setBillingCycle } = require('../../middleware/billing-monitor');
+    const client = await getClientBySlug(slug);
+    if (!client) return ctx.reply(`Clinic "${slug}" not found.`);
+
+    const result = await setBillingCycle(client.id, day, amount);
+    if (!result.success) throw new Error(result.error);
+
+    ctx.reply(`✅ Billing updated for ${client.name}\nDay of month: ${day}\nAmount: S$${amount}/mo`);
+  } catch (err) {
+    console.error('[BILLING_CMD] handleSetBilling error:', err.message);
+    ctx.reply(`Error: ${err.message}`);
+  }
+}
+
 // ─── EXPORT COMMAND MAP ──────────────────────────────────────────
 
 module.exports = {
@@ -782,5 +889,8 @@ module.exports = {
   handleThreats,
   handleAuthLog,
   handleDebug,
-  handleTestAlerts
+  handleTestAlerts,
+  handleBilling,
+  handleMarkPaid,
+  handleSetBilling
 };
