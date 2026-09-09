@@ -380,6 +380,96 @@ Action: 💰 Update Price
 
 The change was not applied. Reply here or contact Pixel Vault support if you'd like to discuss.`,
   },
+  {
+    slug: 'billing-status-list',
+    label: '💰 Billing status list (admin)',
+    text: `💰 *BILLING STATUS*
+
+Total clinics: 1
+
+🟢 Pixel Vault Aesthetics (pixelvault)
+   Plan: Premium | S$547/mo
+   Status: active | Due in 12 days
+   
+🟡 Clinic Beta (beta)
+   Plan: Basic | S$347/mo
+   Status: grace_period | 2 days overdue`,
+  },
+  {
+    slug: 'billing-overdue-critical',
+    label: '🔴 Billing overdue — critical',
+    text: `🚨 *Payment Critical — Clinic Beta (beta)*
+
+Plan: Basic | S$347/mo
+Billing day: 1st of month
+Last paid: 2026-08-01
+Days overdue: 8
+
+Status: CRITICAL — recommend suspension.
+
+Action: contact clinic and request payment.`,
+  },
+  {
+    slug: 'billing-payment-recorded',
+    label: '✅ Payment recorded confirmation',
+    text: `✅ Payment recorded for Pixel Vault Aesthetics
+Amount: S$547
+Period: 2026-09
+Status: Active`,
+  },
+  {
+    slug: 'plan-limit-50-pct',
+    label: '🟡 Plan limit 50% (admin only)',
+    text: `🔵 *Plan Usage Alert — 50%*
+
+Pixel Vault Aesthetics (pixelvault) — Basic
+Monthly: 250 / 500 msgs (50%)
+
+Admin heads-up only. Clinic not notified yet.`,
+  },
+  {
+    slug: 'plan-limit-80-pct',
+    label: '🟠 Plan limit 80% (clinic + admin)',
+    text: `⚠️ *Pixel Vault Aesthetics — Monthly Usage: 80%*
+
+Hi there! You've used 400 out of 500 WhatsApp messages included in your Basic plan this month.
+
+To avoid any disruptions, consider upgrading to our Premium plan for unlimited messages.
+
+[Upgrade to Premium →]`,
+  },
+  {
+    slug: 'plan-limit-100-pct',
+    label: '🔴 Plan limit 100% (clinic + admin)',
+    text: `⚠️ *Pixel Vault Aesthetics — Monthly Usage: 100%*
+
+You've reached the 500 message limit included in your Basic plan this month. Service continues uninterrupted — but consider upgrading to Premium for unlimited messages.
+
+[Upgrade to Premium →]`,
+  },
+  {
+    slug: 'plan-limit-admin-100',
+    label: '📊 Admin plan limit 100% with cost split',
+    text: `🔴 *Plan Usage Alert — 100%*
+
+Pixel Vault Aesthetics (pixelvault) — Basic
+Monthly: 500 / 500 msgs (100%)
+Hardcoded/template (free): 312
+AI (payable): 188
+Estimated AI cost: ~$9.40
+
+⚠️ This clinic is now in overage. Clinic notified with upgrade suggestion.`,
+  },
+  {
+    slug: 'daily-safety-cap-admin',
+    label: '⚠️ Daily safety cap hit (admin only)',
+    text: `⚠️ *Daily Safety Cap — Basic Clinic*
+
+201 / 200 msgs today (100%)
+
+_Internal Moon Hands cost protection. Clinics are NOT notified._`,
+  },
+
 ];
 
 module.exports = { SAMPLES };
