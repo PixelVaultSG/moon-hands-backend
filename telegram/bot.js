@@ -169,6 +169,10 @@ async function adminMainMenu(ctx, edit = false) {
       Markup.button.callback('🏥 Clinics', 'menu_clients'),
       Markup.button.callback('🛡 Security', 'menu_security'),
     ],
+    [
+      Markup.button.callback('💰 Billing', 'menu_billing'),
+      Markup.button.callback('📈 Usage', 'menu_usage'),
+    ],
     [Markup.button.callback('❓ Full Command List', 'menu_help')],
   ];
 
@@ -379,6 +383,11 @@ bot.action('menu_clients', safeHandler('menu_clients', async (ctx) => {
 bot.action('menu_usage', safeHandler('menu_usage', async (ctx) => {
   await ctx.answerCbQuery();
   await showClinicPicker(ctx, 'usage');
+}));
+
+bot.action('menu_billing', safeHandler('menu_billing', async (ctx) => {
+  await ctx.answerCbQuery('Loading billing...');
+  await commands.handleBilling(ctx);
 }));
 
 bot.action('menu_viewconfig', safeHandler('menu_viewconfig', async (ctx) => {
@@ -1113,6 +1122,7 @@ bot.hears('📋 My Bookings', safeHandler('📋 My Bookings', async (ctx) => {
 bot.hears('❓ Help', safeHandler('❓ Help', async (ctx) => {
   await ctx.reply(
     '📖 *Moon Hands Help*\n\n' +
+    '💡 Quick tip: tap /menu anytime for quick button shortcuts.\n\n' +
     '*Staff Controls:*\n' +
     '`/patientpause <phone>` — Pause bot for patient\n' +
     '`/patientresume <phone>` — Resume bot for patient\n' +

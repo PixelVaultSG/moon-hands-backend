@@ -66,6 +66,8 @@ async function handleHelp(ctx) {
   const helpText = [
     '\ud83e\udd16 Moon Hands Admin Bot',
     '',
+    '\ud83d\udca1 Quick tip: type /menu for button shortcuts to the most common actions.',
+    '',
     '\ud83d\udccb CLIENT MANAGEMENT',
     '/clients \u2014 List all clinics',
     '/viewconfig <clinic-id> \u2014 View full config',
