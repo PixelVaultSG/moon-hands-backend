@@ -28,12 +28,14 @@ CREATE INDEX IF NOT EXISTS idx_payments_period ON payments(billing_period);
 CREATE INDEX IF NOT EXISTS idx_payments_created ON payments(created_at);
 
 -- 3. Seed existing clients (set billing_day = 1st of month, monthly_amount based on plan)
+-- Use last_paid_date IS NULL as the condition because billing_day has DEFAULT 1
+-- and would already be filled, causing the UPDATE to match zero rows.
 UPDATE clients
   SET billing_day = 1,
-      monthly_amount = CASE WHEN plan = 'premium' THEN 547 ELSE 347 END,
+      monthly_amount = CASE WHEN LOWER(TRIM(plan)) = 'premium' THEN 547 ELSE 347 END,
       last_paid_date = CURRENT_DATE,
       payment_status = 'active'
-  WHERE billing_day IS NULL;
+  WHERE last_paid_date IS NULL;
 
 -- 4. Backfill monthly_usage table (aggregated from daily_usage for current month)
 -- This ensures the new cost/profit columns are populated
