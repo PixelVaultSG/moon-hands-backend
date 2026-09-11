@@ -16,15 +16,10 @@
  */
 
 require('dotenv').config();
+const { supabase } = require('../supabase/client');
 
-const { createClient } = require('@supabase/supabase-js');
-
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const ADMIN_CHAT_ID = process.env.TELEGRAM_ADMIN_CHAT_ID;
-
-const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
 async function checkTrialExpiries() {
   const now = new Date();

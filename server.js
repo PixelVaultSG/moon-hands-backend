@@ -445,9 +445,9 @@ setTimeout(() => {
   try {
     const { checkAndSendClosingSummaries } = require('./jobs/closing-summary');
     // Run immediately on startup
-    checkAndSendClosingSummaries();
+    checkAndSendClosingSummaries().catch(err => console.error('[CLOSING_SUMMARY] Run error:', err.message));
     // Then every 15 minutes
-    setInterval(checkAndSendClosingSummaries, 15 * 60 * 1000);
+    setInterval(() => checkAndSendClosingSummaries().catch(err => console.error('[CLOSING_SUMMARY] Run error:', err.message)), 15 * 60 * 1000);
     console.log('  ✅ Closing summary scheduler started (every 15 min)');
   } catch (err) {
     console.error('  ❌ Closing summary scheduler failed:', err.message);
@@ -468,8 +468,8 @@ setTimeout(() => {
     const msUntilMidnight = midnight - sgNow;
     
     setTimeout(() => {
-      runDailyReport();
-      setInterval(runDailyReport, 24 * 60 * 60 * 1000); // Every 24 hours
+      runDailyReport().catch(err => console.error('[DAILY_REPORT] Run error:', err.message));
+      setInterval(() => runDailyReport().catch(err => console.error('[DAILY_REPORT] Run error:', err.message)), 24 * 60 * 60 * 1000);
     }, msUntilMidnight);
     console.log('  ✅ Daily report scheduler started (midnight SGT)');
   } catch (err) {
@@ -534,8 +534,8 @@ setTimeout(() => {
     const msUntil9AM = nineAM - sgNow;
     
     setTimeout(() => {
-      checkTrialExpiries();
-      setInterval(checkTrialExpiries, 24 * 60 * 60 * 1000);
+      checkTrialExpiries().catch(err => console.error('[TRIAL_CHECK] Run error:', err.message));
+      setInterval(() => checkTrialExpiries().catch(err => console.error('[TRIAL_CHECK] Run error:', err.message)), 24 * 60 * 60 * 1000);
     }, msUntil9AM);
     console.log('  ✅ Trial expiry checker started (9 AM SGT daily)');
   } catch (err) {
@@ -557,8 +557,8 @@ setTimeout(() => {
     const msUntil9AM = nineAM - sgNow;
 
     setTimeout(() => {
-      runBillingReminders();
-      setInterval(runBillingReminders, 24 * 60 * 60 * 1000);
+      runBillingReminders().catch(err => console.error('[BILLING_REMINDERS] Run error:', err.message));
+      setInterval(() => runBillingReminders().catch(err => console.error('[BILLING_REMINDERS] Run error:', err.message)), 24 * 60 * 60 * 1000);
     }, msUntil9AM);
     console.log('  ✅ Billing reminders scheduler started (9 AM SGT daily)');
   } catch (err) {
@@ -572,8 +572,8 @@ setTimeout(() => {
 setTimeout(() => {
   try {
     const { runAllReminders } = require('./jobs/reminders');
-    runAllReminders();
-    setInterval(runAllReminders, 15 * 60 * 1000);
+    runAllReminders().catch(err => console.error('[REMINDERS] Run error:', err.message));
+    setInterval(() => runAllReminders().catch(err => console.error('[REMINDERS] Run error:', err.message)), 15 * 60 * 1000);
     console.log('  ✅ Appointment reminders scheduler started (every 15 min)');
   } catch (err) {
     console.error('  ❌ Appointment reminders scheduler failed:', err.message);
