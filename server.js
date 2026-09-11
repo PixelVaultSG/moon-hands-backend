@@ -543,6 +543,43 @@ setTimeout(() => {
   }
 }, 700);
 
+// ─── BILLING REMINDERS ───────────────────────────────────────────
+// Daily at 9 AM SGT. Alerts admin of upcoming / overdue payments.
+
+setTimeout(() => {
+  try {
+    const { run: runBillingReminders } = require('./jobs/billing-reminders');
+    const now = new Date();
+    const sgNow = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Singapore' }));
+    const nineAM = new Date(sgNow);
+    nineAM.setHours(9, 0, 0, 0);
+    if (nineAM <= sgNow) nineAM.setDate(nineAM.getDate() + 1);
+    const msUntil9AM = nineAM - sgNow;
+
+    setTimeout(() => {
+      runBillingReminders();
+      setInterval(runBillingReminders, 24 * 60 * 60 * 1000);
+    }, msUntil9AM);
+    console.log('  ✅ Billing reminders scheduler started (9 AM SGT daily)');
+  } catch (err) {
+    console.error('  ❌ Billing reminders scheduler failed:', err.message);
+  }
+}, 800);
+
+// ─── APPOINTMENT REMINDERS ───────────────────────────────────────
+// Every 15 minutes: 24h, 1h, and 48h follow-up reminders.
+
+setTimeout(() => {
+  try {
+    const { runAllReminders } = require('./jobs/reminders');
+    runAllReminders();
+    setInterval(runAllReminders, 15 * 60 * 1000);
+    console.log('  ✅ Appointment reminders scheduler started (every 15 min)');
+  } catch (err) {
+    console.error('  ❌ Appointment reminders scheduler failed:', err.message);
+  }
+}, 900);
+
 // ─── FINAL STATUS ────────────────────────────────────────────────
 
 setTimeout(() => {
