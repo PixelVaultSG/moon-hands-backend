@@ -214,6 +214,7 @@ async function showClinicDashboard(ctx, slug, edit = true) {
     [cb('🕐 Update Hours', `act:updatehours:${slug}`), cb('❓ Add FAQ', `act:addfaq:${slug}`)],
     [cb('🎤 Voice', `act:voice:${slug}`)],
     [cb('⏸ Pause AI', `act:pause:${slug}`), cb('▶️ Resume AI', `act:resume:${slug}`)],
+    [cb('⏹ Suspend', `act:suspend:${slug}`), cb('▶️ Unsuspend', `act:unsuspend:${slug}`)],
     [cb('🔙 Back to Clinics', 'menu_main')],
   ];
 
@@ -422,6 +423,8 @@ const ACTION_LABELS = {
   usage: '📈 Usage',
   pause: '⏸ Pause AI',
   resume: '▶️ Resume AI',
+  suspend: '⏹ Suspend',
+  unsuspend: '▶️ Unsuspend',
 };
 
 async function showClinicPicker(ctx, action) {
@@ -484,6 +487,10 @@ bot.action(/^act:(\w+):(.+)$/, safeHandler('act', async (ctx) => {
         `🎤 Update Brand Voice for *${slug}*\n\nType:\n/updatevoice ${slug} <field> <value>\n\nFields: name, greeting, tone, enthusiasm, notes\n\nExample:\n/updatevoice ${slug} greeting "Welcome to Glow!"`,
         BACK_TO_MENU
       );
+    case 'suspend':
+      return commands.handleSuspend(ctx, slug);
+    case 'unsuspend':
+      return commands.handleUnsuspend(ctx, slug);
     default:
       return ctx.reply('⚠️ Unknown action.', BACK_TO_MENU);
   }
@@ -603,6 +610,8 @@ bot.command('testalerts', adminCmd('/testalerts', commands.handleTestAlerts));
 bot.command('billing', adminCmd('/billing', commands.handleBilling));
 bot.command('markpaid', adminCmd('/markpaid', commands.handleMarkPaid));
 bot.command('setbilling', adminCmd('/setbilling', commands.handleSetBilling));
+bot.command('suspend', adminCmd('/suspend', commands.handleSuspend));
+bot.command('unsuspend', adminCmd('/unsuspend', commands.handleUnsuspend));
 bot.command('viewconfig', adminCmd('/viewconfig', commands.handleViewConfig));
 bot.command('addservice', adminCmd('/addservice', commands.handleAddService));
 bot.command('updateprice', adminCmd('/updateprice', commands.handleUpdatePrice));

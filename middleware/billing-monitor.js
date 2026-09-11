@@ -231,6 +231,52 @@ async function syncMonthlyRevenue(yearMonth) {
   }
 }
 
+/**
+ * Suspend a clinic (stop bot replies, mark billing as suspended).
+ * @param {string} clientId
+ * @returns {Promise<{success:boolean, error?:string}>}
+ */
+async function suspendClient(clientId) {
+  try {
+    const { error } = await supabase
+      .from('clients')
+      .update({
+        status: 'paused',
+        payment_status: 'suspended',
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', clientId);
+    if (error) throw error;
+    return { success: true };
+  } catch (err) {
+    console.error('[BILLING] suspendClient error:', err.message);
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * Unsuspend a clinic (resume bot replies, mark billing as active).
+ * @param {string} clientId
+ * @returns {Promise<{success:boolean, error?:string}>}
+ */
+async function unsuspendClient(clientId) {
+  try {
+    const { error } = await supabase
+      .from('clients')
+      .update({
+        status: 'active',
+        payment_status: 'active',
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', clientId);
+    if (error) throw error;
+    return { success: true };
+  } catch (err) {
+    console.error('[BILLING] unsuspendClient error:', err.message);
+    return { success: false, error: err.message };
+  }
+}
+
 module.exports = {
   GRACE_PERIOD_DAYS,
   SUSPENSION_THRESHOLD_DAYS,
@@ -240,4 +286,6 @@ module.exports = {
   setBillingCycle,
   getPaymentHistory,
   syncMonthlyRevenue,
+  suspendClient,
+  unsuspendClient,
 };

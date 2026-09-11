@@ -102,6 +102,10 @@ async function handleHelp(ctx) {
     '  \u2192 /markpaid pixelvault 347 2026-09',
     '/setbilling <slug> <day> <amount> \u2014 Set billing cycle',
     '  \u2192 /setbilling pixelvault 15 547',
+    '/suspend <slug> \u2014 Stop bot replies (non-payment)',
+    '  \u2192 /suspend pixelvault',
+    '/unsuspend <slug> \u2014 Resume bot replies + set active',
+    '  \u2192 /unsuspend pixelvault',
     '',
     '\ud83d\udcca REPORTS',
     '/usage <clinic> \u2014 Today\'s usage',
@@ -869,6 +873,64 @@ async function handleSetBilling(ctx) {
   }
 }
 
+async function handleSuspend(ctx, providedSlug = null) {
+  const isAdmin = ctx.from && String(ctx.from.id) === String(process.env.TELEGRAM_ADMIN_CHAT_ID);
+  if (!isAdmin) {
+    return ctx.reply('⚠️ Sorry, only the Moon Hands admin can use this command.');
+  }
+  const slug = providedSlug || (() => {
+    const msgText = ctx.message?.text || '';
+    const parts = msgText.split(/\s+/);
+    return parts.length >= 2 ? parts[1].trim() : '';
+  })();
+  if (!slug) {
+    return ctx.reply('Usage: /suspend <slug>\n→ /suspend pixelvault');
+  }
+  try {
+    const { getClientBySlug } = require('../../supabase/client');
+    const { suspendClient } = require('../../middleware/billing-monitor');
+    const client = await getClientBySlug(slug);
+    if (!client) return ctx.reply(`Clinic "${slug}" not found.`);
+
+    const result = await suspendClient(client.id);
+    if (!result.success) throw new Error(result.error);
+
+    ctx.reply(`⏹ ${client.name} (${slug}) has been SUSPENDED.\n\nBot auto-replies are now OFF. Patients will see "Please contact the clinic directly."\n\nTo resume: /unsuspend ${slug}`);
+  } catch (err) {
+    console.error('[BILLING_CMD] handleSuspend error:', err.message);
+    ctx.reply(`Error: ${err.message}`);
+  }
+}
+
+async function handleUnsuspend(ctx, providedSlug = null) {
+  const isAdmin = ctx.from && String(ctx.from.id) === String(process.env.TELEGRAM_ADMIN_CHAT_ID);
+  if (!isAdmin) {
+    return ctx.reply('⚠️ Sorry, only the Moon Hands admin can use this command.');
+  }
+  const slug = providedSlug || (() => {
+    const msgText = ctx.message?.text || '';
+    const parts = msgText.split(/\s+/);
+    return parts.length >= 2 ? parts[1].trim() : '';
+  })();
+  if (!slug) {
+    return ctx.reply('Usage: /unsuspend <slug>\n→ /unsuspend pixelvault');
+  }
+  try {
+    const { getClientBySlug } = require('../../supabase/client');
+    const { unsuspendClient } = require('../../middleware/billing-monitor');
+    const client = await getClientBySlug(slug);
+    if (!client) return ctx.reply(`Clinic "${slug}" not found.`);
+
+    const result = await unsuspendClient(client.id);
+    if (!result.success) throw new Error(result.error);
+
+    ctx.reply(`▶️ ${client.name} (${slug}) has been UNSUSPENDED.\n\nBot auto-replies are now ON. Payment status set to active.`);
+  } catch (err) {
+    console.error('[BILLING_CMD] handleUnsuspend error:', err.message);
+    ctx.reply(`Error: ${err.message}`);
+  }
+}
+
 // ─── EXPORT COMMAND MAP ──────────────────────────────────────────
 
 module.exports = {
@@ -894,5 +956,7 @@ module.exports = {
   handleTestAlerts,
   handleBilling,
   handleMarkPaid,
-  handleSetBilling
+  handleSetBilling,
+  handleSuspend,
+  handleUnsuspend
 };
