@@ -20,20 +20,24 @@ if (!TELEGRAM_BOT_TOKEN || !ADMIN_CHAT_ID) {
 const BASE_URL = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}`;
 const { SAMPLES } = require('../telegram/sample-alerts');
 
-async function send(text) {
+async function send(text, replyMarkup) {
   try {
+    const payload = { chat_id: ADMIN_CHAT_ID, text, parse_mode: 'Markdown' };
+    if (replyMarkup) payload.reply_markup = replyMarkup;
     const res = await fetch(`${BASE_URL}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: ADMIN_CHAT_ID, text, parse_mode: 'Markdown' }),
+      body: JSON.stringify(payload),
     });
     const data = await res.json();
     if (data.ok) { console.log('✅ Sent'); return true; }
     // Retry as plain text if Markdown parsing fails
+    const fallbackPayload = { chat_id: ADMIN_CHAT_ID, text: text.replace(/[*_`]/g, '') };
+    if (replyMarkup) fallbackPayload.reply_markup = replyMarkup;
     const res2 = await fetch(`${BASE_URL}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: ADMIN_CHAT_ID, text: text.replace(/[*_`]/g, '') }),
+      body: JSON.stringify(fallbackPayload),
     });
     const data2 = await res2.json();
     console.log(data2.ok ? '✅ Sent (plain fallback)' : '❌ Failed: ' + data2.description);
@@ -53,7 +57,7 @@ async function main() {
   for (let i = 0; i < SAMPLES.length; i++) {
     const s = SAMPLES[i];
     process.stdout.write(`${String(i + 1).padStart(2, '0')}. ${s.name}... `);
-    await send(`[${i + 1}/${SAMPLES.length}] ${s.name}\n\n${s.text}`);
+    await send(`[${i + 1}/${SAMPLES.length}] ${s.name}\n\n${s.text}`, s.reply_markup);
     await wait(600);
   }
   await send('🧪 *END OF SAMPLE RUN*');
