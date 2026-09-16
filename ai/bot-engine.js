@@ -546,9 +546,8 @@ async function handleCancelBooking(args, clientConfig) {
         service: booking.service || 'Appointment',
         date: booking.appointment_date,
         time: booking.appointment_time,
-        clinicId: clientConfig.id,
-        message: 'Patient cancelled via WhatsApp'
-      });
+        client_id: clientConfig.id,
+      }, clientConfig, 'Patient cancelled via WhatsApp');
     } catch (e) { /* notification is best-effort */ }
 
     return { success: true, message: `Your ${booking.service} appointment on ${booking.appointment_date} at ${booking.appointment_time} has been cancelled. We hope to see you again soon!` };
