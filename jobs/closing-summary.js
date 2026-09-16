@@ -13,6 +13,9 @@
  * SGT = UTC + 8 hours.
  */
 
+require('dotenv').config();
+const { supabase } = require('../supabase/client');
+
 const CHECK_INTERVAL_MS = 15 * 60 * 1000; // Check every 15 minutes
 const ALREADY_SENT_TODAY = new Set(); // Track which clinics got summary today (resets at midnight)
 

@@ -1,0 +1,865 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Get Started — Moon Hands</title>
+    <link rel="icon" type="image/png" href="logo.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #0F0F0F;
+            --bg2: #0A1628;
+            --gold: #D4A853;
+            --gold-light: #E4C04F;
+            --text: #FFFFFF;
+            --text2: #9BA3AF;
+            --muted: #8A7E72;
+            --border: rgba(212,168,83,0.1);
+            --font-serif: 'Playfair Display', Georgia, serif;
+            --font-sans: 'Inter', sans-serif;
+        }
+        *, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }
+        body { font-family:var(--font-sans); background:var(--bg); color:var(--text); -webkit-font-smoothing:antialiased; }
+
+        /* Nav */
+        .navbar { position:fixed; top:0; left:0; right:0; z-index:1000; padding:0.75rem 0; background:rgba(10,11,20,0.95); backdrop-filter:blur(20px); border-bottom:1px solid var(--border); }
+        .nav-container { max-width:1200px; margin:0 auto; padding:0 2rem; display:flex; align-items:center; justify-content:space-between; }
+        .nav-logo { display:flex; align-items:center; gap:0.75rem; text-decoration:none; color:inherit; }
+        .nav-logo img { width:36px; height:36px; object-fit:contain; }
+        .logo-text { display:flex; flex-direction:column; }
+        .logo-title { font-family:var(--font-serif); font-size:1rem; font-weight:600; }
+        .logo-subtitle { font-size:0.55rem; font-weight:500; letter-spacing:0.15em; color:var(--gold); margin-top:0.15rem; }
+        .nav-menu { display:flex; align-items:center; gap:0.25rem; }
+        .nav-link { font-size:0.7rem; font-weight:500; letter-spacing:0.08em; text-transform:uppercase; color:var(--text2); padding:0.5rem 1rem; border-radius:6px; transition:all 0.3s; text-decoration:none; }
+        .nav-link:hover, .nav-link.active { color:var(--gold); background:rgba(212,168,83,0.08); }
+        .nav-btn { font-size:0.7rem; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; padding:0.6rem 1.25rem; background:linear-gradient(135deg,#B8942F,var(--gold)); color:#0A0B14; border-radius:6px; margin-left:0.5rem; text-decoration:none; display:inline-block; transition:all 0.3s; }
+        .nav-btn:hover { transform:scale(1.02); filter:brightness(1.15); }
+
+        /* Layout */
+        .page { max-width:680px; margin:0 auto; padding:100px 1.5rem 4rem; }
+        .page-header { display:flex; align-items:center; gap:0.75rem; margin-bottom:1.5rem; }
+        .page-header a { color:var(--gold); transition:all 0.3s; text-decoration:none; }
+        .page-header a:hover { color:var(--gold-light); }
+        .page-header h1 { font-family:var(--font-serif); font-size:1.25rem; }
+        .page-header p { font-size:0.6rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.1em; }
+
+        /* Progress */
+        .progress { display:flex; gap:4px; margin-bottom:2rem; }
+        .progress-dot { flex:1; height:3px; border-radius:2px; background:rgba(27,58,92,0.3); transition:all 0.3s; }
+        .progress-dot.active { background:var(--gold); }
+
+        /* Step labels */
+        .step-labels { display:flex; gap:0.5rem; margin-bottom:1rem; overflow-x:auto; }
+        .step-label { font-size:0.6rem; text-transform:uppercase; letter-spacing:0.1em; color:var(--muted); white-space:nowrap; padding:0.25rem 0.5rem; border-radius:4px; cursor:pointer; transition:all 0.3s; }
+        .step-label.active { color:var(--gold); background:rgba(212,168,83,0.1); }
+        .step-label.done { color:#4ADE80; }
+
+        /* Section title */
+        .sec-title { font-family:var(--font-serif); font-size:1.5rem; margin-bottom:0.25rem; }
+        .sec-desc { font-size:0.8rem; color:var(--muted); margin-bottom:1.5rem; }
+
+        /* Form elements */
+        .form-group { margin-bottom:1rem; }
+        .form-label { display:block; font-size:0.6rem; font-weight:600; letter-spacing:0.15em; text-transform:uppercase; color:var(--muted); margin-bottom:0.4rem; }
+        .form-input, .form-select, .form-textarea {
+            width:100%; background:rgba(27,58,92,0.2); border:1px solid var(--border); border-radius:8px;
+            padding:0.65rem 0.875rem; font-size:0.85rem; color:var(--text); font-family:inherit; outline:none; transition:border-color 0.3s;
+        }
+        .form-input:focus, .form-select:focus, .form-textarea:focus { border-color:rgba(212,168,83,0.3); }
+        .form-input::placeholder, .form-textarea::placeholder { color:var(--muted); opacity:0.6; }
+        .form-textarea { resize:vertical; min-height:60px; }
+        .form-row { display:grid; grid-template-columns:1fr 1fr; gap:0.75rem; }
+        .form-row-3 { grid-template-columns:1fr 1fr 1fr; }
+
+        /* Toggle */
+        .toggle-row { display:flex; align-items:center; justify-content:space-between; padding:0.75rem; background:rgba(27,58,92,0.1); border:1px solid var(--border); border-radius:8px; margin-bottom:0.5rem; }
+        .toggle-info p:first-child { font-size:0.8rem; }
+        .toggle-info p:last-child { font-size:0.6rem; color:var(--muted); }
+        .toggle-btn { width:44px; height:24px; border-radius:999px; background:rgba(138,126,114,0.3); position:relative; cursor:pointer; transition:all 0.3s; border:none; flex-shrink:0; }
+        .toggle-btn.on { background:var(--gold); }
+        .toggle-btn::after { content:''; position:absolute; top:2px; left:2px; width:20px; height:20px; border-radius:50%; background:white; transition:all 0.3s; }
+        .toggle-btn.on::after { left:22px; }
+
+        /* Option cards */
+        .option-card { display:flex; align-items:center; gap:0.75rem; padding:0.75rem; border-radius:8px; border:1px solid var(--border); background:rgba(27,58,92,0.1); cursor:pointer; transition:all 0.3s; text-align:left; width:100%; color:inherit; font-family:inherit; margin-bottom:0.5rem; }
+        .option-card:hover { border-color:rgba(212,168,83,0.2); }
+        .option-card.selected { border-color:rgba(212,168,83,0.5); background:rgba(212,168,83,0.1); }
+        .option-radio { width:16px; height:16px; border-radius:50%; border:2px solid var(--muted); display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+        .option-card.selected .option-radio { border-color:var(--gold); }
+        .option-radio::after { content:''; width:8px; height:8px; border-radius:50%; background:var(--gold); opacity:0; transition:all 0.2s; }
+        .option-card.selected .option-radio::after { opacity:1; }
+        .option-check { width:18px; height:18px; border-radius:4px; border:2px solid var(--muted); display:flex; align-items:center; justify-content:center; flex-shrink:0; transition:all 0.2s; }
+        .option-card.selected .option-check { border-color:var(--gold); background:var(--gold); }
+        .option-check::after { content:'✓'; color:#0A1628; font-size:11px; font-weight:bold; opacity:0; }
+        .option-card.selected .option-check::after { opacity:1; }
+        .option-info p:first-child { font-size:0.8rem; }
+        .option-info p:last-child { font-size:0.6rem; color:var(--muted); }
+
+        /* Treatment list */
+        .treatment-item { display:flex; align-items:center; justify-content:space-between; padding:0.625rem 0.75rem; border-radius:8px; border:1px solid var(--border); background:rgba(27,58,92,0.1); cursor:pointer; transition:all 0.3s; margin-bottom:0.4rem; }
+        .treatment-item:hover { border-color:rgba(212,168,83,0.2); }
+        .treatment-item.selected { border-color:rgba(212,168,83,0.5); background:rgba(212,168,83,0.1); }
+        .treatment-left { display:flex; align-items:center; gap:0.5rem; }
+        .treatment-price { text-align:right; }
+        .treatment-price p:first-child { font-size:0.8rem; color:var(--gold); }
+        .treatment-price p:last-child { font-size:0.6rem; color:var(--muted); }
+
+        /* Day row */
+        .day-row { display:flex; align-items:center; gap:0.75rem; padding:0.5rem; border-radius:8px; background:rgba(27,58,92,0.1); border:1px solid rgba(212,168,83,0.05); margin-bottom:0.4rem; }
+        .day-name { font-size:0.8rem; width:80px; }
+        .day-toggle { width:40px; height:22px; border-radius:999px; background:rgba(138,126,114,0.3); position:relative; cursor:pointer; transition:all 0.3s; border:none; flex-shrink:0; }
+        .day-toggle.on { background:var(--gold); }
+        .day-toggle::after { content:''; position:absolute; top:2px; left:2px; width:18px; height:18px; border-radius:50%; background:white; transition:all 0.3s; }
+        .day-toggle.on::after { left:20px; }
+        .day-hours { display:flex; align-items:center; gap:0.5rem; }
+        .day-hours input { background:rgba(27,58,92,0.3); border:1px solid var(--border); border-radius:4px; padding:0.25rem 0.5rem; color:var(--text); font-size:0.8rem; font-family:inherit; width:90px; }
+        .day-closed { font-size:0.8rem; color:var(--muted); }
+
+        /* Buttons */
+        .btn-row { display:flex; justify-content:space-between; align-items:center; margin-top:2rem; padding-top:1rem; border-top:1px solid var(--border); }
+        .btn { padding:0.625rem 1.5rem; border-radius:8px; font-size:0.75rem; font-weight:600; text-transform:uppercase; letter-spacing:0.08em; cursor:pointer; transition:all 0.3s; border:none; font-family:inherit; }
+        .btn-gold { background:linear-gradient(135deg,#B8942F,var(--gold)); color:#0A0B14; }
+        .btn-gold:hover { filter:brightness(1.15); transform:scale(1.02); }
+        .btn-gold:disabled { opacity:0.5; cursor:not-allowed; transform:none; filter:none; }
+        .btn-outline { background:transparent; color:var(--text2); border:1px solid var(--border); }
+        .btn-outline:hover { border-color:rgba(212,168,83,0.3); color:var(--gold); }
+        .btn-add { padding:0.4rem 0.75rem; border-radius:6px; border:1px solid rgba(212,168,83,0.3); color:var(--gold); font-size:0.6rem; font-weight:600; text-transform:uppercase; letter-spacing:0.08em; background:transparent; cursor:pointer; transition:all 0.3s; }
+        .btn-add:hover { background:rgba(212,168,83,0.1); }
+        .btn-remove { color:rgba(248,113,113,0.7); font-size:0.6rem; text-transform:uppercase; letter-spacing:0.08em; background:none; border:none; cursor:pointer; }
+        .btn-remove:hover { color:#f87171; }
+
+        /* Review card */
+        .review-card { padding:1rem; background:rgba(27,58,92,0.1); border:1px solid var(--border); border-radius:8px; margin-bottom:0.75rem; }
+        .review-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem; }
+        .review-label { font-size:0.6rem; font-weight:600; text-transform:uppercase; letter-spacing:0.15em; color:var(--gold); }
+        .review-edit { font-size:0.6rem; color:var(--gold); text-transform:uppercase; letter-spacing:0.08em; background:none; border:none; cursor:pointer; }
+        .review-edit:hover { color:var(--gold-light); }
+        .review-data { font-size:0.8rem; color:rgba(232,232,232,0.6); line-height:1.6; }
+        .review-data strong { color:var(--text); font-weight:500; }
+
+        /* Success */
+        .success-screen { min-height:80vh; display:flex; align-items:center; justify-content:center; padding:2rem; }
+        .success-inner { text-align:center; max-width:480px; }
+        .success-icon { width:64px; height:64px; border-radius:50%; background:rgba(74,222,128,0.2); display:flex; align-items:center; justify-content:center; margin:0 auto 1.5rem; }
+        .success-icon svg { color:#4ADE80; }
+        .success-inner h2 { font-family:var(--font-serif); font-size:1.75rem; margin-bottom:0.5rem; }
+        .success-inner > p { color:var(--text2); font-size:0.85rem; margin-bottom:1.5rem; }
+        .success-box { background:rgba(212,168,83,0.05); border:1px solid var(--border); border-radius:10px; padding:1.25rem; text-align:left; margin-bottom:1.5rem; }
+        .success-box h3 { font-size:0.6rem; font-weight:600; text-transform:uppercase; letter-spacing:0.15em; color:var(--gold); margin-bottom:0.75rem; }
+        .success-box ol { list-style:none; counter-reset:step; }
+        .success-box ol li { counter-increment:step; font-size:0.8rem; color:rgba(232,232,232,0.6); margin-bottom:0.75rem; display:flex; gap:0.5rem; line-height:1.5; }
+        .success-box ol li::before { content:counter(step) "."; color:var(--gold); font-weight:700; flex-shrink:0; }
+        .success-box ol li strong { color:var(--text); }
+        .bank-details { background:#0F0F0F; border-radius:6px; padding:0.75rem; font-family:monospace; font-size:0.75rem; color:rgba(232,232,232,0.8); line-height:1.8; margin-top:0.75rem; }
+        .bank-details p { display:flex; justify-content:space-between; }
+        .bank-details span { color:var(--muted); }
+
+        .hidden { display:none !important; }
+
+        @media (max-width:640px) {
+            .form-row, .form-row-3 { grid-template-columns:1fr; }
+            .page { padding:90px 1rem 2rem; }
+            .nav-container { padding:0 1rem; }
+            .toggle-row { flex-direction:column; align-items:flex-start; gap:0.5rem; }
+        }
+    </style>
+</head>
+<body>
+    <!-- Nav -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <a href="index.html" class="nav-logo">
+                <img src="logo.png" alt="Moon Hands">
+                <div class="logo-text">
+                    <span class="logo-title">MOON HANDS</span>
+                    <span class="logo-subtitle">BY PIXEL VAULT</span>
+                </div>
+            </a>
+            <div class="nav-menu">
+                <a href="index.html" class="nav-link">HOME</a>
+                <a href="simulator.html" class="nav-link">SIMULATOR</a>
+                <a href="index.html#pricing" class="nav-link">MY PLAN</a>
+                <a href="dashboard.html" class="nav-link">DASHBOARD</a>
+                <a href="index.html#cta" class="nav-link">GET STARTED</a>
+                <a href="onboarding.html" class="nav-btn">BOOK DEMO</a>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Form Page -->
+    <div class="page" id="formPage">
+        <!-- Header -->
+        <div class="page-header">
+            <a href="index.html" title="Back">
+                <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5"/></svg>
+            </a>
+            <div>
+                <h1>Clinic Onboarding</h1>
+                <p id="stepCounter">STEP 1 OF 7</p>
+            </div>
+        </div>
+
+        <!-- Progress -->
+        <div class="progress" id="progressBar"></div>
+        <div class="step-labels" id="stepLabels"></div>
+
+        <!-- Step Content -->
+        <div id="stepContent"></div>
+
+        <!-- Navigation -->
+        <div class="btn-row">
+            <button class="btn btn-outline" id="prevBtn" onclick="prevStep()">Back</button>
+            <button class="btn btn-gold" id="nextBtn" onclick="nextStep()">Continue</button>
+        </div>
+    </div>
+
+    <!-- Success Screen -->
+    <div class="success-screen hidden" id="successPage">
+        <div class="success-inner">
+            <div class="success-icon">
+                <svg width="32" height="32" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
+            </div>
+            <h2>Setup Complete!</h2>
+            <p>Your clinic profile has been saved. Here's what to do next.</p>
+
+            <!-- Status -->
+            <div style="display:flex; gap:0.75rem; justify-content:center; flex-wrap:wrap; margin-bottom:1.5rem;">
+                <div class="btn btn-gold" style="opacity:0.9; cursor:default;">
+                    <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="vertical-align:middle;margin-right:6px"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                    Sent to Moon Hands
+                </div>
+                <a href="https://wa.me/6581398272" target="_blank" class="btn btn-outline" style="text-decoration:none;">
+                    <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="vertical-align:middle;margin-right:6px"><path stroke-linecap="round" stroke-linejoin="round" d="M8.625 12a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375M21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 01-2.555-.337A5.972 5.972 0 015.41 20.97a5.969 5.969 0 01-.474-.065 4.48 4.48 0 00.978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12a9 9 0 0118 0z"/></svg>
+                    Chat on WhatsApp
+                </a>
+                <button class="btn btn-outline" onclick="copyData()">
+                    <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="vertical-align:middle;margin-right:6px"><path stroke-linecap="round" stroke-linejoin="round" d="M15.666 3.888A2.25 2.25 0 0013.5 2.25h-3c-1.03 0-1.9.693-2.166 1.638m7.332 0c.055.194.084.4.084.612v0a.75.75 0 01-.75.75H9.75a.75.75 0 01-.75-.75v0c0-.212.03-.418.084-.612m7.332 0c.646.049 1.288.11 1.927.184 1.1.128 1.907 1.077 1.907 2.185V19.5a2.25 2.25 0 01-2.25 2.25H6.75A2.25 2.25 0 014.5 19.5V6.257c0-1.108.806-2.057 1.907-2.185a48.208 48.208 0 011.927-.184"/></svg>
+                    Copy All Data
+                </button>
+                <button class="btn btn-outline" onclick="downloadData()">
+                    <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="vertical-align:middle;margin-right:6px"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"/></svg>
+                    Download .txt
+                </button>
+            </div>
+
+            <!-- Submitted Data -->
+            <div class="success-box" style="text-align:left">
+                <h3>Your Submitted Information</h3>
+                <p style="font-size:0.7rem;color:var(--muted);margin-bottom:0.75rem">Review and copy or email this to pixelvaultsg@gmail.com</p>
+                <pre id="submittedData" style="background:#0F0F0F;border:1px solid var(--border);border-radius:6px;padding:1rem;font-size:0.75rem;line-height:1.6;color:rgba(232,232,232,0.7);white-space:pre-wrap;overflow-x:auto;max-height:300px;overflow-y:auto;"></pre>
+            </div>
+
+            <div class="success-box">
+                <h3>What Happens Next</h3>
+                <ol>
+                    <li><strong>We review your profile</strong> — Moon Hands team reviews your clinic details (within 24 hours)</li>
+                    <li><strong>Make payment</strong> — Transfer your first month's fee to Pixel Vault's bank account</li>
+                    <li><strong>We configure your AI</strong> — Our team sets up your receptionist with your treatments, hours & preferences</li>
+                    <li><strong>Go live</strong> — You'll receive a WhatsApp test message to confirm everything works</li>
+                </ol>
+
+                <div style="border-top:1px solid var(--border); padding-top:1rem; margin-top:1rem;">
+                    <h3>Bank Transfer Details</h3>
+                    <div class="bank-details">
+                        <p><span>Bank:</span> DBS Bank</p>
+                        <p><span>Account Name:</span> Pixel Vault Pte Ltd</p>
+                        <p><span>Account Number:</span> [YOUR_ACCOUNT_NUMBER]</p>
+                        <p><span>Amount:</span> <span id="successAmount">S$547</span></p>
+                        <p><span>Reference:</span> <span id="successRef">Clinic</span></p>
+                    </div>
+                    <p style="font-size:0.7rem; color:var(--muted); margin-top:0.5rem;">Email your payment screenshot to pixelvaultsg@gmail.com</p>
+                </div>
+            </div>
+
+            <a href="index.html" class="btn btn-gold" style="display:inline-block; text-decoration:none;">Back to Home</a>
+        </div>
+    </div>
+
+<script>
+// ═══════════════════════════════════════════════════════════
+//  DATA
+// ═══════════════════════════════════════════════════════════
+const STEPS = ['Clinic Info','Treatments','Hours','AI Personality','Booking','FAQ & Notes','Review'];
+const DEFAULT_TREATMENTS = [
+    {name:'Botox',price:'380',unit:'per area',dur:'30',cat:'Injectables',desc:'Reduces fine lines and wrinkles. Results last 3-4 months.'},
+    {name:'Dermal Fillers',price:'680',unit:'per syringe',dur:'45',cat:'Injectables',desc:'Restores volume and contours. Results last 6-12 months.'},
+    {name:'HydraFacial',price:'280',unit:'per session',dur:'60',cat:'Facials',desc:'Deep cleansing, exfoliation and hydration. Instant glow.'},
+    {name:'HIFU Face Lift',price:'1280',unit:'per session',dur:'90',cat:'Lifting',desc:'Non-surgical facelift using ultrasound. Results over 2-3 months.'},
+    {name:'Laser Skin Rejuvenation',price:'450',unit:'per session',dur:'45',cat:'Laser',desc:'Improves skin texture, pores and pigmentation.'},
+    {name:'Chemical Peel',price:'180',unit:'per session',dur:'30',cat:'Facials',desc:'Exfoliates dead skin cells for brighter, smoother skin.'},
+    {name:'Rejuran Healer',price:'880',unit:'per session',dur:'45',cat:'Injectables',desc:'Skin healing and regeneration. 3 sessions recommended.'},
+    {name:'Thread Lift',price:'2500',unit:'full face',dur:'60',cat:'Lifting',desc:'Dissolvable threads lift and tighten sagging skin.'},
+];
+const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+const TONES = [
+    {id:'friendly',label:'Friendly & Warm',desc:'Casual and approachable'},
+    {id:'professional',label:'Professional',desc:'Polished and clinical'},
+    {id:'luxury',label:'Luxury',desc:'Upscale and refined'},
+    {id:'casual',label:'Casual',desc:'Relaxed and informal'},
+];
+const LANGS = [
+    {id:'en',label:'English'},
+    {id:'zh',label:'Chinese'},
+    {id:'ms',label:'Malay'},
+    {id:'ta',label:'Tamil'},
+];
+
+let step = 0;
+let form = {
+    clinicName:'',businessRegNo:'',whatsapp:'',clinicPhone:'',clinicEmail:'',address:'',postalCode:'',nearestMrt:'',parkingInfo:'',selectedPlan:'premium',
+    treatments:[],
+    hours:DAYS.map(()=>({open:'10:00',close:'20:00',isOpen:true})),slotDuration:'30',bufferMinutes:'15',maxAppts:'12',
+    agentName:'Sophia',tone:'friendly',greeting:'',languages:['en'],
+    autoConfirm:false,afterHours:'hold_for_approval',sameDay:true,minNotice:'2',maxAdvance:'30',requirePhone:true,waitlist:true,rem24h:true,rem1h:true,follow48h:true,cancelPolicy:'24 hours notice required for cancellations. Late cancellations may be subject to a fee.',
+    faqs:[],specialNotes:'',
+    contactName:'',contactRole:'Clinic Owner',contactEmail:'',contactPhone:'',
+};
+
+// ═══════════════════════════════════════════════════════════
+//  RENDER
+// ═══════════════════════════════════════════════════════════
+function renderProgress() {
+    const bar = document.getElementById('progressBar');
+    const labels = document.getElementById('stepLabels');
+    bar.innerHTML = STEPS.map((_,i)=>`<div class="progress-dot ${i<=step?'active':''}"></div>`).join('');
+    labels.innerHTML = STEPS.map((s,i)=>`<span class="step-label ${i===step?'active':i<step?'done':''}" onclick="if(i<step)goToStep(${i})">${i<step?'✓ ':''}${s}</span>`).join('');
+    document.getElementById('stepCounter').textContent = `STEP ${step+1} OF ${STEPS.length}`;
+    document.getElementById('prevBtn').style.visibility = step===0?'hidden':'visible';
+    document.getElementById('nextBtn').textContent = step===STEPS.length-1?'Submit':'Continue';
+    document.getElementById('nextBtn').disabled = !canProceed();
+}
+
+function renderStep() {
+    const c = document.getElementById('stepContent');
+    const renderers = [renderClinicInfo,renderTreatments,renderHours,renderPersonality,renderBooking,renderFAQ,renderReview];
+    c.innerHTML = renderers[step]();
+    renderProgress();
+}
+
+// ── Step 1: Clinic Info ──
+function renderClinicInfo() {
+    return `
+        <h2 class="sec-title">Tell us about your clinic</h2>
+        <p class="sec-desc">This information helps our AI answer patient questions accurately.</p>
+
+        <div class="form-group">
+            <label class="form-label">Selected Plan</label>
+            <div class="form-row">
+                <div class="option-card ${form.selectedPlan==='basic'?'selected':''}" onclick="form.selectedPlan='basic';renderStep();">
+                    <div class="option-radio"></div>
+                    <div class="option-info"><p>Basic</p><p style="color:var(--gold)">S$347/mo · Up to 500 messages/mo</p></div>
+                </div>
+                <div class="option-card ${form.selectedPlan==='premium'?'selected':''}" onclick="form.selectedPlan='premium';renderStep();">
+                    <div class="option-radio"></div>
+                    <div class="option-info"><p>Premium</p><p style="color:var(--gold)">S$547/mo · Unlimited messages</p></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label class="form-label">Clinic Name *</label>
+            <input class="form-input" placeholder="e.g., Glow Aesthetic Clinic" value="${esc(form.clinicName)}" onchange="form.clinicName=this.value;renderStep();">
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label class="form-label">Business Reg No (UEN)</label>
+                <input class="form-input" placeholder="e.g., 20154321A" value="${esc(form.businessRegNo)}" onchange="form.businessRegNo=this.value">
+            </div>
+            <div class="form-group">
+                <label class="form-label">WhatsApp Business *</label>
+                <input class="form-input" placeholder="+65 XXXX XXXX" value="${esc(form.whatsapp)}" onchange="form.whatsapp=this.value;renderStep();">
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label class="form-label">Clinic Phone</label>
+                <input class="form-input" placeholder="+65 XXXX XXXX" value="${esc(form.clinicPhone)}" onchange="form.clinicPhone=this.value">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Clinic Email *</label>
+                <input class="form-input" type="email" placeholder="hello@glowclinic.sg" value="${esc(form.clinicEmail)}" onchange="form.clinicEmail=this.value;renderStep();">
+            </div>
+        </div>
+        <div class="form-group">
+            <label class="form-label">Address *</label>
+            <textarea class="form-textarea" rows="2" placeholder="e.g., 123 Orchard Road, #05-01, Singapore 238863" onchange="form.address=this.value;renderStep();">${esc(form.address)}</textarea>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label class="form-label">Postal Code</label>
+                <input class="form-input" placeholder="238863" value="${esc(form.postalCode)}" onchange="form.postalCode=this.value">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Nearest MRT</label>
+                <input class="form-input" placeholder="e.g., Orchard MRT (NS22)" value="${esc(form.nearestMrt)}" onchange="form.nearestMrt=this.value">
+            </div>
+        </div>
+        <div class="form-group">
+            <label class="form-label">Parking Information</label>
+            <input class="form-input" placeholder="e.g., Complimentary parking at ION Orchard" value="${esc(form.parkingInfo)}" onchange="form.parkingInfo=this.value">
+        </div>`;
+}
+
+// ── Step 2: Treatments ──
+function renderTreatments() {
+    const custom = form.treatments.filter(t=>t.isCustom);
+    const selected = form.treatments.filter(t=>!t.isCustom);
+    return `
+        <h2 class="sec-title">Your treatments</h2>
+        <p class="sec-desc">Select from common treatments and add your own.</p>
+
+        <p class="form-label">Common Treatments</p>
+        ${DEFAULT_TREATMENTS.map(t=>{
+            const sel = selected.some(s=>s.name===t.name);
+            return `<div class="treatment-item ${sel?'selected':''}" onclick="toggleDefaultTreatment('${t.name}')">
+                <div class="treatment-left">
+                    <div class="option-check" style="margin-right:0.5rem;">${sel?'✓':''}</div>
+                    <div><p style="font-size:0.8rem">${t.name}</p><p style="font-size:0.6rem;color:var(--muted)">${t.cat} · ${t.dur}min</p></div>
+                </div>
+                <div class="treatment-price"><p>S$${t.price}</p><p>${t.unit}</p></div>
+            </div>`;
+        }).join('')}
+
+        <div style="margin-top:1rem">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem;">
+                <p class="form-label">Custom Treatments</p>
+                <button class="btn-add" onclick="addCustomTreatment()">+ Add Treatment</button>
+            </div>
+            ${custom.length===0?'<p style="font-size:0.8rem;color:var(--muted);font-style:italic">No custom treatments yet.</p>':''}
+            <div id="customTreatments">
+                ${custom.map((t,i)=>renderCustomTreatmentForm(t,i)).join('')}
+            </div>
+        </div>
+
+        ${form.treatments.length>0?`<div style="padding:0.75rem;background:rgba(212,168,83,0.05);border:1px solid var(--border);border-radius:8px;margin-top:1rem;">
+            <p style="font-size:0.6rem;color:var(--gold);text-transform:uppercase;letter-spacing:0.1em;font-weight:600">${form.treatments.length} treatment${form.treatments.length!==1?'s':''} selected</p>
+        </div>`:''}`;
+}
+
+function renderCustomTreatmentForm(t,idx) {
+    return `<div style="padding:0.75rem;background:rgba(27,58,92,0.1);border:1px solid var(--border);border-radius:8px;margin-bottom:0.5rem;" data-idx="${idx}">
+        <div class="form-row" style="margin-bottom:0.5rem">
+            <input class="form-input" placeholder="Treatment name" value="${esc(t.name)}" onchange="updateCustomTreatment(${idx},'name',this.value)">
+            <select class="form-select" onchange="updateCustomTreatment(${idx},'category',this.value)">
+                ${['Injectables','Facials','Lifting','Laser','Body','Hair','Skin','Wellness','Other'].map(c=>`<option ${t.category===c?'selected':''}>${c}</option>`).join('')}
+            </select>
+        </div>
+        <div class="form-row" style="margin-bottom:0.5rem">
+            <input class="form-input" placeholder="Price (S$)" value="${esc(t.price)}" onchange="updateCustomTreatment(${idx},'price',this.value)">
+            <input class="form-input" placeholder="Duration (min)" value="${esc(t.duration)}" onchange="updateCustomTreatment(${idx},'duration',this.value)">
+        </div>
+        <textarea class="form-textarea" rows="2" placeholder="Description..." onchange="updateCustomTreatment(${idx},'description',this.value)">${esc(t.description)}</textarea>
+        <button class="btn-remove" onclick="removeCustomTreatment(${idx})" style="margin-top:0.25rem">Remove</button>
+    </div>`;
+}
+
+// ── Step 3: Hours ──
+function renderHours() {
+    return `
+        <h2 class="sec-title">Operating Hours</h2>
+        <p class="sec-desc">Set when your clinic is open. Our AI will suggest available slots.</p>
+
+        ${DAYS.map((day,i)=>`
+            <div class="day-row">
+                <button class="day-toggle ${form.hours[i].isOpen?'on':''}" onclick="toggleDay(${i})"></button>
+                <span class="day-name">${day}</span>
+                ${form.hours[i].isOpen?`
+                    <div class="day-hours">
+                        <input type="time" value="${form.hours[i].open}" onchange="form.hours[${i}].open=this.value">
+                        <span style="color:var(--muted);font-size:0.8rem">to</span>
+                        <input type="time" value="${form.hours[i].close}" onchange="form.hours[${i}].close=this.value">
+                    </div>
+                `:'<span class="day-closed">Closed</span>'}
+            </div>
+        `).join('')}
+
+        <div style="border-top:1px solid var(--border);padding-top:1rem;margin-top:1.5rem">
+            <p class="form-label">Booking Slot Settings</p>
+            <div class="form-row">
+                <div class="form-group">
+                    <label class="form-label" style="font-size:0.55rem">Slot Duration</label>
+                    <select class="form-select" onchange="form.slotDuration=this.value">
+                        <option value="15" ${form.slotDuration==='15'?'selected':''}>15 min</option>
+                        <option value="30" ${form.slotDuration==='30'?'selected':''}>30 min</option>
+                        <option value="45" ${form.slotDuration==='45'?'selected':''}>45 min</option>
+                        <option value="60" ${form.slotDuration==='60'?'selected':''}>60 min</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" style="font-size:0.55rem">Buffer Between</label>
+                    <select class="form-select" onchange="form.bufferMinutes=this.value">
+                        <option value="0" ${form.bufferMinutes==='0'?'selected':''}>No buffer</option>
+                        <option value="15" ${form.bufferMinutes==='15'?'selected':''}>15 min</option>
+                        <option value="30" ${form.bufferMinutes==='30'?'selected':''}>30 min</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" style="font-size:0.55rem">Max Appts / Day</label>
+                    <input class="form-input" type="number" min="1" max="50" value="${form.maxAppts}" onchange="form.maxAppts=this.value">
+                </div>
+            </div>
+        </div>`;
+}
+
+// ── Step 4: AI Personality ──
+function renderPersonality() {
+    return `
+        <h2 class="sec-title">AI Personality</h2>
+        <p class="sec-desc">Configure how your AI receptionist speaks to patients.</p>
+
+        <div class="form-group">
+            <label class="form-label">Agent Name</label>
+            <input class="form-input" placeholder="e.g., Sophia" value="${esc(form.agentName)}" onchange="form.agentName=this.value">
+            <p style="font-size:0.7rem;color:var(--muted);margin-top:0.25rem">This is the name patients will see.</p>
+        </div>
+
+        <div class="form-group">
+            <label class="form-label">Tone of Voice</label>
+            <div class="form-row">
+                ${TONES.map(t=>`
+                    <div class="option-card ${form.tone===t.id?'selected':''}" onclick="form.tone='${t.id}';renderStep();">
+                        <div class="option-radio"></div>
+                        <div class="option-info"><p>${t.label}</p><p>${t.desc}</p></div>
+                    </div>
+                `).join('')}
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label class="form-label">Custom Greeting (optional)</label>
+            <textarea class="form-textarea" rows="2" placeholder="Leave blank for default, or write your own..." onchange="form.greeting=this.value">${esc(form.greeting)}</textarea>
+        </div>
+
+        <div class="form-group">
+            <label class="form-label">Languages</label>
+            <div style="display:flex;flex-wrap:wrap;gap:0.5rem">
+                ${LANGS.map(l=>{
+                    const sel = form.languages.includes(l.id);
+                    return `<button class="option-card ${sel?'selected':''}" style="display:inline-flex;width:auto;padding:0.4rem 0.75rem;margin-bottom:0" onclick="toggleLang('${l.id}');renderStep();">
+                        <span style="font-size:0.8rem">${sel?'✓ ':''}${l.label}</span>
+                    </button>`;
+                }).join('')}
+            </div>
+        </div>`;
+}
+
+// ── Step 5: Booking ──
+function renderBooking() {
+    const toggles = [
+        {key:'autoConfirm',label:'Auto-confirm bookings',desc:'Patients get instant confirmation'},
+        {key:'sameDay',label:'Allow same-day bookings',desc:'Patients can book for today'},
+        {key:'requirePhone',label:'Require phone number',desc:'Must provide phone to book'},
+        {key:'waitlist',label:'Enable waitlist',desc:'Offer waitlist when full'},
+        {key:'rem24h',label:'24-hour reminder',desc:'Reminder 1 day before'},
+        {key:'rem1h',label:'1-hour reminder',desc:'Reminder 1 hour before'},
+        {key:'follow48h',label:'48-hour follow-up',desc:'Check in 2 days after'},
+    ];
+    return `
+        <h2 class="sec-title">Booking Preferences</h2>
+        <p class="sec-desc">Control how appointment requests are handled.</p>
+
+        ${toggles.map(t=>`
+            <div class="toggle-row">
+                <div class="toggle-info"><p>${t.label}</p><p>${t.desc}</p></div>
+                <button class="toggle-btn ${form[t.key]?'on':''}" onclick="form.${t.key}=!form.${t.key};renderStep();"></button>
+            </div>
+        `).join('')}
+
+        <div class="form-group" style="margin-top:1rem">
+            <label class="form-label">After-Hours Bookings</label>
+            ${[
+                {id:'hold_for_approval',label:'Hold for approval',desc:'You confirm next business day'},
+                {id:'auto_confirm',label:'Auto-confirm',desc:'Accept immediately'},
+                {id:'next_business_day',label:'Move to next business day',desc:'Patient gets first available'},
+            ].map(o=>`
+                <div class="option-card ${form.afterHours===o.id?'selected':''}" onclick="form.afterHours='${o.id}';renderStep();">
+                    <div class="option-radio"></div>
+                    <div class="option-info"><p>${o.label}</p><p>${o.desc}</p></div>
+                </div>
+            `).join('')}
+        </div>
+
+        <div class="form-row" style="margin-top:1rem">
+            <div class="form-group">
+                <label class="form-label" style="font-size:0.55rem">Min. Notice</label>
+                <select class="form-select" onchange="form.minNotice=this.value">
+                    ${[['0','No minimum'],['1','1 hour'],['2','2 hours'],['4','4 hours'],['24','24 hours']].map(([v,l])=>`<option value="${v}" ${form.minNotice===v?'selected':''}>${l}</option>`).join('')}
+                </select>
+            </div>
+            <div class="form-group">
+                <label class="form-label" style="font-size:0.55rem">Max Advance</label>
+                <select class="form-select" onchange="form.maxAdvance=this.value">
+                    ${[['7','7 days'],['14','14 days'],['30','30 days'],['60','60 days'],['90','90 days']].map(([v,l])=>`<option value="${v}" ${form.maxAdvance===v?'selected':''}>${l}</option>`).join('')}
+                </select>
+            </div>
+        </div>
+
+        <div class="form-group" style="margin-top:1rem">
+            <label class="form-label">Cancellation Policy</label>
+            <textarea class="form-textarea" rows="2" onchange="form.cancelPolicy=this.value">${esc(form.cancelPolicy)}</textarea>
+        </div>`;
+}
+
+// ── Step 6: FAQ ──
+function renderFAQ() {
+    return `
+        <h2 class="sec-title">FAQs & Special Notes</h2>
+        <p class="sec-desc">Add common questions and clinic-specific info.</p>
+
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem">
+            <p class="form-label">Frequently Asked Questions</p>
+            <button class="btn-add" onclick="addFAQ()">+ Add FAQ</button>
+        </div>
+
+        ${form.faqs.length===0?'<p style="font-size:0.8rem;color:var(--muted);font-style:italic;margin-bottom:1rem">No FAQs yet. Click "Add FAQ" to add common questions.</p>':''}
+
+        <div id="faqList">
+            ${form.faqs.map((f,i)=>`
+                <div style="padding:0.75rem;background:rgba(27,58,92,0.1);border:1px solid var(--border);border-radius:8px;margin-bottom:0.5rem">
+                    <input class="form-input" style="margin-bottom:0.4rem" placeholder="Question..." value="${esc(f.q)}" onchange="form.faqs[${i}].q=this.value">
+                    <textarea class="form-textarea" rows="2" placeholder="Answer..." onchange="form.faqs[${i}].a=this.value">${esc(f.a)}</textarea>
+                    <button class="btn-remove" onclick="removeFAQ(${i})" style="margin-top:0.25rem">Remove</button>
+                </div>
+            `).join('')}
+        </div>
+
+        <div class="form-group" style="margin-top:1.5rem;border-top:1px solid var(--border);padding-top:1rem">
+            <label class="form-label">Special Notes for AI</label>
+            <p style="font-size:0.7rem;color:var(--muted);margin-bottom:0.5rem">Important info the AI should always keep in mind.</p>
+            <textarea class="form-textarea" rows="4" placeholder="e.g., All injectable treatments are performed by MOH-certified doctors..." onchange="form.specialNotes=this.value">${esc(form.specialNotes)}</textarea>
+        </div>`;
+}
+
+// ── Step 7: Review ──
+function renderReview() {
+    const selTreatments = form.treatments;
+    return `
+        <h2 class="sec-title">Review Your Setup</h2>
+        <p class="sec-desc">Please check everything before submitting.</p>
+
+        <div class="review-card">
+            <div class="review-header"><span class="review-label">Clinic Info</span><button class="review-edit" onclick="goToStep(0)">Edit</button></div>
+            <div class="review-data">
+                <p>Name: <strong>${esc(form.clinicName)||'—'}</strong></p>
+                <p>Plan: <strong style="text-transform:capitalize">${form.selectedPlan}</strong></p>
+                <p>WhatsApp: <strong>${esc(form.whatsapp)||'—'}</strong></p>
+                <p>Email: <strong>${esc(form.clinicEmail)||'—'}</strong></p>
+                <p>Address: <strong>${esc(form.address)||'—'}</strong></p>
+            </div>
+        </div>
+
+        <div class="review-card">
+            <div class="review-header"><span class="review-label">Treatments (${selTreatments.length})</span><button class="review-edit" onclick="goToStep(1)">Edit</button></div>
+            <div style="display:flex;flex-wrap:wrap;gap:0.4rem">
+                ${selTreatments.map(t=>`<span style="padding:0.2rem 0.6rem;background:rgba(212,168,83,0.1);border:1px solid rgba(212,168,83,0.2);border-radius:999px;font-size:0.7rem;color:var(--gold)">${t.name} · S$${t.price}</span>`).join('')||'<span style="font-size:0.8rem;color:var(--muted)">None selected</span>'}
+            </div>
+        </div>
+
+        <div class="review-card">
+            <div class="review-header"><span class="review-label">Hours</span><button class="review-edit" onclick="goToStep(2)">Edit</button></div>
+            <div class="review-data">
+                ${form.hours.map((h,i)=>`<p>${DAYS[i]}: <strong>${h.isOpen?`${h.open} – ${h.close}`:'Closed'}</strong></p>`).join('')}
+            </div>
+        </div>
+
+        <div class="review-card">
+            <div class="review-header"><span class="review-label">AI Personality</span><button class="review-edit" onclick="goToStep(3)">Edit</button></div>
+            <div class="review-data">
+                <p>Name: <strong>${esc(form.agentName)}</strong></p>
+                <p>Tone: <strong style="text-transform:capitalize">${form.tone}</strong></p>
+                <p>Languages: <strong>${form.languages.map(l=>({en:'English',zh:'Chinese',ms:'Malay',ta:'Tamil'})[l]).join(', ')}</strong></p>
+            </div>
+        </div>
+
+        <div class="form-group" style="margin-top:1rem">
+            <label class="form-label">Primary Contact *</label>
+            <div class="form-row">
+                <input class="form-input" placeholder="Contact name" value="${esc(form.contactName)}" onchange="form.contactName=this.value;renderStep();">
+                <select class="form-select" onchange="form.contactRole=this.value">
+                    ${['Clinic Owner','Doctor','Manager','Receptionist','Other'].map(r=>`<option ${form.contactRole===r?'selected':''}>${r}</option>`).join('')}
+                </select>
+            </div>
+        </div>`;
+}
+
+// ═══════════════════════════════════════════════════════════
+//  ACTIONS
+// ═══════════════════════════════════════════════════════════
+function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+
+function toggleDefaultTreatment(name){
+    const idx=form.treatments.findIndex(t=>t.name===name&&!t.isCustom);
+    if(idx>=0)form.treatments.splice(idx,1);
+    else{const dt=DEFAULT_TREATMENTS.find(t=>t.name===name);if(dt)form.treatments.push({...dt,isCustom:false});}
+    renderStep();
+}
+function addCustomTreatment(){form.treatments.push({name:'',price:'',unit:'per session',duration:'60',description:'',category:'Other',isCustom:true});renderStep();}
+function updateCustomTreatment(idx,field,val){const c=form.treatments.filter(t=>t.isCustom)[idx];if(c)c[field]=val;renderStep();}
+function removeCustomTreatment(idx){const ci=form.treatments.findIndex((t,i)=>t.isCustom&&form.treatments.filter(x=>x.isCustom).indexOf(t)===idx);if(ci>=0)form.treatments.splice(ci,1);renderStep();}
+function toggleDay(i){form.hours[i].isOpen=!form.hours[i].isOpen;renderStep();}
+function toggleLang(l){const i=form.languages.indexOf(l);if(i>=0)form.languages.splice(i,1);else form.languages.push(l);}
+function addFAQ(){form.faqs.push({q:'',a:''});renderStep();}
+function removeFAQ(i){form.faqs.splice(i,1);renderStep();}
+
+function canProceed(){
+    if(step===0)return!!(form.clinicName&&form.whatsapp&&form.clinicEmail&&form.address&&form.contactName);
+    if(step===1)return form.treatments.length>0&&form.treatments.every(t=>t.name&&t.price);
+    return true;
+}
+function goToStep(s){step=s;renderStep();}
+function nextStep(){
+    if(step<STEPS.length-1){step++;renderStep();}
+    else{submitForm();}
+}
+function prevStep(){if(step>0){step--;renderStep();}}
+
+function buildSubmissionText(){
+    const lines=[];
+    lines.push('=== MOON HANDS CLINIC ONBOARDING ===');
+    lines.push('Submitted: '+new Date().toLocaleString('en-SG'));
+    lines.push('');
+    lines.push('--- CLINIC INFO ---');
+    lines.push('Clinic Name: '+form.clinicName);
+    lines.push('Business Reg No (UEN): '+(form.businessRegNo||'—'));
+    lines.push('WhatsApp Business: '+form.whatsapp);
+    lines.push('Clinic Phone: '+(form.clinicPhone||'—'));
+    lines.push('Clinic Email: '+form.clinicEmail);
+    lines.push('Address: '+form.address);
+    lines.push('Postal Code: '+(form.postalCode||'—'));
+    lines.push('Nearest MRT: '+(form.nearestMrt||'—'));
+    lines.push('Parking Info: '+(form.parkingInfo||'—'));
+    lines.push('Selected Plan: '+(form.selectedPlan==='premium'?'Premium (S$547/mo)':'Basic (S$347/mo)'));
+    lines.push('');
+    lines.push('--- TREATMENTS ('+form.treatments.length+') ---');
+    form.treatments.forEach(t=>{
+        lines.push(t.name+' | S$'+t.price+'/'+t.unit+' | '+t.dur+'min | '+t.cat);
+        if(t.desc)lines.push('  Note: '+t.desc);
+    });
+    lines.push('');
+    lines.push('--- OPERATING HOURS ---');
+    DAYS.forEach((d,i)=>{
+        const h=form.hours[i];
+        lines.push(d+': '+(h.isOpen?h.open+' – '+h.close:'Closed'));
+    });
+    lines.push('Slot Duration: '+form.slotDuration+'min');
+    lines.push('Buffer: '+form.bufferMinutes+'min');
+    lines.push('Max Appts/Day: '+form.maxAppts);
+    lines.push('');
+    lines.push('--- AI PERSONALITY ---');
+    lines.push('Agent Name: '+form.agentName);
+    lines.push('Tone: '+form.tone);
+    lines.push('Greeting: '+(form.greeting||'Default'));
+    lines.push('Languages: '+form.languages.map(l=>({en:'English',zh:'Chinese',ms:'Malay',ta:'Tamil'})[l]).join(', '));
+    lines.push('');
+    lines.push('--- BOOKING PREFERENCES ---');
+    lines.push('Auto-confirm: '+form.autoConfirm);
+    lines.push('Same-day bookings: '+form.sameDay);
+    lines.push('Require phone: '+form.requirePhone);
+    lines.push('Waitlist: '+form.waitlist);
+    lines.push('24h reminder: '+form.rem24h);
+    lines.push('1h reminder: '+form.rem1h);
+    lines.push('48h follow-up: '+form.follow48h);
+    lines.push('After-hours: '+form.afterHours);
+    lines.push('Min notice: '+form.minNotice+' hours');
+    lines.push('Max advance: '+form.maxAdvance+' days');
+    lines.push('Cancellation: '+form.cancelPolicy);
+    lines.push('');
+    lines.push('--- FAQS ---');
+    if(form.faqs.length===0)lines.push('None provided');
+    form.faqs.forEach((f,i)=>{lines.push('Q'+(i+1)+': '+f.q);lines.push('A: '+f.a);});
+    lines.push('');
+    lines.push('--- SPECIAL NOTES ---');
+    lines.push(form.specialNotes||'None provided');
+    lines.push('');
+    lines.push('--- CONTACT ---');
+    lines.push('Name: '+form.contactName);
+    lines.push('Role: '+form.contactRole);
+    lines.push('Email: '+(form.contactEmail||'—'));
+    lines.push('Phone: '+(form.contactPhone||'—'));
+    return lines.join('\n');
+}
+
+const API_BASE = 'https://moon-hands-backend.onrender.com';
+
+async function submitForm(){
+    // Basic validation
+    if(!(form.clinicName&&form.whatsapp&&form.clinicEmail&&form.address&&form.contactName)){
+        alert('Please fill in all required fields (marked with *)');
+        return;
+    }
+
+    // Show loading state
+    const nextBtn=document.getElementById('nextBtn');
+    nextBtn.textContent='Submitting...';
+    nextBtn.disabled=true;
+
+    try{
+        const response=await fetch(API_BASE+'/api/onboarding',{
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify(form)
+        });
+
+        const result=await response.json();
+
+        if(result.success){
+            // Show success page
+            document.getElementById('formPage').classList.add('hidden');
+            document.getElementById('successPage').classList.remove('hidden');
+            document.getElementById('successAmount').textContent=form.selectedPlan==='premium'?'S$547':'S$347';
+            document.getElementById('successRef').textContent=form.clinicName||'Clinic';
+
+            // Fill the data display
+            const fullText=buildSubmissionText();
+            document.getElementById('submittedData').textContent=fullText;
+
+            // Telegram deep link
+            document.getElementById('telegramLink').href='https://t.me/';
+        }else{
+            alert('Submission failed: '+(result.error||'Unknown error'));
+            nextBtn.textContent='Submit';
+            nextBtn.disabled=false;
+        }
+    }catch(err){
+        console.error('Submit error:',err);
+        // Fallback: show success page with local data anyway
+        document.getElementById('formPage').classList.add('hidden');
+        document.getElementById('successPage').classList.remove('hidden');
+        document.getElementById('successAmount').textContent=form.selectedPlan==='premium'?'S$547':'S$347';
+        document.getElementById('successRef').textContent=form.clinicName||'Clinic';
+        const fullText=buildSubmissionText();
+        document.getElementById('submittedData').textContent=fullText;
+        alert('Network issue — your data is shown below. Please copy and send to us.');
+    }
+}
+
+function copyData(){
+    const text=document.getElementById('submittedData').textContent;
+    navigator.clipboard.writeText(text).then(()=>{
+        const btn=document.querySelector('button[onclick="copyData()"]');
+        const orig=btn.innerHTML;
+        btn.innerHTML='✓ Copied!';
+        setTimeout(()=>btn.innerHTML=orig,2000);
+    }).catch(()=>alert('Please manually copy the text below'));
+}
+function downloadData(){
+    const text=document.getElementById('submittedData').textContent;
+    const blob=new Blob([text],{type:'text/plain'});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');
+    a.href=url;
+    a.download='moonhands-onboarding-'+(form.clinicName||'clinic').replace(/\s+/g,'-').toLowerCase()+'.txt';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+}
+
+// Init
+renderStep();
+</script>
+</body>
+</html>

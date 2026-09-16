@@ -1043,12 +1043,13 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
         const nextAvail = await findNextAvailableAfter(clinicConfig.id, existingTreatments, clinicConfig, data.date);
         if (nextAvail.found) {
           const { getDateButtonOptions } = require('./whatsapp-interactive');
+          const bodyText = `${data.date} is fully booked. Here are the next available dates:`;
           return {
-            text: `${data.date} is fully booked. Here are the next available dates:`,
+            text: bodyText,
             source: 'hardcoded',
             cost_saved: 1,
             latency_ms: Date.now() - startTime,
-            whatsappInteractive: getDateButtonOptions(nextAvail.allDates)
+            whatsappInteractive: getDateButtonOptions(nextAvail.allDates, bodyText)
           };
         }
         
@@ -1104,13 +1105,14 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
           if (nextAvail.found) {
             setState(patientPhone, BOOKING_STATES.AWAITING_DATE, { treatment: existingTreatment2, treatments: existingTreatments2 });
             const { getDateButtonOptions } = require('./whatsapp-interactive');
+            const bodyText = `${date} at ${data.time} is no longer available. Here are the next available dates:`;
             return {
-              text: `${date} is fully booked or outside hours. Here are the next available dates:`,
+              text: bodyText,
               source: 'hardcoded',
               intents: ['date_suggestion'],
               cost_saved: 1,
               latency_ms: Date.now() - startTime,
-              whatsappInteractive: getDateButtonOptions(nextAvail.allDates)
+              whatsappInteractive: getDateButtonOptions(nextAvail.allDates, bodyText)
             };
           }
         } catch (err) {
@@ -1615,9 +1617,8 @@ async function attemptBooking(clinicConfig, patientPhone, fields, conversationHi
       notes: `Total duration: ${totalDuration}mins.${priceText ? ` Est. total: ${priceText}${priceSum.isRange ? ' (range — final price confirmed at clinic)' : ''}.` : ''} ${notFound.length > 0 ? 'Not found: ' + notFound.join(', ') : ''}`
     });
     
-    resetIdle(patientPhone);
-    
     if (result.success) {
+      resetIdle(patientPhone);
       const multiNote = matchedServices.length > 1 ? ` (${totalDuration}mins total)` : '';
       const calendarId = clinicConfig.config?.google_calendar_id || clinicConfig.google_calendar_id;
       const clinicId = clinicConfig.id || 'unknown';
@@ -1646,8 +1647,16 @@ async function attemptBooking(clinicConfig, patientPhone, fields, conversationHi
         }
       };
     } else {
+      // Preserve state so user can change date/time/treatment and retry
+      setState(patientPhone, BOOKING_STATES.AWAITING_CONFIRMATION, {
+        date: fields.date,
+        time: fields.time,
+        treatment: primaryTreatment,
+        treatments: treatmentNames,
+        name: patientName
+      });
       return {
-        text: `I couldn't complete the booking: ${result.error}. Could you try again?`,
+        text: `I couldn't complete the booking: ${result.error}. You can change the date, time, or treatment and try again.`,
         source: 'hardcoded',
         cost_saved: 1,
         latency_ms: Date.now() - startTime
@@ -1655,9 +1664,16 @@ async function attemptBooking(clinicConfig, patientPhone, fields, conversationHi
     }
   } catch (err) {
     console.error('[attemptBooking] Direct booking failed:', err.message);
-    resetIdle(patientPhone);
+    // Preserve state so user can retry with different details
+    setState(patientPhone, BOOKING_STATES.AWAITING_CONFIRMATION, {
+      date: fields.date,
+      time: fields.time,
+      treatment: primaryTreatment,
+      treatments: treatmentNames,
+      name: patientName
+    });
     return {
-      text: `I had trouble completing your booking. Let me connect you with the clinic team directly.`,
+      text: `I had trouble completing your booking. You can change the date, time, or treatment and try again.`,
       source: 'hardcoded',
       cost_saved: 1,
       latency_ms: Date.now() - startTime

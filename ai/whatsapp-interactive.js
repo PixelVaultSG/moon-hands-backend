@@ -235,7 +235,7 @@ function getMultiTreatmentButtons(selectedTreatments, totalDuration, totalPrice)
  * Shows up to 3 date options + "Other" as quick reply buttons.
  * Each button ID encodes the actual date: `date_YYYY-MM-DD`
  */
-function getDateButtonOptions(dateOptions) {
+function getDateButtonOptions(dateOptions, customBody) {
   const buttons = dateOptions.map(d => ({
     id: `date_${d.date}`,
     title: d.label.length > 20 ? d.label.substring(0, 20) : d.label
@@ -244,7 +244,7 @@ function getDateButtonOptions(dateOptions) {
     buttons.push({ id: 'date_other', title: '📅 Other Date' });
   }
   return buildQuickReplyButtons({
-    body: 'When would you like to come in?',
+    body: customBody || 'When would you like to come in?',
     footer: 'Tap a date to see available times',
     buttons: buttons.slice(0, 3)
   });

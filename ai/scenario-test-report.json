@@ -1,0 +1,114 @@
+{
+  "summary": {
+    "total_scenarios": 10000,
+    "passed": 10000,
+    "failed": 0,
+    "accuracy": "100%",
+    "target_accuracy": "98%",
+    "meets_target": true,
+    "duration_ms": 1364,
+    "timestamp": "2026-08-06T14:28:26.352Z"
+  },
+  "by_category": {
+    "booking": {
+      "passed": 7042,
+      "failed": 0,
+      "total": 7042
+    },
+    "fallback": {
+      "passed": 82,
+      "failed": 0,
+      "total": 82
+    },
+    "service_inquiry": {
+      "passed": 559,
+      "failed": 0,
+      "total": 559
+    },
+    "security": {
+      "passed": 91,
+      "failed": 0,
+      "total": 91
+    },
+    "time_validation": {
+      "passed": 161,
+      "failed": 0,
+      "total": 161
+    },
+    "typo_normalization": {
+      "passed": 237,
+      "failed": 0,
+      "total": 237
+    },
+    "location_inquiry": {
+      "passed": 212,
+      "failed": 0,
+      "total": 212
+    },
+    "cancellation": {
+      "passed": 191,
+      "failed": 0,
+      "total": 191
+    },
+    "out_of_scope": {
+      "passed": 226,
+      "failed": 0,
+      "total": 226
+    },
+    "admin_override": {
+      "passed": 81,
+      "failed": 0,
+      "total": 81
+    },
+    "spaced_normalization": {
+      "passed": 238,
+      "failed": 0,
+      "total": 238
+    },
+    "greeting": {
+      "passed": 172,
+      "failed": 0,
+      "total": 172
+    },
+    "opening_hours": {
+      "passed": 152,
+      "failed": 0,
+      "total": 152
+    },
+    "date_parsing": {
+      "passed": 150,
+      "failed": 0,
+      "total": 150
+    },
+    "mixed_intents": {
+      "passed": 141,
+      "failed": 0,
+      "total": 141
+    },
+    "context_reply": {
+      "passed": 265,
+      "failed": 0,
+      "total": 265
+    }
+  },
+  "by_priority": {
+    "critical": {
+      "passed": 6173,
+      "failed": 0,
+      "total": 6173
+    },
+    "high": {
+      "passed": 2827,
+      "failed": 0,
+      "total": 2827
+    },
+    "medium": {
+      "passed": 1000,
+      "failed": 0,
+      "total": 1000
+    }
+  },
+  "top_failures": [],
+  "total_warnings": 290,
+  "critical_failures": 0
+}

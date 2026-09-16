@@ -29,7 +29,7 @@ function formatConfig(config, client) {
   return [
     `\ud83d\udccb *Client: ${escapeMarkdown(client.name)}*`,
     `Status: ${client.status || 'active'}`,
-    `Plan: ${escapeMarkdown(client.plan || 'N/A')}`,
+    `Plan: ${client.plan === 'premium' ? 'Premium' : 'Basic'} \(${client.plan === 'premium' ? '547' : '347'}/mo\)`,
     ``,
     `\ud83e\udd16 AI Agent: *${escapeMarkdown(config.agent_name || 'Default')}*`,
     `Voice: ${escapeMarkdown(config.tone || 'friendly')} / ${config.enthusiasm || 'medium'} enthusiasm`,
@@ -66,6 +66,8 @@ async function handleHelp(ctx) {
   const helpText = [
     '\ud83e\udd16 Moon Hands Admin Bot',
     '',
+    '\ud83d\udca1 Quick tip: type /menu for button shortcuts to the most common actions.',
+    '',
     '\ud83d\udccb CLIENT MANAGEMENT',
     '/clients \u2014 List all clinics',
     '/viewconfig <clinic-id> \u2014 View full config',
@@ -94,6 +96,17 @@ async function handleHelp(ctx) {
     '/pause <clinic> \u2014 Stop AI responses',
     '/resume <clinic> \u2014 Resume AI',
     '',
+    '\ud83d\udcb0 BILLING',
+    '/billing \u2014 All clinics: payment status & due dates',
+    '/markpaid <slug> <amount> [YYYY-MM] \u2014 Record payment received',
+    '  \u2192 /markpaid pixelvault 347 2026-09',
+    '/setbilling <slug> <day> <amount> \u2014 Set billing cycle',
+    '  \u2192 /setbilling pixelvault 15 547',
+    '/suspend <slug> \u2014 Stop bot replies (non-payment)',
+    '  \u2192 /suspend pixelvault',
+    '/unsuspend <slug> \u2014 Resume bot replies + set active',
+    '  \u2192 /unsuspend pixelvault',
+    '',
     '\ud83d\udcca REPORTS',
     '/usage <clinic> \u2014 Today\'s usage',
     '',
@@ -101,6 +114,9 @@ async function handleHelp(ctx) {
     '/security \u2014 Security dashboard',
     '/threats \u2014 Active threats',
     '/authlog \u2014 Failed logins (1h)',
+    '',
+    '\ud83e\uddea SAMPLES',
+    '/testalerts \u2014 Fire all sample message types here',
     '',
     '\ud83d\udd27 SYSTEM',
     '/debug \u2014 Server diagnostics',
@@ -572,17 +588,32 @@ async function handleUsage(ctx, providedSlug = null) {
     return ctx.reply(`📊 No usage recorded for ${client.name} today.\n\nThis is normal — usage data appears after the first patient message.`);
   }
 
-  const waLimit = client.plan === 'professional' ? 5000 : 1000;
-  const waPct = Math.round((clientUsage.whatsapp_messages / waLimit) * 100);
+  const waLimit = client.plan === 'premium' ? 5000 : 1000;
+  const total = clientUsage.whatsapp_messages || 0;
+  const waPct = Math.round((total / waLimit) * 100);
   const status = (pct) => pct > 100 ? '🔴' : pct > 80 ? '🟡' : '🟢';
 
-  await ctx.reply(
-    `📊 Usage: ${client.name}\n` +
-    `Date: ${today}\n\n` +
-    `💬 WhatsApp: ${clientUsage.whatsapp_messages} / ${waLimit} msgs (${waPct}%) ${status(waPct)}\n` +
-    `💰 Cost: $${clientUsage.cost?.toFixed(2) || '0.00'}\n` +
-    `📅 Bookings: ${clientUsage.bookings || 0}`
-  );
+  // Moon Hands admin sees the internal split (template = free, AI = payable).
+  // Clinic staff see ONLY the total — the hardcoded/AI split is never exposed to clinics,
+  // so message value stays flat and Premium (unlimited) remains the obvious upgrade.
+  const isRequesterAdmin = ctx.from && String(ctx.from.id) === String(process.env.TELEGRAM_ADMIN_CHAT_ID);
+
+  const lines = [
+    `📊 Usage: ${client.name}`,
+    `Date: ${today}`,
+    ``,
+    `💬 WhatsApp: ${total} / ${waLimit} msgs (${waPct}%) ${status(waPct)}`,
+  ];
+  if (isRequesterAdmin) {
+    const hardcoded = clientUsage.hardcoded_messages || 0;
+    const ai = clientUsage.ai_messages || 0;
+    lines.push(`   ├ 📌 Template (free): ${hardcoded}`);
+    lines.push(`   └ 🤖 AI-powered (payable): ${ai}`);
+    lines.push(`💰 AI cost today: $${clientUsage.cost?.toFixed(2) || '0.00'}`);
+  }
+  lines.push(`📅 Bookings: ${clientUsage.bookings || 0}`);
+
+  await ctx.reply(lines.join('\n'));
 }
 
 async function handleHealth(ctx) {
@@ -717,6 +748,193 @@ async function handleDebug(ctx) {
   }
 }
 
+
+// ─── SAMPLE ALERTS (/testalerts) ─────────────────────────────────
+// Fires the full sample message catalogue to the admin chat so the
+// owner can review every Telegram message type. Admin-only.
+async function handleTestAlerts(ctx) {
+  const { SAMPLES } = require('../sample-alerts');
+  await ctx.reply(`🧪 Firing ${SAMPLES.length} sample messages... (about ${Math.ceil(SAMPLES.length * 0.7)}s)`);
+  await ctx.reply(`🧪 *SAMPLE ALERT RUN — ${SAMPLES.length} message types*
+Synced 2026-09-05: basic/premium plans, WhatsApp-only, admin-only free/payable split.`,
+    { parse_mode: 'Markdown' }).catch(() => {});
+  for (let i = 0; i < SAMPLES.length; i++) {
+    const s = SAMPLES[i];
+    const text = `[${i + 1}/${SAMPLES.length}] ${s.name}
+
+${s.text}`;
+    const opts = { parse_mode: 'Markdown' };
+    if (s.reply_markup) opts.reply_markup = s.reply_markup;
+    try {
+      await ctx.reply(text, opts);
+    } catch {
+      const fallbackOpts = {};
+      if (s.reply_markup) fallbackOpts.reply_markup = s.reply_markup;
+      await ctx.reply(text.replace(/[*_`]/g, ''), fallbackOpts);
+    }
+    await new Promise(r => setTimeout(r, 700)); // stay under Telegram rate limits
+  }
+  await ctx.reply('🧪 END OF SAMPLE RUN');
+}
+
+// ─── BILLING COMMANDS ────────────────────────────────────────────
+
+async function handleBilling(ctx) {
+  const isAdmin = ctx.from && String(ctx.from.id) === String(process.env.TELEGRAM_ADMIN_CHAT_ID);
+  if (!isAdmin) {
+    return ctx.reply('⚠️ Sorry, only the Moon Hands admin can use billing commands.');
+  }
+  try {
+    const { checkAllClinics } = require('../../middleware/billing-monitor');
+    const all = await checkAllClinics();
+    if (!all.length) return ctx.reply('No clinics found.');
+
+    const lines = ['💰 *BILLING STATUS*', '', `Total clinics: ${all.length}`, ''];
+    for (const r of all) {
+      const c = r.client;
+      const planLabel = c.plan === 'premium' ? 'Premium' : 'Basic';
+      const amount = c.monthly_amount || (c.plan === 'premium' ? 547 : 347);
+      const emoji = r.status === 'active' ? '🟢' : r.status === 'grace_period' ? '🟡' : r.status === 'overdue' ? '🔴' : '⚫';
+      lines.push(`${emoji} ${c.name} (${c.slug})`);
+      lines.push(`   Plan: ${planLabel} | S$${amount}/mo`);
+      if (r.daysOverdue > 0) {
+        lines.push(`   Status: ${r.status} | ${r.daysOverdue} day${r.daysOverdue === 1 ? '' : 's'} overdue`);
+      } else {
+        lines.push(`   Status: ${r.status} | Due in ${r.daysUntilDue} day${r.daysUntilDue === 1 ? '' : 's'}`);
+      }
+      lines.push('');
+    }
+    await ctx.reply(lines.join('\n'), { parse_mode: 'Markdown' }).catch(() => ctx.reply(lines.join('\n').replace(/[*_`]/g, '')));
+  } catch (err) {
+    console.error('[BILLING_CMD] handleBilling error:', err.message);
+    ctx.reply(`Error: ${err.message}`);
+  }
+}
+
+async function handleMarkPaid(ctx) {
+  const isAdmin = ctx.from && String(ctx.from.id) === String(process.env.TELEGRAM_ADMIN_CHAT_ID);
+  if (!isAdmin) {
+    return ctx.reply('⚠️ Sorry, only the Moon Hands admin can use billing commands.');
+  }
+  const args = ctx.message.text.split(' ').slice(1);
+  if (args.length < 2) {
+    return ctx.reply('Usage: /markpaid <slug> <amount> [YYYY-MM]\n→ /markpaid pixelvault 347 2026-09');
+  }
+  const [slug, amountStr, period] = args;
+  const amount = parseFloat(amountStr);
+  if (isNaN(amount) || amount <= 0) {
+    return ctx.reply('Amount must be a positive number.');
+  }
+  try {
+    const { getClientBySlug } = require('../../supabase/client');
+    const { recordPayment } = require('../../middleware/billing-monitor');
+    const client = await getClientBySlug(slug);
+    if (!client) return ctx.reply(`Clinic "${slug}" not found.`);
+
+    const now = new Date();
+    const billingPeriod = period || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const result = await recordPayment(client.id, amount, 'bank_transfer', `Manual-${Date.now()}`, billingPeriod, `Recorded by admin via Telegram`);
+    if (!result.success) throw new Error(result.error);
+
+    ctx.reply(`✅ Payment recorded for ${client.name}\nAmount: S$${amount}\nPeriod: ${billingPeriod}\nStatus: Active`);
+  } catch (err) {
+    console.error('[BILLING_CMD] handleMarkPaid error:', err.message);
+    ctx.reply(`Error: ${err.message}`);
+  }
+}
+
+async function handleSetBilling(ctx) {
+  const isAdmin = ctx.from && String(ctx.from.id) === String(process.env.TELEGRAM_ADMIN_CHAT_ID);
+  if (!isAdmin) {
+    return ctx.reply('⚠️ Sorry, only the Moon Hands admin can use billing commands.');
+  }
+  const args = ctx.message.text.split(' ').slice(1);
+  if (args.length < 3) {
+    return ctx.reply('Usage: /setbilling <slug> <day_of_month> <amount>\n→ /setbilling pixelvault 15 547');
+  }
+  const [slug, dayStr, amountStr] = args;
+  const day = parseInt(dayStr, 10);
+  const amount = parseInt(amountStr, 10);
+  if (isNaN(day) || day < 1 || day > 31) {
+    return ctx.reply('Billing day must be 1-31.');
+  }
+  if (isNaN(amount) || amount < 1) {
+    return ctx.reply('Amount must be a positive number.');
+  }
+  try {
+    const { getClientBySlug } = require('../../supabase/client');
+    const { setBillingCycle } = require('../../middleware/billing-monitor');
+    const client = await getClientBySlug(slug);
+    if (!client) return ctx.reply(`Clinic "${slug}" not found.`);
+
+    const result = await setBillingCycle(client.id, day, amount);
+    if (!result.success) throw new Error(result.error);
+
+    ctx.reply(`✅ Billing updated for ${client.name}\nDay of month: ${day}\nAmount: S$${amount}/mo`);
+  } catch (err) {
+    console.error('[BILLING_CMD] handleSetBilling error:', err.message);
+    ctx.reply(`Error: ${err.message}`);
+  }
+}
+
+async function handleSuspend(ctx, providedSlug = null) {
+  const isAdmin = ctx.from && String(ctx.from.id) === String(process.env.TELEGRAM_ADMIN_CHAT_ID);
+  if (!isAdmin) {
+    return ctx.reply('⚠️ Sorry, only the Moon Hands admin can use this command.');
+  }
+  const slug = providedSlug || (() => {
+    const msgText = ctx.message?.text || '';
+    const parts = msgText.split(/\s+/);
+    return parts.length >= 2 ? parts[1].trim() : '';
+  })();
+  if (!slug) {
+    return ctx.reply('Usage: /suspend <slug>\n→ /suspend pixelvault');
+  }
+  try {
+    const { getClientBySlug } = require('../../supabase/client');
+    const { suspendClient } = require('../../middleware/billing-monitor');
+    const client = await getClientBySlug(slug);
+    if (!client) return ctx.reply(`Clinic "${slug}" not found.`);
+
+    const result = await suspendClient(client.id);
+    if (!result.success) throw new Error(result.error);
+
+    ctx.reply(`⏹ ${client.name} (${slug}) has been SUSPENDED.\n\nBot auto-replies are now OFF. Patients will see "Please contact the clinic directly."\n\nTo resume: /unsuspend ${slug}`);
+  } catch (err) {
+    console.error('[BILLING_CMD] handleSuspend error:', err.message);
+    ctx.reply(`Error: ${err.message}`);
+  }
+}
+
+async function handleUnsuspend(ctx, providedSlug = null) {
+  const isAdmin = ctx.from && String(ctx.from.id) === String(process.env.TELEGRAM_ADMIN_CHAT_ID);
+  if (!isAdmin) {
+    return ctx.reply('⚠️ Sorry, only the Moon Hands admin can use this command.');
+  }
+  const slug = providedSlug || (() => {
+    const msgText = ctx.message?.text || '';
+    const parts = msgText.split(/\s+/);
+    return parts.length >= 2 ? parts[1].trim() : '';
+  })();
+  if (!slug) {
+    return ctx.reply('Usage: /unsuspend <slug>\n→ /unsuspend pixelvault');
+  }
+  try {
+    const { getClientBySlug } = require('../../supabase/client');
+    const { unsuspendClient } = require('../../middleware/billing-monitor');
+    const client = await getClientBySlug(slug);
+    if (!client) return ctx.reply(`Clinic "${slug}" not found.`);
+
+    const result = await unsuspendClient(client.id);
+    if (!result.success) throw new Error(result.error);
+
+    ctx.reply(`▶️ ${client.name} (${slug}) has been UNSUSPENDED.\n\nBot auto-replies are now ON. Payment status set to active.`);
+  } catch (err) {
+    console.error('[BILLING_CMD] handleUnsuspend error:', err.message);
+    ctx.reply(`Error: ${err.message}`);
+  }
+}
+
 // ─── EXPORT COMMAND MAP ──────────────────────────────────────────
 
 module.exports = {
@@ -738,5 +956,11 @@ module.exports = {
   handleSecurity,
   handleThreats,
   handleAuthLog,
-  handleDebug
+  handleDebug,
+  handleTestAlerts,
+  handleBilling,
+  handleMarkPaid,
+  handleSetBilling,
+  handleSuspend,
+  handleUnsuspend
 };

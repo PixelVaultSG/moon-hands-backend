@@ -30,15 +30,15 @@
 // ─── PLAN CONFIGURATION ───────────────────────────────────────────
 
 const PLAN_CONFIGS = {
-  starter: {
-    name: 'Starter',
+  basic: {
+    name: 'Basic',
     monthlyMessages: 500,
     dailyBaseLimit: Math.ceil(500 / 30), // ~17/day
     aiCallBudgetPerDay: 50, // ~$0.15/day in OpenAI costs
     pricePerMonth: 347,
   },
-  professional: {
-    name: 'Professional',
+  premium: {
+    name: 'Premium',
     monthlyMessages: Infinity, // Unlimited
     dailyBaseLimit: Infinity,
     aiCallBudgetPerDay: 200, // ~$0.60/day in OpenAI costs
@@ -78,11 +78,11 @@ function createClientRecord() {
  * Formula: available = dailyBaseLimit + rolloverBalance
  * 
  * @param {string} clientId — client identifier
- * @param {string} plan — 'starter' | 'professional'
+ * @param {string} plan — 'basic' | 'premium'
  * @returns {object} { available, baseLimit, rollover, usedToday, remaining }
  */
-function calculateTodaysLimit(clientId, plan = 'starter') {
-  const config = PLAN_CONFIGS[plan] || PLAN_CONFIGS.starter;
+function calculateTodaysLimit(clientId, plan = 'basic') {
+  const config = PLAN_CONFIGS[plan] || PLAN_CONFIGS.basic;
   
   // Professional = unlimited
   if (config.monthlyMessages === Infinity) {
@@ -134,7 +134,7 @@ function calculateTodaysLimit(clientId, plan = 'starter') {
  * @param {boolean} usedAI — true if OpenAI was called, false if hardcoded
  * @param {number} aiCost — OpenAI API cost in USD (0 if hardcoded)
  */
-function recordMessage(clientId, plan = 'starter', usedAI = false, aiCost = 0) {
+function recordMessage(clientId, plan = 'basic', usedAI = false, aiCost = 0) {
   const record = getClientRecord(clientId);
   const today = getTodayString();
   
@@ -176,8 +176,8 @@ function recordMessage(clientId, plan = 'starter', usedAI = false, aiCost = 0) {
  * @param {string} plan 
  * @returns {object} { yesterdayUsed, yesterdayLimit, rolloverAdded, newRolloverTotal }
  */
-function calculateEndOfDayRollover(clientId, plan = 'starter') {
-  const config = PLAN_CONFIGS[plan] || PLAN_CONFIGS.starter;
+function calculateEndOfDayRollover(clientId, plan = 'basic') {
+  const config = PLAN_CONFIGS[plan] || PLAN_CONFIGS.basic;
   
   if (config.monthlyMessages === Infinity) {
     return { unlimited: true };
@@ -224,8 +224,8 @@ function calculateEndOfDayRollover(clientId, plan = 'starter') {
  * @param {string} plan 
  * @returns {object | null} alert info or null
  */
-function checkUsageAlert(clientId, plan = 'starter') {
-  const config = PLAN_CONFIGS[plan] || PLAN_CONFIGS.starter;
+function checkUsageAlert(clientId, plan = 'basic') {
+  const config = PLAN_CONFIGS[plan] || PLAN_CONFIGS.basic;
   
   if (config.monthlyMessages === Infinity) return null; // No alerts for unlimited
   
@@ -289,8 +289,8 @@ function generateDailyBusinessReport() {
     totalAICalls += yesterdayData.aiCalls;
     totalHardcoded += yesterdayData.hardcodedReplies;
     
-    // Find plan (default to starter)
-    const plan = 'starter'; // In production, lookup from clients table
+    // Find plan (default to basic)
+    const plan = 'basic'; // In production, lookup from clients table
     const config = PLAN_CONFIGS[plan];
     
     clientSummaries.push({
@@ -365,8 +365,8 @@ function formatTelegramReport(report) {
  * The webhook should ALWAYS reply to the patient (never block).
  * This function decides whether to use AI or hardcoded, and tracks costs.
  */
-function processIncomingWithTracking(clientId, plan = 'starter', messageText) {
-  const config = PLAN_CONFIGS[plan] || PLAN_CONFIGS.starter;
+function processIncomingWithTracking(clientId, plan = 'basic', messageText) {
+  const config = PLAN_CONFIGS[plan] || PLAN_CONFIGS.basic;
   
   // Always check for new day (calculate rollover if needed)
   const today = getTodayString();
@@ -386,7 +386,7 @@ function processIncomingWithTracking(clientId, plan = 'starter', messageText) {
   let reason = 'ai_available';
   
   if (config.monthlyMessages !== Infinity) {
-    // For starter plan, check if we've exceeded daily budget
+    // For the basic plan, check if we've exceeded daily budget
     const todayData = record.dailyUsage[today] || { aiCalls: 0 };
     
     if (todayData.aiCalls >= config.aiCallBudgetPerDay) {
@@ -476,7 +476,7 @@ if (require.main === module) {
   console.log('🧪 Running usage tracker self-test...\n');
   
   const clientId = 'test-clinic-001';
-  const plan = 'starter';
+  const plan = 'basic';
   
   // Simulate Day 1 (2026-05-10): 4 messages
   console.log('=== DAY 1 (May 10) ===');

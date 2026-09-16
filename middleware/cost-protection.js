@@ -1,10 +1,13 @@
 /**
  * Moon Hands - Cost Protection & Kill Switch
  * 
+ * NOTE (2026-09-09): WhatsApp message limits are now handled by
+ * middleware/plan-limits.js (percentage-based monthly alerts).
+ * This file retains the AI cost backstop and anomaly detection only.
+ * 
  * HARD LIMITS (per clinic, per 24h):
  *   - Max 500 OpenAI API calls
  *   - Max $20 OpenAI spend
- *   - Max 1,000 WhatsApp messages sent
  *   - Max 100 booking operations
  * 
  * ANOMALY DETECTION:
@@ -24,8 +27,9 @@ const crypto = require('crypto');
 const HARD_LIMITS = {
   daily_api_calls: 500,
   daily_spend_usd: 20,
-  daily_whatsapp_msgs: 1000,
   daily_booking_ops: 100,
+  // NOTE: daily_whatsapp_msgs removed — now handled by plan-limits.js
+  // Basic: 500/mo + 200/day safety cap | Premium: unlimited + 1000/day safety cap
 };
 
 const ANOMALY_THRESHOLD = 3;   // Flag if >3x average
@@ -261,7 +265,6 @@ function costProtectionMiddleware(clinicId) {
   return {
     checkApiCall: () => checkLimit(clinicId, 'daily_api_calls', 1),
     trackSpend: (usd) => trackSpend(clinicId, usd),
-    checkWhatsappMsg: () => checkLimit(clinicId, 'daily_whatsapp_msgs', 1),
     checkBookingOp: () => checkLimit(clinicId, 'daily_booking_ops', 1),
     checkAnomaly: (rate) => checkAnomaly(clinicId, rate),
   };

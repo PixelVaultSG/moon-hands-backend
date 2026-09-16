@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS clients (
   contact_email TEXT,
   contact_phone TEXT,
   industry TEXT DEFAULT 'aesthetic', -- aesthetic, dental, chiro, physio
-  plan TEXT NOT NULL DEFAULT 'starter', -- starter, professional
+  plan TEXT NOT NULL DEFAULT 'basic', -- basic, premium
   status TEXT NOT NULL DEFAULT 'setup', -- setup, active, paused, cancelled
   phone_number TEXT,
   whatsapp_number TEXT,
@@ -105,6 +105,8 @@ CREATE TABLE IF NOT EXISTS daily_usage (
   voice_minutes INT DEFAULT 0,
   voice_calls INT DEFAULT 0,
   whatsapp_messages INT DEFAULT 0,
+  hardcoded_messages INT DEFAULT 0, -- template/free replies (no OpenAI cost)
+  ai_messages INT DEFAULT 0,        -- AI-powered replies (payable)
   whatsapp_conversations INT DEFAULT 0,
   instagram_messages INT DEFAULT 0,
   cost DECIMAL(10,4) DEFAULT 0,

@@ -169,6 +169,10 @@ async function adminMainMenu(ctx, edit = false) {
       Markup.button.callback('🏥 Clinics', 'menu_clients'),
       Markup.button.callback('🛡 Security', 'menu_security'),
     ],
+    [
+      Markup.button.callback('💰 Billing', 'menu_billing'),
+      Markup.button.callback('📈 Usage', 'menu_usage'),
+    ],
     [Markup.button.callback('❓ Full Command List', 'menu_help')],
   ];
 
@@ -210,6 +214,7 @@ async function showClinicDashboard(ctx, slug, edit = true) {
     [cb('🕐 Update Hours', `act:updatehours:${slug}`), cb('❓ Add FAQ', `act:addfaq:${slug}`)],
     [cb('🎤 Voice', `act:voice:${slug}`)],
     [cb('⏸ Pause AI', `act:pause:${slug}`), cb('▶️ Resume AI', `act:resume:${slug}`)],
+    [cb('⏹ Suspend', `act:suspend:${slug}`), cb('▶️ Unsuspend', `act:unsuspend:${slug}`)],
     [cb('🔙 Back to Clinics', 'menu_main')],
   ];
 
@@ -381,6 +386,11 @@ bot.action('menu_usage', safeHandler('menu_usage', async (ctx) => {
   await showClinicPicker(ctx, 'usage');
 }));
 
+bot.action('menu_billing', safeHandler('menu_billing', async (ctx) => {
+  await ctx.answerCbQuery('Loading billing...');
+  await commands.handleBilling(ctx);
+}));
+
 bot.action('menu_viewconfig', safeHandler('menu_viewconfig', async (ctx) => {
   await ctx.answerCbQuery();
   await showClinicPicker(ctx, 'viewconfig');
@@ -413,6 +423,8 @@ const ACTION_LABELS = {
   usage: '📈 Usage',
   pause: '⏸ Pause AI',
   resume: '▶️ Resume AI',
+  suspend: '⏹ Suspend',
+  unsuspend: '▶️ Unsuspend',
 };
 
 async function showClinicPicker(ctx, action) {
@@ -475,6 +487,10 @@ bot.action(/^act:(\w+):(.+)$/, safeHandler('act', async (ctx) => {
         `🎤 Update Brand Voice for *${slug}*\n\nType:\n/updatevoice ${slug} <field> <value>\n\nFields: name, greeting, tone, enthusiasm, notes\n\nExample:\n/updatevoice ${slug} greeting "Welcome to Glow!"`,
         BACK_TO_MENU
       );
+    case 'suspend':
+      return commands.handleSuspend(ctx, slug);
+    case 'unsuspend':
+      return commands.handleUnsuspend(ctx, slug);
     default:
       return ctx.reply('⚠️ Unknown action.', BACK_TO_MENU);
   }
@@ -590,6 +606,12 @@ bot.help(safeHandler('/help', async (ctx) => {
   );
 }));
 bot.command('clients', adminCmd('/clients', commands.handleClients));
+bot.command('testalerts', adminCmd('/testalerts', commands.handleTestAlerts));
+bot.command('billing', adminCmd('/billing', commands.handleBilling));
+bot.command('markpaid', adminCmd('/markpaid', commands.handleMarkPaid));
+bot.command('setbilling', adminCmd('/setbilling', commands.handleSetBilling));
+bot.command('suspend', adminCmd('/suspend', commands.handleSuspend));
+bot.command('unsuspend', adminCmd('/unsuspend', commands.handleUnsuspend));
 bot.command('viewconfig', adminCmd('/viewconfig', commands.handleViewConfig));
 bot.command('addservice', adminCmd('/addservice', commands.handleAddService));
 bot.command('updateprice', adminCmd('/updateprice', commands.handleUpdatePrice));
@@ -1109,6 +1131,7 @@ bot.hears('📋 My Bookings', safeHandler('📋 My Bookings', async (ctx) => {
 bot.hears('❓ Help', safeHandler('❓ Help', async (ctx) => {
   await ctx.reply(
     '📖 *Moon Hands Help*\n\n' +
+    '💡 Quick tip: tap /menu anytime for quick button shortcuts.\n\n' +
     '*Staff Controls:*\n' +
     '`/patientpause <phone>` — Pause bot for patient\n' +
     '`/patientresume <phone>` — Resume bot for patient\n' +
