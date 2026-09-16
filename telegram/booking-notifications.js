@@ -128,7 +128,7 @@ async function notifyBookingCreated(appointment, clinicConfig) {
   ].filter(Boolean).join('\n');
 
   // Add inline buttons for pending bookings
-  const clinicId = clinicConfig.id || clinicConfig.clinic_id || null;
+  const clinicId = clinicConfig.client_id || clinicConfig.id || clinicConfig.clinic_id || null;
   const replyMarkup = appt.status === 'pending' ? {
     inline_keyboard: [
       [
@@ -157,7 +157,7 @@ async function notifyBookingCancelled(appointment, clinicConfig, reason = '') {
   const appt = normalizeAppointment(appointment);
   const dateStr = formatDateSG(appt.date);
   const timeStr = formatTimeSG(appt.time);
-  const clinicId = clinicConfig.id || clinicConfig.clinic_id || null;
+  const clinicId = clinicConfig?.client_id || clinicConfig?.id || clinicConfig?.clinic_id || appt.clientId || null;
 
   const message = [
     `❌ *BOOKING CANCELLED*`,
@@ -189,7 +189,7 @@ async function notifyBookingRescheduled(oldApptRaw, newApptRaw, clinicConfig) {
   const oldTime = formatTimeSG(oldAppt.time);
   const newDate = formatDateSG(newAppt.date);
   const newTime = formatTimeSG(newAppt.time);
-  const clinicId = clinicConfig.id || clinicConfig.clinic_id || null;
+  const clinicId = clinicConfig?.client_id || clinicConfig?.id || clinicConfig?.clinic_id || newAppt.clientId || null;
 
   const message = [
     `🔄 *BOOKING RESCHEDULED*`,
