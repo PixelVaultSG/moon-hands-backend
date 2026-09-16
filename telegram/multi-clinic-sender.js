@@ -108,6 +108,8 @@ async function sendClinicNotification(clinicId, message, options = {}) {
   }
   
   // 2. Send COPY to Moon Hands admin (SECONDARY)
+  // If no clinic chats are linked, admin gets buttons as fallback
+  const adminNeedsButtons = sentTo.length === 0 && replyMarkup;
   let adminSent = false;
   if (includeAdmin && adminChatId) {
     try {
@@ -115,15 +117,18 @@ async function sendClinicNotification(clinicId, message, options = {}) {
         ? `📋 *[${clinicName}]*\n${message}`
         : message;
       
+      const adminBody = {
+        chat_id: adminChatId,
+        text: adminMessage,
+        parse_mode: parseMode,
+        disable_web_page_preview: true
+      };
+      if (adminNeedsButtons) adminBody.reply_markup = replyMarkup;
+      
       await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          chat_id: adminChatId,
-          text: adminMessage,
-          parse_mode: parseMode,
-          disable_web_page_preview: true
-        })
+        body: JSON.stringify(adminBody)
       });
       adminSent = true;
     } catch (err) {

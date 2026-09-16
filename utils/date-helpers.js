@@ -3,7 +3,14 @@
  */
 
 function formatDateSG(dateInput) {
-  const d = new Date(dateInput);
+  // Handle date strings by appending Singapore timezone to avoid UTC shift
+  let d;
+  if (typeof dateInput === 'string' && dateInput.match(/^\d{4}-\d{2}-\d{2}$/)) {
+    d = new Date(dateInput + 'T00:00:00+08:00');
+  } else {
+    d = new Date(dateInput);
+  }
+  if (isNaN(d.getTime())) return 'TBD';
   return d.toLocaleDateString('en-SG', {
     timeZone: 'Asia/Singapore',
     weekday: 'short',
@@ -14,7 +21,22 @@ function formatDateSG(dateInput) {
 }
 
 function formatTimeSG(dateInput) {
+  // Handle time-only strings like "11:30" or "11:30:00"
+  if (typeof dateInput === 'string' && !dateInput.match(/^\d{4}-\d{2}-\d{2}/)) {
+    const timeMatch = dateInput.match(/^(\d{1,2}):(\d{2})(?::\d{2})?\s*(AM|PM|am|pm)?$/i);
+    if (timeMatch) {
+      let hours = parseInt(timeMatch[1], 10);
+      const minutes = timeMatch[2];
+      const ampm = timeMatch[3]?.toUpperCase();
+      if (ampm === 'PM' && hours !== 12) hours += 12;
+      if (ampm === 'AM' && hours === 12) hours = 0;
+      const period = hours >= 12 ? 'PM' : 'AM';
+      const displayH = hours % 12 || 12;
+      return `${displayH}:${minutes} ${period}`;
+    }
+  }
   const d = new Date(dateInput);
+  if (isNaN(d.getTime())) return 'TBD';
   return d.toLocaleTimeString('en-SG', {
     timeZone: 'Asia/Singapore',
     hour: '2-digit',
@@ -24,7 +46,13 @@ function formatTimeSG(dateInput) {
 }
 
 function getDayName(dateInput) {
-  const d = new Date(dateInput);
+  let d;
+  if (typeof dateInput === 'string' && dateInput.match(/^\d{4}-\d{2}-\d{2}$/)) {
+    d = new Date(dateInput + 'T00:00:00+08:00');
+  } else {
+    d = new Date(dateInput);
+  }
+  if (isNaN(d.getTime())) return '';
   return d.toLocaleDateString('en-SG', {
     timeZone: 'Asia/Singapore',
     weekday: 'long',

@@ -1130,18 +1130,19 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
         const { getAvailableSlots, findNextSlotsOnDate, findNextAvailableAfter } = require('./availability-engine');
         const availCheck = await getAvailableSlots(clinicConfig.id, date, existingTreatments2, clinicConfig);
         
-        if (availCheck.available && !availCheck.slots.includes(data.time)) {
-          // Requested time is within hours but already booked — suggest next available
+        // DEFENSIVE: if slot engine says no slots available at all, block the booking
+        if (!availCheck || !availCheck.available || !availCheck.slots.includes(data.time)) {
+          // Requested time is already booked or no slots available — suggest next available
           const sameDay = await findNextSlotsOnDate(clinicConfig.id, date, existingTreatments2, clinicConfig, data.time);
           if (sameDay.found && sameDay.slots.length > 0) {
             const { getTimeSlotButtons } = require('./whatsapp-interactive');
             return {
-              text: `${data.time} is already booked on ${date}. Here are the next available times:`,
+              text: `${data.time} is not available on ${date}. Here are the next available times:`,
               source: 'hardcoded',
               intents: ['time_suggestion'],
               cost_saved: 1,
               latency_ms: Date.now() - startTime,
-              whatsappInteractive: getTimeSlotButtons(sameDay.slots, availCheck.operatingHours)
+              whatsappInteractive: getTimeSlotButtons(sameDay.slots, availCheck?.operatingHours)
             };
           }
           
@@ -1159,10 +1160,23 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
               whatsappInteractive: getDateButtonOptions(nextAvail.allDates)
             };
           }
+          
+          // Fallback if no alternatives found
+          return {
+            text: `Sorry, ${data.time} on ${date} is no longer available. Please choose a different time.`,
+            source: 'hardcoded',
+            cost_saved: 1,
+            latency_ms: Date.now() - startTime
+          };
         }
       } catch (err) {
         console.error(`[AWAITING_TIME] Slot availability check error: ${err.message}`);
-        // Proceed with booking attempt anyway — let the calendar service handle conflicts
+        return {
+          text: `I'm having trouble checking availability right now. Please try again in a moment.`,
+          source: 'hardcoded',
+          cost_saved: 1,
+          latency_ms: Date.now() - startTime
+        };
       }
       
       // Time is valid — proceed to confirmation (show summary before booking)

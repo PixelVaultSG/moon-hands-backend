@@ -107,13 +107,12 @@ async function notifyBookingCreated(appointment, clinicConfig) {
   const chatId = clinicConfig.telegram_chat_id || ADMIN_CHAT_ID;
   const dateStr = formatDateSG(appt.date);
   const timeStr = formatTimeSG(appt.time);
-  const dayName = getDayName(appt.date);
   const apptId = appt.id;
 
   const message = [
     `✅ *NEW BOOKING*`,
     ``,
-    `📅 *${dayName}, ${dateStr} at ${timeStr}*`,
+    `📅 *${dateStr} at ${timeStr}*`,
     `👤 *${escapeMarkdown(appt.name)}*`,
     `📱 ${escapeMarkdown(appt.phone)}`,
     `🩺 ${escapeMarkdown(appt.service)}`,
