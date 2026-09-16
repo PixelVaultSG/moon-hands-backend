@@ -210,7 +210,7 @@ async function createBooking({ client_id, customer_name, customer_phone, service
       .select('*')
       .eq('client_id', client_id)
       .eq('appointment_date', apptDate)
-      .in('status', ['confirmed', 'pending']);
+      .in('status', ['confirmed', 'pending', 'booked', 'pending_alternative']);
     
     if (conflictErr) {
       console.error('[FUNCTION] createBooking conflict check error:', conflictErr.message);
@@ -248,33 +248,6 @@ async function createBooking({ client_id, customer_name, customer_phone, service
     // notes, reminder_24h_sent, reminder_1h_sent, followup_48h_sent,
     // approval_notified, created_at, updated_at
     const bookingDuration = callerDuration || treatmentDuration || 60;
-    
-    // ─── DEFENSIVE: Check for overlapping bookings before inserting ─
-    const { data: existingBookings, error: overlapErr } = await supabase
-      .from('appointments')
-      .select('appointment_time, duration')
-      .eq('client_id', clientId)
-      .eq('appointment_date', apptDate)
-      .in('status', ['confirmed', 'pending', 'booked', 'pending_alternative']);
-    
-    if (!overlapErr && existingBookings && existingBookings.length > 0) {
-      const requestedStart = (() => {
-        const [h, m] = apptTime.split(':').map(Number);
-        return h * 60 + m;
-      })();
-      const requestedEnd = requestedStart + bookingDuration;
-      
-      const hasOverlap = existingBookings.some(b => {
-        const [bh, bm] = b.appointment_time.split(':').map(Number);
-        const busyStart = bh * 60 + bm;
-        const busyEnd = busyStart + (b.duration || 60);
-        return requestedStart < busyEnd && requestedEnd > busyStart;
-      });
-      
-      if (hasOverlap) {
-        return { success: false, error: 'This time slot is no longer available. Please choose a different time.' };
-      }
-    }
     
     const { data: appointment, error: insertErr } = await supabase
       .from('appointments')
