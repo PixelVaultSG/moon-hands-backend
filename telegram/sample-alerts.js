@@ -39,6 +39,17 @@ Phone: ${patient.phone}
 💰 Total: ~S$730
 
 This booking is subject to clinic confirmation.`,
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: '✅ Approve', callback_data: `approve_${apptId}` },
+          { text: '❌ Reject', callback_data: `reject_${apptId}` }
+        ],
+        [
+          { text: '🔄 Suggest Alternative Time', callback_data: `suggest_alt_${apptId}` }
+        ]
+      ]
+    }
   },
   {
     name: 'BOOKING APPROVED',
