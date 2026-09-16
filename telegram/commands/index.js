@@ -763,10 +763,14 @@ Synced 2026-09-05: basic/premium plans, WhatsApp-only, admin-only free/payable s
     const text = `[${i + 1}/${SAMPLES.length}] ${s.name}
 
 ${s.text}`;
+    const opts = { parse_mode: 'Markdown' };
+    if (s.reply_markup) opts.reply_markup = s.reply_markup;
     try {
-      await ctx.reply(text, { parse_mode: 'Markdown' });
+      await ctx.reply(text, opts);
     } catch {
-      await ctx.reply(text.replace(/[*_`]/g, ''));
+      const fallbackOpts = {};
+      if (s.reply_markup) fallbackOpts.reply_markup = s.reply_markup;
+      await ctx.reply(text.replace(/[*_`]/g, ''), fallbackOpts);
     }
     await new Promise(r => setTimeout(r, 700)); // stay under Telegram rate limits
   }
