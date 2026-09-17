@@ -11,6 +11,7 @@
  */
 
 const { supabase } = require('../supabase/client');
+const { getTodaySG } = require('../utils/date-helpers');
 
 const SLOT_INTERVAL_MIN = 30; // Offer slots every 30 minutes
 
@@ -84,9 +85,32 @@ async function getAvailableSlots(clientId, dateStr, treatmentNames, clientConfig
   // Merge overlapping busy periods
   const mergedBusy = mergeBusyPeriods(busyPeriods);
   
+  // ─── FILTER PAST SLOTS FOR SAME-DAY BOOKINGS ────────────────────
+  // If the requested date is today, skip slots that have already passed
+  // and enforce a minimum notice period (default 2 hours).
+  let minStartMin = openMin;
+  const isToday = dateStr === getTodaySG();
+  if (isToday) {
+    const now = new Date();
+    // Get current Singapore time reliably regardless of server timezone
+    const sgTimeStr = now.toLocaleString('en-US', {
+      timeZone: 'Asia/Singapore',
+      hour12: false,
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+    const [sgHour, sgMinute] = sgTimeStr.split(':').map(Number);
+    const currentMin = sgHour * 60 + sgMinute;
+    const noticeMin = (clientConfig.config?.booking_min_notice_hours || 2) * 60;
+    minStartMin = Math.max(openMin, currentMin + noticeMin);
+  }
+  
   // Generate candidate slots every SLOT_INTERVAL_MIN starting from open time
   const slots = [];
   for (let candidate = openMin; candidate + slotDuration <= closeMin; candidate += SLOT_INTERVAL_MIN) {
+    // Skip slots that are in the past or within the notice period for today
+    if (candidate < minStartMin) continue;
+    
     const candidateEnd = candidate + slotDuration;
     // Check if candidate overlaps with any busy period
     const isOverlapping = mergedBusy.some(busy => 
