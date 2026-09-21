@@ -258,10 +258,15 @@ async function handleApproveById(appointmentId, adminChatId) {
     }
 
     // Update to confirmed
-    await db.supabase
+    const { error: updateErr } = await db.supabase
       .from('appointments')
       .update({ status: 'confirmed', approved_at: new Date().toISOString() })
       .eq('id', appointmentId);
+
+    if (updateErr) {
+      console.error('[APPROVALS] Update failed:', updateErr.message);
+      return { success: false, error: 'Failed to update booking status. Please try again.' };
+    }
 
     // Sync to Google Calendar
     let calendarSynced = false;
@@ -327,10 +332,15 @@ async function handleRejectById(appointmentId, adminChatId) {
     }
 
     // Update to cancelled
-    await db.supabase
+    const { error: updateErr } = await db.supabase
       .from('appointments')
       .update({ status: 'cancelled', notes: 'Rejected by clinic' })
       .eq('id', appointmentId);
+
+    if (updateErr) {
+      console.error('[APPROVALS] Reject update failed:', updateErr.message);
+      return { success: false, error: 'Failed to update booking status. Please try again.' };
+    }
 
     // Notify patient
     try {
