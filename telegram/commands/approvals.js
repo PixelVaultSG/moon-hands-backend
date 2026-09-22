@@ -265,12 +265,12 @@ async function handleApproveById(appointmentId, adminChatId) {
     console.log(`[APPROVALS] Updating booking ${appointmentId} to confirmed...`);
     const { error: updateErr } = await db.supabase
       .from('appointments')
-      .update({ status: 'confirmed', approved_at: new Date().toISOString() })
+      .update({ status: 'confirmed' })
       .eq('id', appointmentId);
 
     if (updateErr) {
-      console.error('[APPROVALS] Update failed:', updateErr.message);
-      return { success: false, error: 'Failed to update booking status. Please try again.' };
+      console.error('[APPROVALS] Update failed:', updateErr.message, updateErr.details, updateErr.hint);
+      return { success: false, error: `Update failed: ${updateErr.message}` };
     }
     console.log(`[APPROVALS] Booking ${appointmentId} updated to confirmed`);
 
@@ -348,12 +348,12 @@ async function handleRejectById(appointmentId, adminChatId) {
     console.log(`[APPROVALS] Updating booking ${appointmentId} to cancelled...`);
     const { error: updateErr } = await db.supabase
       .from('appointments')
-      .update({ status: 'cancelled', notes: 'Rejected by clinic' })
+      .update({ status: 'cancelled' })
       .eq('id', appointmentId);
 
     if (updateErr) {
-      console.error('[APPROVALS] Reject update failed:', updateErr.message);
-      return { success: false, error: 'Failed to update booking status. Please try again.' };
+      console.error('[APPROVALS] Reject update failed:', updateErr.message, updateErr.details, updateErr.hint);
+      return { success: false, error: `Update failed: ${updateErr.message}` };
     }
     console.log(`[APPROVALS] Booking ${appointmentId} updated to cancelled`);
 

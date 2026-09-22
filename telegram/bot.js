@@ -1286,6 +1286,20 @@ bot.command('reject', safeHandler('/reject', (ctx) => {
 bot.on('text', async (ctx) => {
   try {
     const text = ctx.message.text.trim();
+    const chatId = ctx.chat.id;
+    
+    // Check if clinic is replying with an alternative time suggestion
+    const { pendingAlternatives, handleClinicSuggestAlternative } = require('./booking-notifications');
+    const pending = pendingAlternatives.get(chatId);
+    if (pending && pending.bookingId) {
+      console.log(`[TELEGRAM] Processing alternative time suggestion from chat ${chatId}: "${text}"`);
+      const result = await handleClinicSuggestAlternative(chatId, text);
+      if (result.success) {
+        return await ctx.reply(`🔄 Alternative time suggested: *${text}*\n✓ Patient notified on WhatsApp`);
+      } else {
+        return await ctx.reply(`❌ ${result.error}`);
+      }
+    }
     
     // Quick shortcuts for common actions
     if (text.toLowerCase() === 'status') {

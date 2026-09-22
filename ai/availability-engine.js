@@ -131,21 +131,24 @@ async function getAvailableSlots(clientId, dateStr, treatmentNames, clientConfig
 }
 
 /**
- * Get next N available dates (starting from today) with available slots.
+ * Get next N available dates (starting from tomorrow) with available slots.
+ * Uses Singapore timezone to ensure correct dates regardless of server location.
  * Useful for "Quick Date" buttons.
  */
 async function getNextAvailableDates(clientId, treatmentNames, clientConfig, count = 4) {
   const results = [];
-  const today = new Date();
+  // Compute today in Singapore timezone (UTC+8) regardless of server timezone
+  const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Singapore' }); // YYYY-MM-DD
+  const today = new Date(todayStr + 'T00:00:00+08:00');
   
-  for (let i = 0; i < 21 && results.length < count; i++) {
+  for (let i = 1; i <= 21 && results.length < count; i++) {
     const d = new Date(today);
     d.setDate(d.getDate() + i);
-    const dateStr = formatDate(d);
+    const dateStr = formatDateSG(d);
     
     const avail = await getAvailableSlots(clientId, dateStr, treatmentNames, clientConfig);
     if (avail.available) {
-      results.push({ date: dateStr, label: getDateLabel(d, i), slots: avail.slots, operatingHours: avail.operatingHours });
+      results.push({ date: dateStr, label: getDateLabelSG(d, i), slots: avail.slots, operatingHours: avail.operatingHours });
     }
   }
   
@@ -167,18 +170,21 @@ async function getNextAvailableDates(clientId, treatmentNames, clientConfig, cou
 async function findNextAvailableAfter(clientId, treatmentNames, clientConfig, fromDateStr, daysToSearch = 21) {
   const fromDate = new Date(fromDateStr + 'T00:00:00+08:00');
   const allDates = [];
+  // Compute today in Singapore timezone for accurate offset calculation
+  const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Singapore' });
+  const todaySG = new Date(todayStr + 'T00:00:00+08:00');
   
   for (let i = 1; i <= daysToSearch && allDates.length < 3; i++) {
     const d = new Date(fromDate);
     d.setDate(d.getDate() + i);
-    const dateStr = formatDate(d);
+    const dateStr = formatDateSG(d);
     
     const avail = await getAvailableSlots(clientId, dateStr, treatmentNames, clientConfig);
     if (avail.available && avail.slots.length > 0) {
-      const offset = Math.floor((d - new Date()) / (1000 * 60 * 60 * 24));
+      const offset = Math.round((d - todaySG) / (1000 * 60 * 60 * 24));
       allDates.push({
         date: dateStr,
-        label: getDateLabel(d, offset),
+        label: getDateLabelSG(d, offset),
         slots: avail.slots,
         operatingHours: avail.operatingHours
       });
@@ -239,10 +245,25 @@ function formatDate(d) {
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 }
 
+/**
+ * Format a date as YYYY-MM-DD using Singapore timezone.
+ * Accepts a Date object (assumed to be in Singapore local time context).
+ */
+function formatDateSG(d) {
+  // d is already constructed in SG context, just format it consistently
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+
 function getDateLabel(d, offset) {
   const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
   const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   // Use consistent short format for ALL dates (max ~13 chars, well under 20-char WhatsApp limit)
+  return `${dayNames[d.getDay()]}, ${d.getDate()} ${monthNames[d.getMonth()]}`;
+}
+
+function getDateLabelSG(d, offset) {
+  const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   return `${dayNames[d.getDay()]}, ${d.getDate()} ${monthNames[d.getMonth()]}`;
 }
 

@@ -19,6 +19,7 @@ const BOOKING_STATES = {
   EDITING_BOOKING: 'editing_booking', // User tapped Edit on confirmation
   AWAITING_NAME: 'awaiting_name',
   AWAITING_PHONE: 'awaiting_phone',
+  AWAITING_NAMEPHONE: 'awaiting_namephone', // User updating name + phone during edit
   AWAITING_CONFIRMATION: 'awaiting_confirmation',
   READY_TO_BOOK: 'ready_to_book',
 };

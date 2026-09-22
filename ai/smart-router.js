@@ -1405,6 +1405,16 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
         return showCategorySelection(clinicConfig, startTime);
       }
       
+      if (editChoice.includes('name') || editChoice.includes('phone') || editChoice === 'edit_namephone') {
+        setState(patientPhone, BOOKING_STATES.AWAITING_NAMEPHONE, editData);
+        return {
+          text: `Please provide your updated name and phone number (e.g., "Tom Hands, 87111048"):`,
+          source: 'hardcoded',
+          cost_saved: 1,
+          latency_ms: Date.now() - startTime
+        };
+      }
+      
       // Unrecognized edit choice — show edit menu again
       const { getEditMenuButtons } = require('./whatsapp-interactive');
       return {
@@ -1433,6 +1443,53 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
 
       return {
         text: `Sorry, that doesn't look like a name. What name should the clinic use for your booking? (e.g., "Sarah Tan")`,
+        source: 'hardcoded',
+        cost_saved: 1,
+        latency_ms: Date.now() - startTime
+      };
+    }
+
+    case BOOKING_STATES.AWAITING_NAMEPHONE: {
+      // User is updating name + phone during edit flow
+      const cancelWords = ['cancel', 'nevermind', 'never mind', 'forget it', 'stop'];
+      if (cancelWords.some(w => msgLower === w || msgLower.startsWith(w + ' '))) {
+        resetIdle(patientPhone);
+        return { text: `No problem — I've cancelled that change. Anything else I can help with?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+      }
+
+      // Try to extract name and phone from message like "Tom Hands, 87111048" or "Tom Hands 87111048"
+      let newName = null;
+      let newPhone = null;
+
+      // Pattern: "Name, 12345678" or "Name, +65 12345678"
+      const commaMatch = message.text.match(/^([^,\d]{2,50}),?\s*(\+?\d[\d\s]{5,15})$/);
+      if (commaMatch) {
+        newName = commaMatch[1].trim();
+        newPhone = commaMatch[2].replace(/\s/g, '');
+      } else {
+        // Pattern: "Name 12345678" (two+ words followed by numbers)
+        const spaceMatch = message.text.match(/^([a-zA-Z\s]{2,50})\s+(\+?\d[\d\s]{5,15})$/);
+        if (spaceMatch) {
+          newName = spaceMatch[1].trim();
+          newPhone = spaceMatch[2].replace(/\s/g, '');
+        }
+      }
+
+      if (newName && newPhone) {
+        const editData = { ...currentState.data, name: newName, phone: newPhone };
+        setState(patientPhone, BOOKING_STATES.AWAITING_CONFIRMATION, editData);
+        const { getConfirmationButtons } = require('./whatsapp-interactive');
+        return {
+          text: `Updated! Here's your booking summary:\n\n👤 ${newName}\n📱 ${newPhone}\n📅 ${editData.date} at ${editData.time}\n💆 ${editData.treatment}\n⏱️ ${editData.duration} mins\n💰 $${editData.price}\n\nEverything look correct?`,
+          source: 'hardcoded',
+          cost_saved: 1,
+          latency_ms: Date.now() - startTime,
+          whatsappInteractive: getConfirmationButtons()
+        };
+      }
+
+      return {
+        text: `Please provide both your name and phone number (e.g., "Tom Hands, 87111048"):`,
         source: 'hardcoded',
         cost_saved: 1,
         latency_ms: Date.now() - startTime

@@ -204,7 +204,8 @@ function getEditMenuButtons() {
     buttons: [
       { id: 'edit_date', title: '📅 Change Date' },
       { id: 'edit_time', title: '🕐 Change Time' },
-      { id: 'edit_treatment', title: '💆 Change Treatment' }
+      { id: 'edit_treatment', title: '💆 Change Treatment' },
+      { id: 'edit_namephone', title: '👤 Change Name/Phone' }
     ]
   });
 }
