@@ -536,31 +536,37 @@ bot.action('menu_resume', safeHandler('menu_resume', async (ctx) => {
 
 bot.action(/^approve_(.+)$/, safeHandler('approve_btn', async (ctx) => {
   const apptId = ctx.match[1];
-  await ctx.answerCbQuery('Approving booking...');
+  console.log(`[TELEGRAM] Approve button clicked for appointment ${apptId} by user ${ctx.from.id} in chat ${ctx.chat.id}`);
   
   const { handleApproveById } = require('./commands/approvals');
-  const result = await handleApproveById(apptId, ctx.from.id);
+  const result = await handleApproveById(apptId, ctx.chat.id);
   
   if (result.success) {
+    await ctx.answerCbQuery('✅ Approved');
     await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
     await ctx.reply(`✅ Booking approved for ${result.patientName}\n📅 ${result.date} at ${result.time}\n🩺 ${result.treatment}\n✓ Patient notified\n${result.calendarSynced ? '✓ Google Calendar synced' : ''}`);
   } else {
-    await ctx.answerCbQuery(`❌ ${result.error}`, { show_alert: true });
+    console.error(`[TELEGRAM] Approve failed for ${apptId}: ${result.error}`);
+    await ctx.answerCbQuery('❌ Approval failed', { show_alert: true });
+    await ctx.reply(`❌ Failed to approve booking: ${result.error}`);
   }
 }));
 
 bot.action(/^reject_(.+)$/, safeHandler('reject_btn', async (ctx) => {
   const apptId = ctx.match[1];
-  await ctx.answerCbQuery('Rejecting booking...');
+  console.log(`[TELEGRAM] Reject button clicked for appointment ${apptId} by user ${ctx.from.id} in chat ${ctx.chat.id}`);
   
   const { handleRejectById } = require('./commands/approvals');
-  const result = await handleRejectById(apptId, ctx.from.id);
+  const result = await handleRejectById(apptId, ctx.chat.id);
   
   if (result.success) {
+    await ctx.answerCbQuery('❌ Rejected');
     await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
     await ctx.reply(`❌ Booking rejected for ${result.patientName}\n📅 ${result.date} at ${result.time}\n🩺 ${result.treatment}\n✓ Patient notified`);
   } else {
-    await ctx.answerCbQuery(`❌ ${result.error}`, { show_alert: true });
+    console.error(`[TELEGRAM] Reject failed for ${apptId}: ${result.error}`);
+    await ctx.answerCbQuery('❌ Rejection failed', { show_alert: true });
+    await ctx.reply(`❌ Failed to reject booking: ${result.error}`);
   }
 }));
 

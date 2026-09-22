@@ -239,6 +239,7 @@ async function handleReject(bot, msg, args) {
 // Called by Telegram inline keyboard buttons (Approve/Reject)
 
 async function handleApproveById(appointmentId, adminChatId) {
+  console.log(`[APPROVALS] handleApproveById called for appt=${appointmentId} chat=${adminChatId}`);
   try {
     const { data: booking, error } = await db.supabase
       .from('appointments')
@@ -247,17 +248,21 @@ async function handleApproveById(appointmentId, adminChatId) {
       .single();
 
     if (error || !booking) {
+      console.error(`[APPROVALS] Booking not found: ${error?.message}`);
       return { success: false, error: 'Booking not found' };
     }
+    console.log(`[APPROVALS] Booking found: ${booking.customer_name} @ ${booking.appointment_date} ${booking.appointment_time} status=${booking.status}`);
     
     // SECURITY: Verify user is authorized for this booking's clinic
     const authorized = await isAuthorizedForBooking(adminChatId, booking.client_id);
+    console.log(`[APPROVALS] Authorization result: ${authorized} for clinic ${booking.client_id}`);
     if (!authorized) {
       console.warn(`[APPROVALS] UNAUTHORIZED approve attempt: chat ${adminChatId} tried to approve booking for clinic ${booking.client_id}`);
       return { success: false, error: 'Not authorized for this clinic' };
     }
 
     // Update to confirmed
+    console.log(`[APPROVALS] Updating booking ${appointmentId} to confirmed...`);
     const { error: updateErr } = await db.supabase
       .from('appointments')
       .update({ status: 'confirmed', approved_at: new Date().toISOString() })
@@ -267,6 +272,7 @@ async function handleApproveById(appointmentId, adminChatId) {
       console.error('[APPROVALS] Update failed:', updateErr.message);
       return { success: false, error: 'Failed to update booking status. Please try again.' };
     }
+    console.log(`[APPROVALS] Booking ${appointmentId} updated to confirmed`);
 
     // Sync to Google Calendar
     let calendarSynced = false;
@@ -284,6 +290,7 @@ async function handleApproveById(appointmentId, adminChatId) {
           clinicName: booking.clients.name
         });
         calendarSynced = true;
+        console.log(`[APPROVALS] Calendar synced for ${appointmentId}`);
       }
     } catch (calErr) {
       console.error('[APPROVALS] Calendar sync failed:', calErr.message);
@@ -291,8 +298,10 @@ async function handleApproveById(appointmentId, adminChatId) {
 
     // Notify patient
     try {
+      console.log(`[APPROVALS] Sending patient notification for ${appointmentId}...`);
       const { sendApprovalConfirmation } = require('../../jobs/reminders');
       await sendApprovalConfirmation(appointmentId);
+      console.log(`[APPROVALS] Patient notification sent for ${appointmentId}`);
     } catch (notifyErr) {
       console.error('[APPROVALS] Patient notification failed:', notifyErr.message);
     }
@@ -307,12 +316,13 @@ async function handleApproveById(appointmentId, adminChatId) {
     };
 
   } catch (err) {
-    console.error('[APPROVALS] handleApproveById error:', err.message);
+    console.error('[APPROVALS] handleApproveById error:', err.message, err.stack);
     return { success: false, error: err.message };
   }
 }
 
 async function handleRejectById(appointmentId, adminChatId) {
+  console.log(`[APPROVALS] handleRejectById called for appt=${appointmentId} chat=${adminChatId}`);
   try {
     const { data: booking, error } = await db.supabase
       .from('appointments')
@@ -321,17 +331,21 @@ async function handleRejectById(appointmentId, adminChatId) {
       .single();
 
     if (error || !booking) {
+      console.error(`[APPROVALS] Booking not found for reject: ${error?.message}`);
       return { success: false, error: 'Booking not found' };
     }
+    console.log(`[APPROVALS] Reject booking found: ${booking.customer_name} status=${booking.status}`);
     
     // SECURITY: Verify user is authorized for this booking's clinic
     const authorized = await isAuthorizedForBooking(adminChatId, booking.client_id);
+    console.log(`[APPROVALS] Reject authorization: ${authorized}`);
     if (!authorized) {
       console.warn(`[APPROVALS] UNAUTHORIZED reject attempt: chat ${adminChatId} tried to reject booking for clinic ${booking.client_id}`);
       return { success: false, error: 'Not authorized for this clinic' };
     }
 
     // Update to cancelled
+    console.log(`[APPROVALS] Updating booking ${appointmentId} to cancelled...`);
     const { error: updateErr } = await db.supabase
       .from('appointments')
       .update({ status: 'cancelled', notes: 'Rejected by clinic' })
@@ -341,6 +355,7 @@ async function handleRejectById(appointmentId, adminChatId) {
       console.error('[APPROVALS] Reject update failed:', updateErr.message);
       return { success: false, error: 'Failed to update booking status. Please try again.' };
     }
+    console.log(`[APPROVALS] Booking ${appointmentId} updated to cancelled`);
 
     // Notify patient
     try {
@@ -362,7 +377,7 @@ async function handleRejectById(appointmentId, adminChatId) {
     };
 
   } catch (err) {
-    console.error('[APPROVALS] handleRejectById error:', err.message);
+    console.error('[APPROVALS] handleRejectById error:', err.message, err.stack);
     return { success: false, error: err.message };
   }
 }
