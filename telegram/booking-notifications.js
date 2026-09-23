@@ -25,12 +25,14 @@ const MAX_PENDING_ALTS = 1000; // Security: prevent memory exhaustion
 
 function setPendingAlternative(chatId, bookingId) {
   // Security: enforce max size with LRU eviction
+  const key = String(chatId);
   if (pendingAlternatives.size >= MAX_PENDING_ALTS) {
     const oldestKey = pendingAlternatives.keys().next().value;
     pendingAlternatives.delete(oldestKey);
     console.warn('[BOOKING_NOTIFY] pendingAlternatives at max size, evicted oldest entry');
   }
-  pendingAlternatives.set(chatId, { bookingId, timestamp: Date.now() });
+  pendingAlternatives.set(key, { bookingId, timestamp: Date.now() });
+  console.log(`[BOOKING_NOTIFY] setPendingAlternative: key=${key}, bookingId=${bookingId}, mapSize=${pendingAlternatives.size}`);
 }
 
 function cleanupExpiredAlternatives() {
@@ -455,14 +457,16 @@ async function sendDailyClosingSummary(clinicConfig, supabase) {
  * Called when clinic replies to the "Suggest Alternative Time" prompt
  */
 async function handleClinicSuggestAlternative(staffChatId, alternativeTimeText) {
-  const pending = pendingAlternatives.get(staffChatId);
+  const key = String(staffChatId);
+  const pending = pendingAlternatives.get(key);
+  console.log(`[BOOKING_NOTIFY] handleClinicSuggestAlternative: key=${key}, pending=${JSON.stringify(pending)}, mapSize=${pendingAlternatives.size}`);
   if (!pending) {
     return { success: false, error: 'No pending alternative suggestion. Please tap 🔄 Suggest Alternative on the booking notification first.' };
   }
   
   // Check timeout
   if (Date.now() - pending.timestamp > ALT_TIMEOUT_MS) {
-    pendingAlternatives.delete(staffChatId);
+    pendingAlternatives.delete(key);
     return { success: false, error: 'Alternative suggestion timed out. Please try again.' };
   }
   
@@ -475,7 +479,7 @@ async function handleClinicSuggestAlternative(staffChatId, alternativeTimeText) 
       .single();
     
     if (!booking) {
-      pendingAlternatives.delete(staffChatId);
+      pendingAlternatives.delete(key);
       return { success: false, error: 'Booking not found.' };
     }
     
@@ -486,17 +490,21 @@ async function handleClinicSuggestAlternative(staffChatId, alternativeTimeText) 
     // WhatsApp availability engine treats as BLOCKING — no double-booking
     // while the patient decides).
     const altNote = `Alternative suggested: ${alternativeTimeText}`;
-    await supabase
+    const { error: updateErr } = await supabase
       .from('appointments')
       .update({
         notes: booking.notes ? `${booking.notes} | ${altNote}` : altNote,
-        status: 'pending_alternative',
-        updated_at: new Date().toISOString()
+        status: 'pending_alternative'
       })
       .eq('id', pending.bookingId);
+    
+    if (updateErr) {
+      console.error('[BOOKING_NOTIFY] Supabase update error:', updateErr.message, updateErr.details, updateErr.hint);
+      return { success: false, error: `Failed to update booking: ${updateErr.message}` };
+    }
 
     // Clear pending
-    pendingAlternatives.delete(staffChatId);
+    pendingAlternatives.delete(key);
 
     // Send alternative to patient via WhatsApp
     const { sendWhatsAppMessage } = require('../jobs/reminders');
@@ -539,14 +547,18 @@ async function handlePatientConfirmAlternative(bookingId) {
     }
 
     // Update booking: confirmed with alternative time
-    await supabase
+    const { error: updateErr } = await supabase
       .from('appointments')
       .update({
         status: 'confirmed',
-        notes: (booking.notes || '') + ` | Patient accepted alternative: ${altTime}`,
-        updated_at: new Date().toISOString()
+        notes: (booking.notes || '') + ` | Patient accepted alternative: ${altTime}`
       })
       .eq('id', bookingId);
+    
+    if (updateErr) {
+      console.error('[BOOKING_NOTIFY] Confirm alternative update error:', updateErr.message, updateErr.details, updateErr.hint);
+      return { success: false, error: `Failed to confirm: ${updateErr.message}` };
+    }
 
     // Notify clinic staff
     if (booking.client_id) {

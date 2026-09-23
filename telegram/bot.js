@@ -1290,7 +1290,9 @@ bot.on('text', async (ctx) => {
     
     // Check if clinic is replying with an alternative time suggestion
     const { pendingAlternatives, handleClinicSuggestAlternative } = require('./booking-notifications');
-    const pending = pendingAlternatives.get(chatId);
+    const chatKey = String(chatId);
+    const pending = pendingAlternatives.get(chatKey);
+    console.log(`[TELEGRAM] Text handler: chatId=${chatId}, chatKey=${chatKey}, pending=${JSON.stringify(pending)}, mapSize=${pendingAlternatives.size}, keys=[${Array.from(pendingAlternatives.keys()).join(',')}]`);
     if (pending && pending.bookingId) {
       console.log(`[TELEGRAM] Processing alternative time suggestion from chat ${chatId}: "${text}"`);
       const result = await handleClinicSuggestAlternative(chatId, text);

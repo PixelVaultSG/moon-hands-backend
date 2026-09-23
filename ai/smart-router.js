@@ -2018,7 +2018,18 @@ async function handleBookingConfirmation(message, clinicConfig, patientPhone, cu
     return await attemptBooking(clinicConfig, patientPhone, { ...data, name: knownName }, conversationHistory, startTime);
   }
   
-  // NO — ask what to change (with interactive buttons)
+  // CANCEL — user tapped "Cancel booking" or typed cancel
+  if (lower === 'cancel' || lower === 'cancel booking' || lower.startsWith('cancel ')) {
+    resetIdle(patientPhone);
+    return {
+      text: `No problem — I've cancelled that booking. Let me know if you need anything else.`,
+      source: 'hardcoded',
+      cost_saved: 1,
+      latency_ms: Date.now() - startTime
+    };
+  }
+  
+  // NO / EDIT / CHANGE — ask what to change (with interactive buttons)
   if (isDenial(message) || lower.includes('edit') || lower === 'edit' || lower.includes('change')) {
     setState(patientPhone, BOOKING_STATES.EDITING_BOOKING, data);
     const { getEditMenuButtons } = require('./whatsapp-interactive');
