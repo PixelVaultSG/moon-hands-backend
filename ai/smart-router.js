@@ -91,6 +91,13 @@ async function routeMessage(message, clinicConfig, patientPhone = null, conversa
         latency_ms: Date.now() - startTime
       };
     }
+    // Confirmation failed — let patient know and keep the pending state
+    return {
+      text: `❌ Sorry, I couldn't confirm that alternative time. ${result.error || 'Please reply with a different date and time, or call us directly.'}`,
+      source: 'hardcoded',
+      cost_saved: 1,
+      latency_ms: Date.now() - startTime
+    };
   }
   
   // ── STEP 1: Check conversation state ────────────────────────────
@@ -1477,18 +1484,30 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
       if (editChoice.includes('time') || editChoice === 'edit_time') {
         setState(patientPhone, BOOKING_STATES.AWAITING_TIME, editData);
         const { getTimeSlotButtons } = require('./whatsapp-interactive');
-        const hours = clinicConfig.config?.operating_hours || clinicConfig.operating_hours || [];
+        const { getAvailableSlots } = require('./availability-engine');
         const date = editData.date;
-        const v = validateBookingTime(date, '10:00', hours);
-        const slots = generateTimeSlots(v.openTime, v.closeTime, 30);
-        return {
-          text: `What time works better for you?`,
-          source: 'hardcoded',
-          intents: ['time_change'],
-          cost_saved: 1,
-          latency_ms: Date.now() - startTime,
-          whatsappInteractive: getTimeSlotButtons(slots, v.openTime + '–' + v.closeTime)
-        };
+        try {
+          const avail = await getAvailableSlots(clinicConfig.id, date, [editData.treatment], clinicConfig);
+          const slots = avail.slots || [];
+          const label = avail.operatingHours || '';
+          return {
+            text: `What time works better for you?`,
+            source: 'hardcoded',
+            intents: ['time_change'],
+            cost_saved: 1,
+            latency_ms: Date.now() - startTime,
+            whatsappInteractive: getTimeSlotButtons(slots, label)
+          };
+        } catch (err) {
+          console.error(`[EDITING_BOOKING] getAvailableSlots error: ${err.message}`);
+          return {
+            text: `What time works better for you? Please type a time (e.g., 2:30 PM).`,
+            source: 'hardcoded',
+            intents: ['time_change'],
+            cost_saved: 1,
+            latency_ms: Date.now() - startTime
+          };
+        }
       }
       
       if (editChoice.includes('treatment') || editChoice === 'edit_treatment') {
@@ -1496,7 +1515,7 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
         return showCategorySelection(clinicConfig, startTime);
       }
       
-      if (editChoice.includes('name') || editChoice.includes('phone') || editChoice === 'edit_namephone') {
+      if (editChoice.includes('name') || editChoice.includes('phone') || editChoice.includes('contact') || editChoice === 'edit_namephone') {
         setState(patientPhone, BOOKING_STATES.AWAITING_NAMEPHONE, editData);
         return {
           text: `Please provide your updated name and phone number (e.g., "Tom Hands, 81234567"):`,

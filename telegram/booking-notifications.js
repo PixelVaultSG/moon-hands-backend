@@ -9,6 +9,7 @@
 
 require('dotenv').config();
 const { formatDateSG, formatTimeSG, getDayName } = require('../utils/date-helpers');
+const { supabase } = require('../supabase/client');
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const ADMIN_CHAT_ID = process.env.TELEGRAM_ADMIN_CHAT_ID;
