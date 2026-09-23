@@ -45,6 +45,14 @@ function formatTimeSG(dateInput) {
   });
 }
 
+/**
+ * Check if a YYYY-MM-DD date string is in the past (relative to Singapore timezone).
+ */
+function isDateInPast(dateStr) {
+  const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Singapore' });
+  return dateStr < todayStr;
+}
+
 function getDayName(dateInput) {
   let d;
   if (typeof dateInput === 'string' && dateInput.match(/^\d{4}-\d{2}-\d{2}$/)) {
@@ -91,4 +99,5 @@ module.exports = {
   getDayName,
   getTodaySG,
   isClinicOpenNow,
+  isDateInPast,
 };

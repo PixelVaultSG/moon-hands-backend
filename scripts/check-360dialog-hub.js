@@ -37,7 +37,7 @@ async function testHubAPI() {
     body: JSON.stringify({
       messaging_product: 'whatsapp',
       recipient_type: 'individual',
-      to: '6591252297', // Your personal phone without +
+      to: '6581234567', // Your personal phone without +
       type: 'text',
       text: { body: 'Hub API test from Moon Hands' }
     })
@@ -60,7 +60,7 @@ async function testWabaWithPhoneId() {
     body: JSON.stringify({
       messaging_product: 'whatsapp',
       recipient_type: 'individual',
-      to: '6591252297',
+      to: '6581234567',
       type: 'text',
       text: { body: 'WABA API test with phone_id' },
       // Some configurations need this:

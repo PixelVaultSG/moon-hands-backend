@@ -343,9 +343,9 @@ const phoneTests = [
   ['call me at 81234567', '81234567'],
   ['contact me at +65 9123 4567', '+6591234567'],
   ['my phone number is 90182746', '90182746'],
-  ['hp: 87111048', '87111048'],
+  ['hp: 81234567', '81234567'],
   ['handphone number 91234567', '91234567'],
-  ['my handphone number is 87111048', '87111048'],
+  ['my handphone number is 81234567', '81234567'],
   ['whatsapp me at 91234567', '91234567'],
   ['reach me at +6591234567', '+6591234567'],
   ['my mobile is 81234567', '81234567'],
@@ -750,9 +750,9 @@ assert(shortTime === null || shortTime === '09:00', 'Short time handled', shortT
 section('Edge: Phone number edge cases');
 const phoneEdgeCases = [
   ['my hp 91234567', '91234567'],
-  ['my handphone is 87111048', '87111048'],
+  ['my handphone is 81234567', '81234567'],
   ['contact: 91234567', '91234567'],
-  ['HP 87111048', '87111048'],
+  ['HP 81234567', '81234567'],
   ['whatsapp 91234567', '91234567'],
 ];
 phoneEdgeCases.forEach(([input, expected]) => {
@@ -761,10 +761,10 @@ phoneEdgeCases.forEach(([input, expected]) => {
 });
 
 section('Edge: Name + phone together (BUG REGRESSION)');
-// "Thomas mueller +6591252297" - name extraction should handle + prefix
-const npFields = extractBookingFields('Thomas mueller +6591252297');
+// "Thomas mueller +6581234567" - name extraction should handle + prefix
+const npFields = extractBookingFields('Thomas mueller +6581234567');
 // Phone should be extracted
-assert(npFields.phone === '+6591252297', 'Phone with + extracted', npFields.phone);
+assert(npFields.phone === '+6581234567', 'Phone with + extracted', npFields.phone);
 
 section('Edge: Context-dependent yes/no');
 // "Yes" should be confirmation_yes regardless of history
@@ -863,8 +863,8 @@ section('BUG-1 REGRESSION: service_list matches "what treatment you offer"');
 
 section('BUG-2 REGRESSION: name extraction handles +65 prefix');
 // Test the name+phone extraction with + prefix
-const namePhoneFields = extractBookingFields('Thomas Mueller +6591252297');
-assert(namePhoneFields.phone === '+6591252297', 'BUG-2: Phone with +65', namePhoneFields.phone);
+const namePhoneFields = extractBookingFields('Thomas Mueller +6581234567');
+assert(namePhoneFields.phone === '+6581234567', 'BUG-2: Phone with +65', namePhoneFields.phone);
 
 section('BUG-3 REGRESSION: bare day names parse correctly');
 ['monday','tuesday','wednesday','thursday','friday','saturday','sunday'].forEach(day => {
@@ -904,7 +904,7 @@ invalidServices.forEach(s => {
 });
 
 section('BUG-7 REGRESSION: phone patterns handle natural language');
-['my handphone number is 87111048','my phone is 91234567','contact me at +6591234567','hp: 87111048'].forEach(q => {
+['my handphone number is 81234567','my phone is 91234567','contact me at +6591234567','hp: 81234567'].forEach(q => {
   const fields = extractBookingFields(q);
   assert(fields.phone !== null && fields.phone.length >= 8, `BUG-7: "${q}" -> "${fields.phone}"`, fields.phone);
 });

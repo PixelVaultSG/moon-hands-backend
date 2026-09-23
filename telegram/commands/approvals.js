@@ -357,13 +357,23 @@ async function handleRejectById(appointmentId, adminChatId) {
     }
     console.log(`[APPROVALS] Booking ${appointmentId} updated to cancelled`);
 
-    // Notify patient
+    // Notify patient and enable reschedule flow
     try {
       const { sendWhatsAppMessage } = require('../../jobs/reminders');
       await sendWhatsAppMessage(
         booking.customer_phone,
         `Hi ${booking.customer_name}, we regret to inform you that your ${booking.service} appointment for ${booking.appointment_date} at ${booking.appointment_time} cannot be confirmed.\n\nWould you like to reschedule? Reply here with your preferred date and time.`
       );
+
+      // Set patient state to AWAITING_DATE with treatment preserved for reschedule
+      const { setState, BOOKING_STATES } = require('../../ai/conversation-state');
+      setState(booking.customer_phone, BOOKING_STATES.AWAITING_DATE, {
+        treatment: booking.service,
+        treatments: [booking.service],
+        name: booking.customer_name,
+        phone: booking.customer_phone
+      });
+      console.log(`[APPROVALS] Set reschedule state for patient ${booking.customer_phone}, treatment: ${booking.service}`);
     } catch (notifyErr) {
       console.error('[APPROVALS] Patient notification failed:', notifyErr.message);
     }

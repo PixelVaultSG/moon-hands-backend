@@ -49,11 +49,49 @@ function getCategory(s) {
 }
 
 /**
+ * Check if patient has a booking with pending_alternative status.
+ * Returns the booking or null.
+ */
+async function checkPendingAlternative(patientPhone) {
+  try {
+    const db = require('../supabase/client');
+    const { data, error } = await db.supabase
+      .from('appointments')
+      .select('*')
+      .eq('customer_phone', patientPhone)
+      .eq('status', 'pending_alternative')
+      .order('created_at', { ascending: false })
+      .limit(1);
+    if (error || !data || data.length === 0) return null;
+    return data[0];
+  } catch (err) {
+    console.error('[SMART_ROUTER] checkPendingAlternative error:', err.message);
+    return null;
+  }
+}
+
+/**
  * Main entry point
  */
 async function routeMessage(message, clinicConfig, patientPhone = null, conversationHistory = [], forcedIntents = null) {
   const startTime = Date.now();
   const phone = patientPhone || 'unknown';
+
+  // ── STEP 0: Check for pending alternative booking confirmations ──
+  // If clinic suggested an alternative time via Telegram and patient replies YES on WhatsApp
+  const pendingAlt = await checkPendingAlternative(phone);
+  if (pendingAlt && isConfirmation(message)) {
+    const { handlePatientConfirmAlternative } = require('../telegram/booking-notifications');
+    const result = await handlePatientConfirmAlternative(pendingAlt.id);
+    if (result.success) {
+      return {
+        text: `✅ Great! Your appointment has been confirmed with the new time. We look forward to seeing you then!`,
+        source: 'hardcoded',
+        cost_saved: 1,
+        latency_ms: Date.now() - startTime
+      };
+    }
+  }
   
   // ── STEP 1: Check conversation state ────────────────────────────
   const currentState = getState(phone);
@@ -566,6 +604,21 @@ async function startBookingFlow(message, clinicConfig, patientPhone, conversatio
 
   // Try to extract all booking fields from the initial message
   const fields = extractBookingFields(message);
+
+  // ── VALIDATE: Reject past dates in free-text bookings ────────────
+  if (fields.date) {
+    const { isDateInPast } = require('../utils/date-helpers');
+    if (isDateInPast(fields.date)) {
+      const todaySG = new Date().toLocaleDateString('en-SG', { timeZone: 'Asia/Singapore', weekday: 'long', day: 'numeric', month: 'short' });
+      return {
+        text: `I'm sorry, I'm not able to book for ${fields.date} as that date has already passed. Today is ${todaySG}. Please choose a future date.`,
+        source: 'hardcoded',
+        cost_saved: 1,
+        latency_ms: Date.now() - startTime
+      };
+    }
+  }
+
   const services = clinicConfig.config?.services || [];
 
   // Check for existing multi-treatment selection in state
@@ -743,6 +796,20 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
   const hours = clinicConfig.config?.operating_hours || clinicConfig.operating_hours || [];
   const services = clinicConfig.config?.services || [];
   const msgLower = message.toLowerCase().trim();
+
+  // ── VALIDATE: Reject past dates even in free-text booking ────────
+  if (data.date) {
+    const { isDateInPast } = require('../utils/date-helpers');
+    if (isDateInPast(data.date)) {
+      const todaySG = new Date().toLocaleDateString('en-SG', { timeZone: 'Asia/Singapore', weekday: 'long', day: 'numeric', month: 'short' });
+      return {
+        text: `I'm sorry, I'm not able to book for ${data.date} as that date has already passed. Today is ${todaySG}. Please choose a future date.`,
+        source: 'hardcoded',
+        cost_saved: 1,
+        latency_ms: Date.now() - startTime
+      };
+    }
+  }
 
   // ═══════════════════════════════════════════════════════════════
   // GLOBAL ACTION BUTTONS — work from ANY booking state
@@ -960,6 +1027,17 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
     case BOOKING_STATES.AWAITING_DATE:
       if (!data.date) {
         return { text: "Sorry, I didn't catch the date. Could you say it again? (e.g., 'next Tuesday' or 'May 27')", source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+      }
+      // ─── VALIDATE: Reject past dates ──────────────────────────────
+      const { isDateInPast } = require('../utils/date-helpers');
+      if (isDateInPast(data.date)) {
+        const todaySG = new Date().toLocaleDateString('en-SG', { timeZone: 'Asia/Singapore', weekday: 'long', day: 'numeric', month: 'short' });
+        return {
+          text: `I'm sorry, I'm not able to book for ${data.date} as that date has already passed. Today is ${todaySG}. Please choose a future date.`,
+          source: 'hardcoded',
+          cost_saved: 1,
+          latency_ms: Date.now() - startTime
+        };
       }
       if (data.time) {
         // Validate time against opening hours
@@ -1408,7 +1486,7 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
       if (editChoice.includes('name') || editChoice.includes('phone') || editChoice === 'edit_namephone') {
         setState(patientPhone, BOOKING_STATES.AWAITING_NAMEPHONE, editData);
         return {
-          text: `Please provide your updated name and phone number (e.g., "Tom Hands, 87111048"):`,
+          text: `Please provide your updated name and phone number (e.g., "Tom Hands, 81234567"):`,
           source: 'hardcoded',
           cost_saved: 1,
           latency_ms: Date.now() - startTime
@@ -1457,18 +1535,21 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
         return { text: `No problem — I've cancelled that change. Anything else I can help with?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
       }
 
-      // Try to extract name and phone from message like "Tom Hands, 87111048" or "Tom Hands 87111048"
+      // Normalize multi-line input (e.g., "Maximillian\n81234567") to single line
+      const normalizedText = message.text.replace(/\n+/g, ' ').trim();
+
+      // Try to extract name and phone from message like "Tom Hands, 81234567" or "Tom Hands 81234567"
       let newName = null;
       let newPhone = null;
 
-      // Pattern: "Name, 12345678" or "Name, +65 12345678"
-      const commaMatch = message.text.match(/^([^,\d]{2,50}),?\s*(\+?\d[\d\s]{5,15})$/);
+      // Pattern: "Name, 81234567" or "Name, +65 81234567"
+      const commaMatch = normalizedText.match(/^([^,\d]{2,50}),?\s*(\+?\d[\d\s]{5,15})$/);
       if (commaMatch) {
         newName = commaMatch[1].trim();
         newPhone = commaMatch[2].replace(/\s/g, '');
       } else {
-        // Pattern: "Name 12345678" (two+ words followed by numbers)
-        const spaceMatch = message.text.match(/^([a-zA-Z\s]{2,50})\s+(\+?\d[\d\s]{5,15})$/);
+        // Pattern: "Name 81234567" (two+ words followed by numbers)
+        const spaceMatch = normalizedText.match(/^([a-zA-Z\s]{2,50})\s+(\+?\d[\d\s]{5,15})$/);
         if (spaceMatch) {
           newName = spaceMatch[1].trim();
           newPhone = spaceMatch[2].replace(/\s/g, '');
@@ -1489,7 +1570,7 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
       }
 
       return {
-        text: `Please provide both your name and phone number (e.g., "Tom Hands, 87111048"):`,
+        text: `Please provide both your name and phone number (e.g., "Tom Hands, 81234567"):`,
         source: 'hardcoded',
         cost_saved: 1,
         latency_ms: Date.now() - startTime
