@@ -1293,7 +1293,7 @@ bot.on('text', async (ctx) => {
     const pending = pendingAlternatives.get(chatId);
     if (pending && pending.bookingId) {
       console.log(`[TELEGRAM] Processing alternative time suggestion from chat ${chatId}: "${text}"`);
-      const result = await handleClinicSuggestAlternative(text, pending.bookingId, chatId);
+      const result = await handleClinicSuggestAlternative(chatId, text);
       if (result.success) {
         return await ctx.reply(`🔄 Alternative time suggested: *${text}*\n✓ Patient notified on WhatsApp`);
       } else {

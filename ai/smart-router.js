@@ -650,16 +650,28 @@ async function startBookingFlow(message, clinicConfig, patientPhone, conversatio
   const primaryTreatment = treatmentNames[0] || fields.treatment;
 
   if (fields.date && fields.time && primaryTreatment) {
-    // All fields provided in first message!
-    return await attemptBooking(clinicConfig, patientPhone, { ...fields, treatments: treatmentNames }, conversationHistory, startTime);
+    // All fields provided in first message — show confirmation summary before booking
+    setState(patientPhone, BOOKING_STATES.AWAITING_CONFIRMATION, {
+      date: fields.date,
+      time: fields.time,
+      treatment: primaryTreatment,
+      treatments: treatmentNames
+    });
+    return await buildConfirmationResponse(clinicConfig, patientPhone, fields.date, fields.time, treatmentNames, startTime);
   }
 
   // Start state machine
   if (fields.date) {
     if (fields.time) {
       if (primaryTreatment) {
-        // Treatment already known + date + time = go straight to confirmation
-        return await attemptBooking(clinicConfig, patientPhone, { date: fields.date, time: fields.time, treatment: primaryTreatment, treatments: treatmentNames }, conversationHistory, startTime);
+        // Treatment already known + date + time — show confirmation summary before booking
+        setState(patientPhone, BOOKING_STATES.AWAITING_CONFIRMATION, {
+          date: fields.date,
+          time: fields.time,
+          treatment: primaryTreatment,
+          treatments: treatmentNames
+        });
+        return await buildConfirmationResponse(clinicConfig, patientPhone, fields.date, fields.time, treatmentNames, startTime);
       }
       setState(patientPhone, BOOKING_STATES.AWAITING_TREATMENT, { date: fields.date, time: fields.time });
       return { text: `Great, ${fields.date} at ${fields.time} works. Which treatment are you looking for?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
@@ -966,8 +978,9 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
         // Patient confirmed — start booking flow, preserve any data from offer
         const offerData = currentState.data || {};
         if (offerData.date && offerData.time && offerData.treatment) {
-          // All fields already collected! Show confirmation summary
-          return await attemptBooking(clinicConfig, patientPhone, offerData, conversationHistory, startTime);
+          // All fields already collected — show confirmation summary before booking
+          setState(patientPhone, BOOKING_STATES.AWAITING_CONFIRMATION, offerData);
+          return await buildConfirmationResponse(clinicConfig, patientPhone, offerData.date, offerData.time, offerData.treatments || [offerData.treatment], startTime);
         }
         if (offerData.date) {
           const offerTreatments = offerData.treatments || (offerData.treatment ? [offerData.treatment] : []);

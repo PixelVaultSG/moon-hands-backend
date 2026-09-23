@@ -198,14 +198,15 @@ function getTreatmentInfoCard(service, selectedCount = 0) {
  * Edit menu — shown when user taps Edit on confirmation card
  */
 function getEditMenuButtons() {
-  return buildQuickReplyButtons({
+  return buildListMessage({
     body: 'What would you like to change?',
-    footer: 'Tap an option',
-    buttons: [
-      { id: 'edit_date', title: '📅 Change Date' },
-      { id: 'edit_time', title: '🕐 Change Time' },
-      { id: 'edit_treatment', title: '💆 Change Treatment' },
-      { id: 'edit_namephone', title: '👤 Change Name/Phone' }
+    footer: 'Tap an option below',
+    buttonText: 'Edit Options',
+    rows: [
+      { id: 'edit_date', title: '📅 Change Date', description: 'Pick a different day' },
+      { id: 'edit_time', title: '🕐 Change Time', description: 'Select a different time slot' },
+      { id: 'edit_treatment', title: '💆 Change Treatment', description: 'Switch to another service' },
+      { id: 'edit_namephone', title: '👤 Change Name/Phone', description: 'Update your contact details' }
     ]
   });
 }
