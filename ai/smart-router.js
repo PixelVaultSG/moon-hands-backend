@@ -584,6 +584,7 @@ function isBookingState(state) {
     BOOKING_STATES.EDITING_BOOKING,
     BOOKING_STATES.AWAITING_NAME,
     BOOKING_STATES.AWAITING_PHONE,
+    BOOKING_STATES.AWAITING_NAMEPHONE,
     BOOKING_STATES.AWAITING_CONFIRMATION,
     BOOKING_STATES.READY_TO_BOOK,
   ].includes(state);
@@ -1567,25 +1568,41 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
         return { text: `No problem — I've cancelled that change. Anything else I can help with?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
       }
 
-      // Normalize multi-line input (e.g., "Maximillian\n81234567") to single line
-      const normalizedText = message.text.replace(/\n+/g, ' ').trim();
+      // Normalize input: replace line breaks, commas, semicolons, dashes, colons with spaces
+      const cleanText = message.text
+        .replace(/[,;:\-–—]/g, ' ')   // separators → space
+        .replace(/\n+/g, ' ')          // line breaks → space
+        .replace(/\s+/g, ' ')          // collapse multiple spaces
+        .trim();
 
-      // Try to extract name and phone from message like "Tom Hands, 81234567" or "Tom Hands 81234567"
+      // Extract name and phone by finding a phone number at the END of the string.
+      // Supports Singapore formats: 91234567, 9123 4567, +65 9123 4567, +6591234567
       let newName = null;
       let newPhone = null;
 
-      // Pattern: "Name, 81234567" or "Name, +65 81234567"
-      const commaMatch = normalizedText.match(/^([^,\d]{2,50}),?\s*(\+?\d[\d\s]{5,15})$/);
-      if (commaMatch) {
-        newName = commaMatch[1].trim();
-        newPhone = commaMatch[2].replace(/\s/g, '');
-      } else {
-        // Pattern: "Name 81234567" (two+ words followed by numbers)
-        const spaceMatch = normalizedText.match(/^([a-zA-Z\s]{2,50})\s+(\+?\d[\d\s]{5,15})$/);
-        if (spaceMatch) {
-          newName = spaceMatch[1].trim();
-          newPhone = spaceMatch[2].replace(/\s/g, '');
+      const phonePatterns = [
+        /(.+?)\s+(\+65[\s-]?\d{4}[\s-]?\d{4})$/,   // +65 9123 4567, +65-9123-4567
+        /(.+?)\s+(\+65\d{8})$/,                      // +6591234567
+        /(.+?)\s+(\d{4}[\s-]?\d{4})$/,               // 9123 4567, 9123-4567
+        /(.+?)\s+([89]\d{7})$/                        // 91234567, 81234567
+      ];
+
+      for (const pattern of phonePatterns) {
+        const match = cleanText.match(pattern);
+        if (match) {
+          newName = match[1].trim();
+          newPhone = match[2].replace(/[\s-]/g, '');
+          break;
         }
+      }
+
+      // If only phone found (no name), preserve existing name
+      if (!newName && newPhone && currentState.data?.name) {
+        newName = currentState.data.name;
+      }
+      // If only name found (no phone), preserve existing phone
+      if (newName && !newPhone && currentState.data?.phone) {
+        newPhone = currentState.data.phone;
       }
 
       if (newName && newPhone) {
@@ -1602,7 +1619,7 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
       }
 
       return {
-        text: `Please provide both your name and phone number (e.g., "Tom Hands, 81234567"):`,
+        text: `Please provide your name and phone number. You can use a comma, space, or line break to separate them (e.g., "Tom Hands, 81234567"):`,
         source: 'hardcoded',
         cost_saved: 1,
         latency_ms: Date.now() - startTime

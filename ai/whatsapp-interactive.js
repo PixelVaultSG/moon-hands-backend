@@ -206,7 +206,7 @@ function getEditMenuButtons() {
       { id: 'edit_date', title: '📅 Change Date', description: 'Pick a different day' },
       { id: 'edit_time', title: '🕐 Change Time', description: 'Select a different time slot' },
       { id: 'edit_treatment', title: '💆 Change Treatment', description: 'Switch to another service' },
-      { id: 'edit_namephone', title: '👤 Change Contact Details', description: 'Update your name and phone number' }
+      { id: 'edit_namephone', title: '👤 Your Details', description: 'Update your name and phone number' }
     ]
   });
 }
