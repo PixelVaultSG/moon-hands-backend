@@ -1606,7 +1606,8 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
       }
 
       // Normalize input: replace line breaks, commas, semicolons, dashes, colons with spaces
-      const cleanText = message.text
+      const rawText = typeof message === 'string' ? message : (message?.text || message?.body || '');
+      const cleanText = rawText
         .replace(/[,;:\-–—]/g, ' ')   // separators → space
         .replace(/\n+/g, ' ')          // line breaks → space
         .replace(/\s+/g, ' ')          // collapse multiple spaces
