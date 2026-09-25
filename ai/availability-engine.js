@@ -281,11 +281,62 @@ function mergeBusyPeriods(periods) {
   return merged;
 }
 
+/**
+ * Check if a specific time is available (not overlapping with existing bookings).
+ * Unlike getAvailableSlots which returns pre-generated interval slots,
+ * this checks the exact requested time against actual booked periods.
+ */
+async function isTimeAvailable(clientId, dateStr, timeStr, treatmentNames, clientConfig) {
+  // 1. Get existing bookings for this date
+  const { data: existingBookings, error } = await supabase
+    .from('appointments')
+    .select('appointment_time, duration')
+    .eq('client_id', clientId)
+    .eq('appointment_date', dateStr)
+    .in('status', ['confirmed', 'pending', 'booked', 'pending_alternative']);
+
+  if (error) {
+    console.error(`[AVAILABILITY] isTimeAvailable error: ${error.message}`);
+    return false;
+  }
+
+  // 2. Calculate total treatment duration
+  const services = clientConfig.config?.services || [];
+  let totalDuration = 0;
+  for (const tName of treatmentNames) {
+    const svc = services.find(s =>
+      s.name.toLowerCase().includes(tName.toLowerCase()) ||
+      tName.toLowerCase().includes(s.name.toLowerCase())
+    );
+    totalDuration += parseInt(svc?.duration) || 60;
+  }
+  if (totalDuration === 0) totalDuration = 60;
+
+  const bufferMin = clientConfig.config?.buffer_time || 15;
+  const slotDuration = totalDuration + bufferMin;
+
+  // 3. Check overlap with existing bookings
+  const requestedStart = minutesFromTime(timeStr);
+  const requestedEnd = requestedStart + slotDuration;
+
+  const busyPeriods = (existingBookings || []).map(b => ({
+    start: minutesFromTime(b.appointment_time),
+    end: minutesFromTime(b.appointment_time) + (b.duration || 60)
+  }));
+
+  const mergedBusy = mergeBusyPeriods(busyPeriods);
+
+  return !mergedBusy.some(busy =>
+    requestedStart < busy.end && requestedEnd > busy.start
+  );
+}
+
 module.exports = {
   getAvailableSlots,
   getNextAvailableDates,
   findNextAvailableAfter,
   findNextSlotsOnDate,
+  isTimeAvailable,
   formatTime,
   formatDate
 };

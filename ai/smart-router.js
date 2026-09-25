@@ -1245,12 +1245,37 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
       const existingTreatments2 = currentState.data?.treatments || (existingTreatment2 ? [existingTreatment2] : []);
       
       try {
-        const { getAvailableSlots, findNextSlotsOnDate, findNextAvailableAfter } = require('./availability-engine');
+        const { getAvailableSlots, findNextSlotsOnDate, findNextAvailableAfter, isTimeAvailable } = require('./availability-engine');
         const availCheck = await getAvailableSlots(clinicConfig.id, date, existingTreatments2, clinicConfig);
-        
+
         // DEFENSIVE: if slot engine says no slots available at all, block the booking
-        if (!availCheck || !availCheck.available || !availCheck.slots.includes(data.time)) {
-          // Requested time is already booked or no slots available — suggest next available
+        if (!availCheck || !availCheck.available) {
+          // No slots at all on this day — suggest next dates
+          const nextAvail = await findNextAvailableAfter(clinicConfig.id, existingTreatments2, clinicConfig, date);
+          if (nextAvail.found) {
+            setState(patientPhone, BOOKING_STATES.AWAITING_DATE, { treatment: existingTreatment2, treatments: existingTreatments2 });
+            const { getDateButtonOptions } = require('./whatsapp-interactive');
+            return {
+              text: `${date} is fully booked. Here are the next available dates:`,
+              source: 'hardcoded',
+              intents: ['date_suggestion'],
+              cost_saved: 1,
+              latency_ms: Date.now() - startTime,
+              whatsappInteractive: getDateButtonOptions(nextAvail.allDates)
+            };
+          }
+          return {
+            text: `Sorry, ${date} is fully booked. Please choose a different date.`,
+            source: 'hardcoded',
+            cost_saved: 1,
+            latency_ms: Date.now() - startTime
+          };
+        }
+
+        // Check if the EXACT requested time is free (not just in pre-generated 30-min slots)
+        const isRequestedTimeFree = await isTimeAvailable(clinicConfig.id, date, data.time, existingTreatments2, clinicConfig);
+        if (!isRequestedTimeFree) {
+          // Requested time overlaps with an existing booking — suggest next available
           const sameDay = await findNextSlotsOnDate(clinicConfig.id, date, existingTreatments2, clinicConfig, data.time);
           if (sameDay.found && sameDay.slots.length > 0) {
             const { getTimeSlotButtons } = require('./whatsapp-interactive');
@@ -1263,7 +1288,7 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
               whatsappInteractive: getTimeSlotButtons(sameDay.slots, availCheck?.operatingHours)
             };
           }
-          
+
           // No more slots today — suggest next dates
           const nextAvail = await findNextAvailableAfter(clinicConfig.id, existingTreatments2, clinicConfig, date);
           if (nextAvail.found) {
@@ -1278,7 +1303,7 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
               whatsappInteractive: getDateButtonOptions(nextAvail.allDates)
             };
           }
-          
+
           // Fallback if no alternatives found
           return {
             text: `Sorry, ${data.time} on ${date} is no longer available. Please choose a different time.`,
@@ -1614,22 +1639,22 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
         .trim();
 
       // Extract name and phone by finding a phone number at the END of the string.
-      // Supports Singapore formats: 91234567, 9123 4567, +65 9123 4567, +6591234567
+      // Supports ALL international formats: +65 9123 4567, +1 (555) 555-5555,
+      // +44 7911 123456, 91234567, 81234567, etc.
       let newName = null;
       let newPhone = null;
 
       const phonePatterns = [
-        /(.+?)\s+(\+65[\s-]?\d{4}[\s-]?\d{4})$/,   // +65 9123 4567, +65-9123-4567
-        /(.+?)\s+(\+65\d{8})$/,                      // +6591234567
-        /(.+?)\s+(\d{4}[\s-]?\d{4})$/,               // 9123 4567, 9123-4567
-        /(.+?)\s+([89]\d{7})$/                        // 91234567, 81234567
+        /(.+?)\s+(\+\d[\d\s\-().]{4,}\d)$/,        // +65 9123 4567, +1 (555) 555-5555, +44 7911 123456
+        /(.+?)\s+(\d{4}[\s-]?\d{4})$/,              // 9123 4567, 9123-4567, 8123-4567
+        /(.+?)\s+(\d{7,})$/                          // Any 7+ digit number at the end
       ];
 
       for (const pattern of phonePatterns) {
         const match = cleanText.match(pattern);
         if (match) {
           newName = match[1].trim();
-          newPhone = match[2].replace(/[\s-]/g, '');
+          newPhone = match[2].replace(/[\s\-().]/g, '');
           break;
         }
       }
