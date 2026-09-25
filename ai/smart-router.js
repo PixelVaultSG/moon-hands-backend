@@ -836,7 +836,7 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
   // These handle taps on old messages or cross-state button presses
   // ═══════════════════════════════════════════════════════════════
 
-  // ── "Book This" — proceed to date selection with all selected treatments ──
+  // ── "Book This" — proceed with all selected treatments ──
   if (msgLower === 'book_this' || msgLower.includes('book this') || (msgLower.includes('book') && msgLower.includes('this'))) {
     const selectedTreatment = currentState.data?.selectedTreatment;
     const existingSelected = currentState.data?.selectedTreatments || [];
@@ -844,12 +844,31 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
     if (selectedTreatment && !allTreatments.includes(selectedTreatment)) {
       allTreatments.push(selectedTreatment);
     }
-    setState(patientPhone, BOOKING_STATES.AWAITING_DATE, {
+    const bookData = {
       ...currentState.data,
       treatment: selectedTreatment || allTreatments[0],
       treatments: allTreatments,
       selectedTreatments: allTreatments
-    });
+    };
+
+    // If date+time already collected (e.g., from initial message), skip straight to confirmation
+    if (bookData.date && bookData.time) {
+      setState(patientPhone, BOOKING_STATES.AWAITING_CONFIRMATION, bookData);
+      return await buildConfirmationResponse(clinicConfig, patientPhone, bookData.date, bookData.time, allTreatments, startTime);
+    }
+    // If only date collected, ask for time
+    if (bookData.date && !bookData.time) {
+      setState(patientPhone, BOOKING_STATES.AWAITING_TIME, bookData);
+      return {
+        text: `What time on ${bookData.date} works for you?`,
+        source: 'hardcoded',
+        intents: ['time_request'],
+        cost_saved: 1,
+        latency_ms: Date.now() - startTime
+      };
+    }
+    // Otherwise ask for date (original behavior)
+    setState(patientPhone, BOOKING_STATES.AWAITING_DATE, bookData);
     const { getDateButtonOptions } = require('./whatsapp-interactive');
     const { getNextAvailableDates } = require('./availability-engine');
     try {
@@ -1376,18 +1395,36 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
       const existingSelected = currentState.data?.selectedTreatments || [];
       const msgLower2 = message.toLowerCase().trim();
       
-      // "Book This" — proceed to date selection with this treatment
+      // "Book This" — proceed with this treatment
       if (msgLower2.includes('book') && !msgLower2.includes('another') && !msgLower2.includes('add')) {
         const allTreatments = [...existingSelected];
         if (selectedTreatment && !allTreatments.includes(selectedTreatment)) {
           allTreatments.push(selectedTreatment);
         }
-        setState(patientPhone, BOOKING_STATES.AWAITING_DATE, {
+        const bookData = {
           ...currentState.data,
           treatment: selectedTreatment,
           treatments: allTreatments,
           selectedTreatments: allTreatments
-        });
+        };
+        // If date+time already collected, skip straight to confirmation
+        if (bookData.date && bookData.time) {
+          setState(patientPhone, BOOKING_STATES.AWAITING_CONFIRMATION, bookData);
+          return await buildConfirmationResponse(clinicConfig, patientPhone, bookData.date, bookData.time, allTreatments, startTime);
+        }
+        // If only date collected, ask for time
+        if (bookData.date && !bookData.time) {
+          setState(patientPhone, BOOKING_STATES.AWAITING_TIME, bookData);
+          return {
+            text: `What time on ${bookData.date} works for you?`,
+            source: 'hardcoded',
+            intents: ['time_request'],
+            cost_saved: 1,
+            latency_ms: Date.now() - startTime
+          };
+        }
+        // Otherwise ask for date
+        setState(patientPhone, BOOKING_STATES.AWAITING_DATE, bookData);
         const { getDateButtonOptions } = require('./whatsapp-interactive');
         const { getNextAvailableDates } = require('./availability-engine');
         try {
