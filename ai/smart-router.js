@@ -262,6 +262,12 @@ async function routeMessage(message, clinicConfig, patientPhone = null, conversa
     const { getState } = require('./conversation-state');
     const current = getState(patientPhone);
     const selectedTreatments = current.data?.selectedTreatments || [];
+    
+    // If date+time already collected, skip straight to confirmation
+    if (current.data?.date && current.data?.time && selectedTreatments.length > 0) {
+      return await buildConfirmationResponse(clinicConfig, patientPhone, current.data.date, current.data.time, selectedTreatments, startTime);
+    }
+    
     const primaryTreatment = selectedTreatments[0] || message;
     return await startBookingFlow(
       primaryTreatment,
@@ -836,8 +842,9 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
   // These handle taps on old messages or cross-state button presses
   // ═══════════════════════════════════════════════════════════════
 
-  // ── "Book This" — proceed with all selected treatments ──
-  if (msgLower === 'book_this' || msgLower.includes('book this') || (msgLower.includes('book') && msgLower.includes('this'))) {
+  // ── "Book This" / "Book These" / "Book Now" — proceed with all selected treatments ──
+  if (msgLower === 'book_this' || msgLower.includes('book this') || (msgLower.includes('book') && msgLower.includes('this')) ||
+      msgLower === 'book_selected' || msgLower.includes('book these') || msgLower.includes('book now') || msgLower === 'book_now') {
     const selectedTreatment = currentState.data?.selectedTreatment;
     const existingSelected = currentState.data?.selectedTreatments || [];
     const allTreatments = [...existingSelected];
@@ -974,7 +981,12 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
   //  only messages with a clear NON-booking intent escape.)
   if (!fields.date && !fields.time) {
     const isBareServiceName = services.some(s => msgLower === s.name.toLowerCase());
-    if (!isBareServiceName) {
+    // NEW: In AWAITING_TREATMENT, any message containing a service name is likely
+    // the user providing their treatment choice — don't treat as off-topic inquiry.
+    const isTreatmentSelection = currentState.state === BOOKING_STATES.AWAITING_TREATMENT && 
+      services.some(s => msgLower.includes(s.name.toLowerCase()));
+    
+    if (!isBareServiceName && !isTreatmentSelection) {
       const { matchIntents } = require('./intent-matcher');
       const OFF_TOPIC_INTENTS = [
         'service_list', 'treatment_enquiry', 'pricing_general', 'pricing_specific',
@@ -1371,41 +1383,71 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
       // Check if user tapped/typed a specific treatment name
       // (services and msgLower already declared at top of handleBookingFlow)
       
-      // Find matching treatment from message (button tap or text)
-      let matchedService = null;
+      // Find ALL matching treatments from message (supports multi-treatment bookings)
+      let matchedServices = [];
       for (const s of services) {
         if (msgLower.includes(s.name.toLowerCase())) {
-          matchedService = s;
-          break;
+          matchedServices.push(s);
         }
       }
       
       // Also check categoryServices from state (treatments in current category)
-      if (!matchedService && currentState.data?.categoryServices) {
+      if (matchedServices.length === 0 && currentState.data?.categoryServices) {
         for (const tName of currentState.data.categoryServices) {
           if (msgLower.includes(tName.toLowerCase())) {
-            matchedService = services.find(s => s.name.toLowerCase() === tName.toLowerCase());
-            break;
+            const matched = services.find(s => s.name.toLowerCase() === tName.toLowerCase());
+            if (matched) matchedServices.push(matched);
           }
         }
       }
       
-      if (matchedService) {
-        // Show treatment info card FIRST before booking
+      if (matchedServices.length > 0) {
         const selectedTreatments = currentState.data?.selectedTreatments || [];
+        const allSelected = [...selectedTreatments];
+        
+        for (const svc of matchedServices) {
+          if (!allSelected.includes(svc.name)) {
+            allSelected.push(svc.name);
+          }
+        }
+        
         setState(patientPhone, BOOKING_STATES.TREATMENT_INFO, {
           ...currentState.data,
-          selectedTreatment: matchedService.name,
-          selectedTreatments
+          selectedTreatment: matchedServices[0].name,
+          selectedTreatments: allSelected
         });
-        const { getTreatmentInfoCard } = require('./whatsapp-interactive');
+        
+        // Single treatment selected — show detailed info card
+        if (matchedServices.length === 1 && allSelected.length === 1) {
+          const { getTreatmentInfoCard } = require('./whatsapp-interactive');
+          return {
+            text: `*${matchedServices[0].name}* — ${matchedServices[0].price || ''} ${matchedServices[0].duration ? matchedServices[0].duration + 'min' : ''}\n\n${matchedServices[0].description || 'Tap an option to proceed.'}`,
+            source: 'hardcoded',
+            intents: ['treatment_info'],
+            cost_saved: 1,
+            latency_ms: Date.now() - startTime,
+            whatsappInteractive: getTreatmentInfoCard(matchedServices[0], 0)
+          };
+        }
+        
+        // Multiple treatments selected — show summary
+        const { getMultiTreatmentButtons } = require('./whatsapp-interactive');
+        const { sumServicePrices, formatPriceTotal } = require('../utils/price');
+        const matchedForPrice = matchedServices.filter(s => allSelected.includes(s.name));
+        const priceSum = sumServicePrices(matchedForPrice);
+        const priceText = priceSum.hasPrice ? formatPriceTotal(priceSum.min, priceSum.max) : '';
+        let totalDuration = 0;
+        for (const svc of matchedForPrice) {
+          totalDuration += parseInt(svc.duration) || 60;
+        }
+        
         return {
-          text: `*${matchedService.name}* — ${matchedService.price || ''} ${matchedService.duration ? matchedService.duration + 'min' : ''}\n\n${matchedService.description || 'Tap an option to proceed.'}`,
+          text: `Great choices! I've selected ${allSelected.join(' + ')} for you.`,
           source: 'hardcoded',
           intents: ['treatment_info'],
           cost_saved: 1,
           latency_ms: Date.now() - startTime,
-          whatsappInteractive: getTreatmentInfoCard(matchedService, selectedTreatments.length)
+          whatsappInteractive: getMultiTreatmentButtons(allSelected, totalDuration, priceText)
         };
       }
       
