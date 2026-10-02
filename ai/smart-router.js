@@ -1671,13 +1671,33 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
       if (newName && newPhone) {
         const editData = { ...currentState.data, name: newName, phone: newPhone };
         setState(patientPhone, BOOKING_STATES.AWAITING_CONFIRMATION, editData);
-        const { getConfirmationButtons } = require('./whatsapp-interactive');
+        const { getConfirmationCard } = require('./whatsapp-interactive');
+        const services = clinicConfig.config?.services || [];
+        const treatments = Array.isArray(editData.treatments) ? editData.treatments : [editData.treatment];
+        let totalDuration = 0;
+        const matched = [];
+        for (const t of treatments) {
+          const svc = services.find(s => s.name.toLowerCase().includes(t.toLowerCase()) || t.toLowerCase().includes(s.name.toLowerCase()));
+          if (svc) { matched.push(svc); totalDuration += parseInt(svc.duration) || 60; }
+        }
+        const priceSum = sumServicePrices(matched);
+        const totalPriceText = priceSum.hasPrice ? formatPriceTotal(priceSum.min, priceSum.max) : undefined;
         return {
-          text: `Updated! Here's your booking summary:\n\n👤 ${newName}\n📱 ${newPhone}\n📅 ${editData.date} at ${editData.time}\n💆 ${editData.treatment}\n⏱️ ${editData.duration} mins\n💰 $${editData.price}\n\nEverything look correct?`,
+          text: `Updated! Here's your booking summary:\n\n👤 ${newName}\n📱 ${newPhone}\n📅 ${editData.date} at ${editData.time}\n💆 ${editData.treatment}\n⏱️ ${totalDuration} mins\n💰 ${totalPriceText || '$' + (editData.price || 'TBD')}\n\nEverything look correct?`,
           source: 'hardcoded',
           cost_saved: 1,
           latency_ms: Date.now() - startTime,
-          whatsappInteractive: getConfirmationButtons()
+          whatsappInteractive: getConfirmationCard({
+            date: editData.date,
+            time: editData.time,
+            treatments: treatments,
+            totalDuration: totalDuration || undefined,
+            totalPrice: totalPriceText,
+            priceIsRange: priceSum.isRange,
+            customerName: newName,
+            customerPhone: newPhone,
+            clinicName: clinicConfig.name
+          })
         };
       }
 

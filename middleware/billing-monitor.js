@@ -74,6 +74,20 @@ async function checkAllClinics() {
 
   const now = new Date();
   const results = [];
+
+  // Get most recent payment date per client to suppress "upcoming" alerts
+  // for a few days after a payment was recorded.
+  const { data: recentPayments } = await supabase
+    .from('payments')
+    .select('client_id, created_at')
+    .order('created_at', { ascending: false });
+  const lastPaymentMap = new Map();
+  for (const p of (recentPayments || [])) {
+    if (!lastPaymentMap.has(p.client_id)) {
+      lastPaymentMap.set(p.client_id, new Date(p.created_at));
+    }
+  }
+
   for (const c of (data || [])) {
     const billingDay = c.billing_day || 1;
     let nextDue = new Date(now.getFullYear(), now.getMonth(), billingDay);
@@ -108,7 +122,17 @@ async function checkAllClinics() {
     }
 
     // Trigger alerts for upcoming due dates
-    if (!alertLevel && daysUntilDue <= 7 && daysUntilDue >= 0) alertLevel = 'upcoming';
+    // BUT suppress "upcoming" if a payment was recorded within the last 5 days
+    // (gives admin a buffer after recording payment before next reminder)
+    if (!alertLevel && daysUntilDue <= 7 && daysUntilDue >= 0) {
+      const lastPayDate = lastPaymentMap.get(c.id);
+      const daysSincePayment = lastPayDate
+        ? Math.floor((now - lastPayDate) / (1000 * 60 * 60 * 24))
+        : Infinity;
+      if (daysSincePayment > 5) {
+        alertLevel = 'upcoming';
+      }
+    }
     if (!alertLevel && daysUntilDue === 0) alertLevel = 'due_today';
 
     results.push({
@@ -149,12 +173,17 @@ async function recordPayment(clientId, amount, method, reference, billingPeriod,
       });
     if (payErr) throw payErr;
 
+    // last_paid_date = start of the billing period being paid (not payment date)
+    // so that the billing cycle correctly tracks coverage.
+    const periodStart = billingPeriod
+      ? `${billingPeriod}-01`
+      : new Date().toISOString().split('T')[0];
+
     const { error: updErr } = await supabase
       .from('clients')
       .update({
-        last_paid_date: new Date().toISOString().split('T')[0],
+        last_paid_date: periodStart,
         payment_status: 'active',
-        updated_at: new Date().toISOString(),
       })
       .eq('id', clientId);
     if (updErr) throw updErr;

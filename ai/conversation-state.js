@@ -238,7 +238,8 @@ function parseTimePhrase(phrase) {
   if (lower === 'morning') return '10:00';
   if (lower === 'afternoon') return '14:00';
   if (lower === 'evening') return '17:00';
-  const match = phrase.match(/(\d{1,2}):?(\d{2})?\s*(am|pm)?/i);
+  // Accept both colon (:) and dot (.) as hour/minute separators
+  const match = phrase.match(/(\d{1,2})[:.]?(\d{2})?\s*(am|pm)?/i);
   if (!match) return null;
   let hour = parseInt(match[1]);
   const minute = match[2] ? parseInt(match[2]) : 0;
@@ -361,10 +362,10 @@ function extractBookingFields(message, services = []) {
     /\d{4}-\d{2}-\d{2}/,
   ];
   for (const p of datePatterns) { const m = message.match(p); if (m) { const d = parseDatePhrase(m[0]); if (d) { fields.date = d; break; } } }
-  // Time
+  // Time — accept both colon (:) and dot (.) as separators
   const timePatterns = [
-    /(\d{1,2}):(\d{2})\s*(am|pm)/i, /(\d{1,2})\s*(am|pm)/i,
-    /(\d{1,2}):(\d{2})/, /\b(morning|afternoon|evening)\b/i,
+    /(\d{1,2})[:.](\d{2})\s*(am|pm)/i, /(\d{1,2})\s*(am|pm)/i,
+    /(\d{1,2})[:.](\d{2})/, /\b(morning|afternoon|evening)\b/i,
   ];
   for (const p of timePatterns) { const m = message.match(p); if (m) { const t = parseTimePhrase(m[0]); if (t) { fields.time = t; break; } } }
   // Treatment(s) — extract ALL treatments for multi-treatment bookings
