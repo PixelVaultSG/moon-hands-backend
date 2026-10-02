@@ -22,6 +22,38 @@ const GRACE_PERIOD_DAYS = 3;
 const SUSPENSION_THRESHOLD_DAYS = 7;
 
 /**
+ * Parse a YYYY-MM-DD string as a local Date (no UTC shift).
+ */
+function parseLocalDate(dateStr) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  return new Date(y, m - 1, d);
+}
+
+/**
+ * Format a Date as YYYY-MM-DD in local time (no UTC shift).
+ */
+function formatLocalDate(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+/**
+ * Add one month to a date, keeping the billing day consistent.
+ * If the target month doesn't have enough days, clamps to the last day.
+ */
+function addOneMonth(date, billingDay) {
+  const next = new Date(date.getFullYear(), date.getMonth() + 1, billingDay);
+  // If the target month has fewer days than billingDay, JS rolls over.
+  // Clamp back to the last day of the target month.
+  if (next.getDate() !== billingDay) {
+    next.setDate(0);
+  }
+  return next;
+}
+
+/**
  * Get a client's billing status.
  * @returns {Promise<{client:object, daysUntilDue:number, daysOverdue:number, status:string, nextDueDate:string}>}
  */
@@ -35,20 +67,25 @@ async function getBillingStatus(clientId) {
 
   const now = new Date();
   const billingDay = data.billing_day || 1;
-  let nextDue = new Date(now.getFullYear(), now.getMonth(), billingDay);
-  if (nextDue < now) nextDue = new Date(now.getFullYear(), now.getMonth() + 1, billingDay);
+  const lastPaid = data.last_paid_date ? parseLocalDate(data.last_paid_date) : null;
 
-  const lastPaid = data.last_paid_date ? new Date(data.last_paid_date) : null;
-  const daysUntilDue = Math.ceil((nextDue - now) / (1000 * 60 * 60 * 24));
-
+  let nextDue = null;
+  let daysUntilDue = Infinity;
   let daysOverdue = 0;
   let effectiveStatus = data.payment_status || 'active';
+
   if (lastPaid) {
-    const lastDue = new Date(lastPaid.getFullYear(), lastPaid.getMonth(), billingDay);
-    if (lastPaid < lastDue) {
-      daysOverdue = Math.ceil((now - lastDue) / (1000 * 60 * 60 * 24));
-      if (daysOverdue > 0 && daysOverdue <= GRACE_PERIOD_DAYS) effectiveStatus = 'grace_period';
-      else if (daysOverdue > GRACE_PERIOD_DAYS) effectiveStatus = 'overdue';
+    // Subscription model: nextDue = lastPaid + 1 month
+    nextDue = addOneMonth(lastPaid, billingDay);
+    daysUntilDue = Math.ceil((nextDue - now) / (1000 * 60 * 60 * 24));
+
+    if (daysUntilDue < 0) {
+      daysOverdue = -daysUntilDue;
+      if (daysOverdue > 0 && daysOverdue <= GRACE_PERIOD_DAYS) {
+        effectiveStatus = 'grace_period';
+      } else if (daysOverdue > GRACE_PERIOD_DAYS) {
+        effectiveStatus = 'overdue';
+      }
     }
   }
 
@@ -57,7 +94,7 @@ async function getBillingStatus(clientId) {
     daysUntilDue,
     daysOverdue,
     status: effectiveStatus,
-    nextDueDate: nextDue.toISOString().split('T')[0],
+    nextDueDate: nextDue ? formatLocalDate(nextDue) : null,
   };
 }
 
@@ -75,35 +112,23 @@ async function checkAllClinics() {
   const now = new Date();
   const results = [];
 
-  // Get most recent payment date per client to suppress "upcoming" alerts
-  // for a few days after a payment was recorded.
-  const { data: recentPayments } = await supabase
-    .from('payments')
-    .select('client_id, created_at')
-    .order('created_at', { ascending: false });
-  const lastPaymentMap = new Map();
-  for (const p of (recentPayments || [])) {
-    if (!lastPaymentMap.has(p.client_id)) {
-      lastPaymentMap.set(p.client_id, new Date(p.created_at));
-    }
-  }
-
   for (const c of (data || [])) {
     const billingDay = c.billing_day || 1;
-    let nextDue = new Date(now.getFullYear(), now.getMonth(), billingDay);
-    if (nextDue < now) nextDue = new Date(now.getFullYear(), now.getMonth() + 1, billingDay);
+    const lastPaid = c.last_paid_date ? parseLocalDate(c.last_paid_date) : null;
 
-    const lastPaid = c.last_paid_date ? new Date(c.last_paid_date) : null;
-    let daysUntilDue = Math.ceil((nextDue - now) / (1000 * 60 * 60 * 24));
+    let nextDue = null;
+    let daysUntilDue = Infinity;
     let daysOverdue = 0;
     let effectiveStatus = c.payment_status || 'active';
     let alertLevel = null;
 
     if (lastPaid) {
-      const lastDue = new Date(lastPaid.getFullYear(), lastPaid.getMonth(), billingDay);
-      if (lastPaid < lastDue) {
-        daysOverdue = Math.ceil((now - lastDue) / (1000 * 60 * 60 * 24));
-        daysUntilDue = -daysOverdue;
+      // Subscription model: nextDue = lastPaid + 1 month
+      nextDue = addOneMonth(lastPaid, billingDay);
+      daysUntilDue = Math.ceil((nextDue - now) / (1000 * 60 * 60 * 24));
+
+      if (daysUntilDue < 0) {
+        daysOverdue = -daysUntilDue;
         if (daysOverdue > 0 && daysOverdue <= GRACE_PERIOD_DAYS) {
           effectiveStatus = 'grace_period';
           alertLevel = 'grace';
@@ -122,17 +147,7 @@ async function checkAllClinics() {
     }
 
     // Trigger alerts for upcoming due dates
-    // BUT suppress "upcoming" if a payment was recorded within the last 5 days
-    // (gives admin a buffer after recording payment before next reminder)
-    if (!alertLevel && daysUntilDue <= 7 && daysUntilDue >= 0) {
-      const lastPayDate = lastPaymentMap.get(c.id);
-      const daysSincePayment = lastPayDate
-        ? Math.floor((now - lastPayDate) / (1000 * 60 * 60 * 24))
-        : Infinity;
-      if (daysSincePayment > 5) {
-        alertLevel = 'upcoming';
-      }
-    }
+    if (!alertLevel && daysUntilDue <= 7 && daysUntilDue >= 0) alertLevel = 'upcoming';
     if (!alertLevel && daysUntilDue === 0) alertLevel = 'due_today';
 
     results.push({
@@ -141,7 +156,7 @@ async function checkAllClinics() {
       daysOverdue,
       status: effectiveStatus,
       alertLevel,
-      nextDueDate: nextDue.toISOString().split('T')[0],
+      nextDueDate: nextDue ? formatLocalDate(nextDue) : null,
     });
   }
   return results;
@@ -149,11 +164,12 @@ async function checkAllClinics() {
 
 /**
  * Record a manual payment.
+ * Each payment extends the subscription by 1 month from the current period end.
  * @param {string} clientId
  * @param {number} amount — SGD
  * @param {string} method — bank_transfer | paynow | stripe | cash | other
  * @param {string} reference — transaction reference
- * @param {string} billingPeriod — YYYY-MM
+ * @param {string} billingPeriod — YYYY-MM (for record keeping)
  * @param {string} notes — optional
  * @returns {Promise<{success:boolean, error?:string}>}
  */
@@ -173,16 +189,33 @@ async function recordPayment(clientId, amount, method, reference, billingPeriod,
       });
     if (payErr) throw payErr;
 
-    // last_paid_date = start of the billing period being paid (not payment date)
-    // so that the billing cycle correctly tracks coverage.
-    const periodStart = billingPeriod
-      ? `${billingPeriod}-01`
-      : new Date().toISOString().split('T')[0];
+    // Fetch current client to compute new subscription period
+    const { data: client, error: fetchErr } = await supabase
+      .from('clients')
+      .select('last_paid_date, billing_day')
+      .eq('id', clientId)
+      .single();
+    if (fetchErr) throw fetchErr;
+
+    const billingDay = client?.billing_day || 1;
+    let newLastPaidDate;
+
+    if (client?.last_paid_date) {
+      // Extend subscription by 1 month from current period end
+      const currentPeriodStart = parseLocalDate(client.last_paid_date);
+      newLastPaidDate = addOneMonth(currentPeriodStart, billingDay);
+    } else {
+      // First payment — set period start based on billingPeriod
+      const periodStart = billingPeriod
+        ? `${billingPeriod}-${String(billingDay).padStart(2, '0')}`
+        : formatLocalDate(new Date());
+      newLastPaidDate = new Date(periodStart);
+    }
 
     const { error: updErr } = await supabase
       .from('clients')
       .update({
-        last_paid_date: periodStart,
+        last_paid_date: formatLocalDate(newLastPaidDate),
         payment_status: 'active',
       })
       .eq('id', clientId);
