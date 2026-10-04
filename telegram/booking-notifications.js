@@ -581,6 +581,76 @@ async function handlePatientConfirmAlternative(bookingId) {
   }
 }
 
+/**
+ * Step 2b: Patient counters with a different time than the clinic's suggestion.
+ * E.g., clinic suggested "Tomorrow 3.45pm", patient replies "How about 3pm?"
+ */
+async function handlePatientCounterProposal(bookingId, patientMessage, parsedFields) {
+  try {
+    const { data: booking } = await supabase
+      .from('appointments')
+      .select('*')
+      .eq('id', bookingId)
+      .single();
+
+    if (!booking) {
+      return { success: false, error: 'Booking not found.' };
+    }
+
+    // Build a human-readable time text from parsed fields
+    let timeText = '';
+    if (parsedFields.date && parsedFields.time) {
+      timeText = `${parsedFields.date} at ${parsedFields.time}`;
+    } else if (parsedFields.time) {
+      timeText = parsedFields.time;
+    } else if (parsedFields.date) {
+      timeText = parsedFields.date;
+    } else {
+      timeText = patientMessage; // fallback to raw message
+    }
+
+    // Update booking notes with patient's counter-proposal
+    const counterNote = `Patient counter-proposed: ${timeText} (original: "${patientMessage}")`;
+    const { error: updateErr } = await supabase
+      .from('appointments')
+      .update({
+        notes: booking.notes ? `${booking.notes} | ${counterNote}` : counterNote,
+        // Keep status as pending_alternative so clinic can still act on it
+      })
+      .eq('id', bookingId);
+
+    if (updateErr) {
+      console.error('[BOOKING_NOTIFY] Counter-proposal update error:', updateErr.message);
+      return { success: false, error: `Failed to save counter-proposal: ${updateErr.message}` };
+    }
+
+    // Notify clinic staff about the counter-proposal
+    if (booking.client_id) {
+      await sendClinicNotification(
+        booking.client_id,
+        `🔄 *Patient Counter-Proposal*
+\n` +
+        `👤 ${escapeMarkdown(booking.customer_name || 'Patient')}\n` +
+        `📅 Original: ${escapeMarkdown(booking.appointment_date || '')} ${escapeMarkdown(booking.appointment_time || '')}\n` +
+        `💬 Patient suggests: *${escapeMarkdown(timeText)}*\n` +
+        `🩺 ${escapeMarkdown(booking.service || 'General consultation')}\n\n` +
+        `Reply with a new time to suggest another alternative, or use the dashboard to confirm.`,
+        { includeAdmin: true }
+      );
+    }
+
+    return {
+      success: true,
+      booking,
+      timeText,
+      patientMessage: `✍️ I've sent your suggestion (${timeText}) to the clinic. We'll let you know once they confirm!`
+    };
+  } catch (err) {
+    console.error('[BOOKING_NOTIFY] Patient counter-proposal error:', err.message);
+    return { success: false, error: 'Failed to process counter-proposal.' };
+  }
+}
+
 // ─── EXPORTS ─────────────────────────────────────────────────────
 
 module.exports = {
@@ -594,5 +664,6 @@ module.exports = {
   setPendingAlternative,
   handleClinicSuggestAlternative,
   handlePatientConfirmAlternative,
+  handlePatientCounterProposal,
   escapeMarkdown,
 };

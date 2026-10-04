@@ -398,6 +398,20 @@ function isDenial(message) {
     .some(w => { const l = message.toLowerCase().trim(); return l === w || l.startsWith(w + ' '); });
 }
 
+function isAgreement(message) {
+  // Broader affirmative than isConfirmation — catches "that works", "sounds good", etc.
+  const l = message.toLowerCase().trim().replace(/[!.,?]+$/g, '');
+  const words = l.split(/\s+/);
+  if (words.length > 6) return false;
+  const agreements = [
+    "that works","works for me","works","sounds good","sounds great","sounds perfect",
+    "perfect","great","awesome","cool","lovely","fantastic","wonderful","brilliant",
+    "ideal","good","nice","noted","thank you","thanks","appreciated",
+    "see you then","see you","will do","i'll be there","i will be there"
+  ];
+  return agreements.some(w => l === w || l.startsWith(w + ' ') || l.endsWith(' ' + w));
+}
+
 // ─── TREATMENT NAME NORMALIZATION ─────────────────────────────────
 // Converts spaced variants: "micro needling" → "microneedling"
 
@@ -543,6 +557,6 @@ module.exports = {
   addSelectedTreatment, clearSelectedTreatments,
   getStalledConversations, markFollowUpSent,
   extractBookingFields, extractTreatmentName, extractAllTreatments,
-  isConfirmation, isDenial, parseDatePhrase, parseTimePhrase,
+  isConfirmation, isDenial, isAgreement, parseDatePhrase, parseTimePhrase,
   parseSmartConfirmation, normalizeTreatmentNames
 };

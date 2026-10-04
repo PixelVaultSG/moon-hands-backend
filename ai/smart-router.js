@@ -22,6 +22,7 @@ const {
   extractBookingFields,
   isConfirmation,
   isDenial,
+  isAgreement,
   setKnownName,
   getKnownName,
 } = require('./conversation-state');
@@ -78,26 +79,50 @@ async function routeMessage(message, clinicConfig, patientPhone = null, conversa
   const phone = patientPhone || 'unknown';
 
   // ── STEP 0: Check for pending alternative booking confirmations ──
-  // If clinic suggested an alternative time via Telegram and patient replies YES on WhatsApp
+  // If clinic suggested an alternative time via Telegram and patient replies on WhatsApp
   const pendingAlt = await checkPendingAlternative(phone);
-  if (pendingAlt && isConfirmation(message)) {
-    const { handlePatientConfirmAlternative } = require('../telegram/booking-notifications');
-    const result = await handlePatientConfirmAlternative(pendingAlt.id);
-    if (result.success) {
+  if (pendingAlt) {
+    // 0a — Patient confirms with YES / agreement phrase
+    if (isConfirmation(message) || isAgreement(message)) {
+      const { handlePatientConfirmAlternative } = require('../telegram/booking-notifications');
+      const result = await handlePatientConfirmAlternative(pendingAlt.id);
+      if (result.success) {
+        return {
+          text: `✅ Great! Your appointment has been confirmed with the new time. We look forward to seeing you then!`,
+          source: 'hardcoded',
+          cost_saved: 1,
+          latency_ms: Date.now() - startTime
+        };
+      }
+      // Confirmation failed — let patient know and keep the pending state
       return {
-        text: `✅ Great! Your appointment has been confirmed with the new time. We look forward to seeing you then!`,
+        text: `❌ Sorry, I couldn't confirm that alternative time. ${result.error || 'Please reply with a different date and time, or call us directly.'}`,
         source: 'hardcoded',
         cost_saved: 1,
         latency_ms: Date.now() - startTime
       };
     }
-    // Confirmation failed — let patient know and keep the pending state
-    return {
-      text: `❌ Sorry, I couldn't confirm that alternative time. ${result.error || 'Please reply with a different date and time, or call us directly.'}`,
-      source: 'hardcoded',
-      cost_saved: 1,
-      latency_ms: Date.now() - startTime
-    };
+
+    // 0b — Patient counters with a different time (e.g., "How about 3pm?")
+    const fields = extractBookingFields(message, clinicConfig?.config?.services || []);
+    if (fields.date || fields.time) {
+      const { handlePatientCounterProposal } = require('../telegram/booking-notifications');
+      const result = await handlePatientCounterProposal(pendingAlt.id, message, fields);
+      if (result.success) {
+        return {
+          text: result.patientMessage || `✍️ I've sent your suggestion (${result.timeText}) to the clinic. We'll let you know once they confirm!`,
+          source: 'hardcoded',
+          cost_saved: 1,
+          latency_ms: Date.now() - startTime
+        };
+      }
+      return {
+        text: `❌ Sorry, I couldn't send your suggestion. ${result.error || 'Please try again or call us directly.'}`,
+        source: 'hardcoded',
+        cost_saved: 1,
+        latency_ms: Date.now() - startTime
+      };
+    }
   }
   
   // ── STEP 1: Check conversation state ────────────────────────────
