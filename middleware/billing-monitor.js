@@ -40,17 +40,13 @@ function formatLocalDate(date) {
 }
 
 /**
- * Add one month to a date, keeping the billing day consistent.
- * If the target month doesn't have enough days, clamps to the last day.
+ * Add one calendar month to a date.
+ * If the target month doesn't have enough days, JS auto-clamps to the last day.
+ * This gives clinics a full month of coverage from their last paid date,
+ * regardless of when in the month they pay.
  */
-function addOneMonth(date, billingDay) {
-  const next = new Date(date.getFullYear(), date.getMonth() + 1, billingDay);
-  // If the target month has fewer days than billingDay, JS rolls over.
-  // Clamp back to the last day of the target month.
-  if (next.getDate() !== billingDay) {
-    next.setDate(0);
-  }
-  return next;
+function addOneMonth(date) {
+  return new Date(date.getFullYear(), date.getMonth() + 1, date.getDate());
 }
 
 /**
@@ -76,7 +72,7 @@ async function getBillingStatus(clientId) {
 
   if (lastPaid) {
     // Subscription model: nextDue = lastPaid + 1 month
-    nextDue = addOneMonth(lastPaid, billingDay);
+    nextDue = addOneMonth(lastPaid);
     daysUntilDue = Math.ceil((nextDue - now) / (1000 * 60 * 60 * 24));
 
     if (daysUntilDue < 0) {
@@ -124,7 +120,7 @@ async function checkAllClinics() {
 
     if (lastPaid) {
       // Subscription model: nextDue = lastPaid + 1 month
-      nextDue = addOneMonth(lastPaid, billingDay);
+      nextDue = addOneMonth(lastPaid);
       daysUntilDue = Math.ceil((nextDue - now) / (1000 * 60 * 60 * 24));
 
       if (daysUntilDue < 0) {
@@ -197,19 +193,15 @@ async function recordPayment(clientId, amount, method, reference, billingPeriod,
       .single();
     if (fetchErr) throw fetchErr;
 
-    const billingDay = client?.billing_day || 1;
     let newLastPaidDate;
 
     if (client?.last_paid_date) {
-      // Extend subscription by 1 month from current period end
-      const currentPeriodStart = parseLocalDate(client.last_paid_date);
-      newLastPaidDate = addOneMonth(currentPeriodStart, billingDay);
+      // Extend subscription by 1 month from current last paid date
+      const currentLastPaid = parseLocalDate(client.last_paid_date);
+      newLastPaidDate = addOneMonth(currentLastPaid);
     } else {
-      // First payment — set period start based on billingPeriod
-      const periodStart = billingPeriod
-        ? `${billingPeriod}-${String(billingDay).padStart(2, '0')}`
-        : formatLocalDate(new Date());
-      newLastPaidDate = new Date(periodStart);
+      // First payment — start from today so the clinic gets a full month
+      newLastPaidDate = new Date();
     }
 
     const { error: updErr } = await supabase
