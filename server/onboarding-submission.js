@@ -27,7 +27,7 @@ if (!ONBOARDING_API_KEY) {
 // Rate limiter: simple in-memory map (resets on server restart)
 const rateLimiter = new Map();
 const RATE_LIMIT_WINDOW_MS = 60 * 1000; // 60 seconds
-const MAX_REQUESTS_PER_WINDOW = 1;
+const MAX_REQUESTS_PER_WINDOW = 5; // 5 submissions per minute per IP (production-friendly)
 
 // ─── VALIDATION ──────────────────────────────────────────────────
 
@@ -96,7 +96,7 @@ function isRateLimited(ip) {
 
 // ─── TELEGRAM NOTIFICATION ───────────────────────────────────────
 
-async function sendTelegramNotification(data) {
+async function sendTelegramNotification(data, submissionId = null) {
   if (!TELEGRAM_BOT_TOKEN || !ADMIN_CHAT_ID) {
     console.error('[ONBOARDING] Telegram not configured');
     return;
@@ -114,9 +114,20 @@ async function sendTelegramNotification(data) {
     `👤 ${escapeMarkdown(data.contactName || '—')} (${escapeMarkdown(data.contactRole || '—')})`,
     `💎 ${planLabel}`,
     `💉 ${treatmentCount} treatments`,
-    '',
-    `Review: https://supabase.com/dashboard/project/_/editor` // Deep link to Supabase
+    submissionId ? `\n🆔 Submission #\`${submissionId}\`` : '',
   ].join('\n');
+
+  const inlineKeyboard = submissionId ? {
+    inline_keyboard: [
+      [
+        { text: '✅ Approve', callback_data: `onboarding_approve:${submissionId}` },
+        { text: '❌ Reject', callback_data: `onboarding_reject:${submissionId}` }
+      ],
+      [
+        { text: '📋 View All Pending', callback_data: 'pendingonboarding' }
+      ]
+    ]
+  } : undefined;
 
   try {
     await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
@@ -126,6 +137,7 @@ async function sendTelegramNotification(data) {
         chat_id: ADMIN_CHAT_ID,
         text: message,
         parse_mode: 'Markdown',
+        reply_markup: inlineKeyboard,
       }),
     });
     console.log('[ONBOARDING] Telegram notification sent');
@@ -168,7 +180,6 @@ async function storeInSupabase(data) {
     booking_waitlist_enabled: data.waitlist,
     booking_max_advance_days: parseInt(data.maxAdvance) || 30,
     booking_min_notice_hours: parseInt(data.minNotice) || 2,
-    booking_require_phone: data.requirePhone,
     booking_allow_same_day: data.sameDay,
     booking_reminder_24h: data.rem24h,
     booking_reminder_1h: data.rem1h,
@@ -210,6 +221,10 @@ async function handleOnboardingSubmission(req, res) {
 
   console.log(`[ONBOARDING] ${req.method} ${url.pathname} from ${req.headers['x-forwarded-for'] || 'unknown'}`);
 
+  // Get client IP early for logging and rate limiting
+  const clientIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || 
+                   req.connection?.remoteAddress || 'unknown';
+
   try {
     // 1. API Key validation (MANDATORY — no key = reject all)
     const apiKey = req.headers['x-api-key'];
@@ -220,9 +235,7 @@ async function handleOnboardingSubmission(req, res) {
       return true;
     }
 
-    // 2. Rate limiting by IP
-    const clientIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || 
-                     req.connection?.remoteAddress || 'unknown';
+    // 2. Rate limiting by IP (5 per 60 seconds — production friendly)
     if (isRateLimited(clientIp)) {
       res.writeHead(429, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ success: false, error: 'Too many submissions. Please wait 60 seconds.' }));
@@ -276,8 +289,8 @@ async function handleOnboardingSubmission(req, res) {
     // 7. Store in Supabase
     const stored = await storeInSupabase(data);
 
-    // 8. Send Telegram notification
-    await sendTelegramNotification(data);
+    // 8. Send Telegram notification (with inline approve/reject buttons)
+    await sendTelegramNotification(data, stored.id);
 
     // 9. Return success
     res.writeHead(200, { 'Content-Type': 'application/json' });

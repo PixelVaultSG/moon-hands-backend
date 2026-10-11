@@ -172,6 +172,7 @@ async function adminMainMenu(ctx, edit = false) {
     [
       Markup.button.callback('💰 Billing', 'menu_billing'),
       Markup.button.callback('📈 Usage', 'menu_usage'),
+      Markup.button.callback('🆕 Onboarding', 'menu_onboarding'),
     ],
     [Markup.button.callback('❓ Full Command List', 'menu_help')],
   ];
@@ -406,6 +407,12 @@ bot.action('menu_help', safeHandler('menu_help', async (ctx) => {
   await commands.handleHelp(ctx);
 }));
 
+bot.action('menu_onboarding', safeHandler('menu_onboarding', async (ctx) => {
+  await ctx.answerCbQuery('Loading onboarding...');
+  const { handlePendingOnboarding } = require('./commands/onboarding-approvals');
+  await handlePendingOnboarding(ctx);
+}));
+
 // Service management callbacks — these need slug + params, so show instruction
 // ─── CLINIC-FIRST ACTION FLOW ────────────────────────────────────
 // Every admin action (Add Service, Update Price, Hours, FAQ, Voice,
@@ -570,6 +577,45 @@ bot.action(/^reject_(.+)$/, safeHandler('reject_btn', async (ctx) => {
   }
 }));
 
+// ─── ONBOARDING APPROVAL INLINE BUTTONS ──────────────────────────
+// Approve/Reject buttons from onboarding notification messages
+
+bot.action(/^onboarding_approve:(\d+)$/, safeHandler('onboarding_approve_btn', async (ctx) => {
+  const submissionId = ctx.match[1];
+  console.log(`[TELEGRAM] Onboarding approve button clicked for submission ${submissionId}`);
+  
+  if (!adminOnly(ctx)) return;
+  
+  const { handleApproveClinic } = require('./commands/onboarding-approvals');
+  // Mock the ctx.message.text to look like /approveclinic <id>
+  ctx.message = { ...ctx.message, text: `/approveclinic ${submissionId}` };
+  await handleApproveClinic(ctx);
+  
+  await ctx.answerCbQuery('✅ Approved');
+  await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
+}));
+
+bot.action(/^onboarding_reject:(\d+)$/, safeHandler('onboarding_reject_btn', async (ctx) => {
+  const submissionId = ctx.match[1];
+  console.log(`[TELEGRAM] Onboarding reject button clicked for submission ${submissionId}`);
+  
+  if (!adminOnly(ctx)) return;
+  
+  const { handleRejectClinic } = require('./commands/onboarding-approvals');
+  ctx.message = { ...ctx.message, text: `/rejectclinic ${submissionId}` };
+  await handleRejectClinic(ctx);
+  
+  await ctx.answerCbQuery('❌ Rejected');
+  await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
+}));
+
+bot.action('pendingonboarding', safeHandler('pendingonboarding_btn', async (ctx) => {
+  if (!adminOnly(ctx)) return;
+  await ctx.answerCbQuery('Loading...');
+  const { handlePendingOnboarding } = require('./commands/onboarding-approvals');
+  await handlePendingOnboarding(ctx);
+}));
+
 // ─── COMMAND HANDLER WRAPPER ─────────────────────────────────────
 // ALL async command handlers wrapped with try/catch to prevent
 // unhandled promise rejections from crashing the server.
@@ -634,6 +680,16 @@ bot.command('security', adminCmd('/security', commands.handleSecurity));
 bot.command('threats', adminCmd('/threats', commands.handleThreats));
 bot.command('authlog', adminCmd('/authlog', commands.handleAuthLog));
 bot.command('debug', adminCmd('/debug', commands.handleDebug));
+
+// ─── ONBOARDING APPROVAL COMMANDS ────────────────────────────────
+// Clinic submits form → onboarding_submissions (status='pending')
+// Admin reviews → /pendingonboarding, /approveclinic, /rejectclinic
+
+const onboardingApprovals = require('./commands/onboarding-approvals');
+
+bot.command('pendingonboarding', adminCmd('/pendingonboarding', onboardingApprovals.handlePendingOnboarding));
+bot.command('approveclinic', adminCmd('/approveclinic', onboardingApprovals.handleApproveClinic));
+bot.command('rejectclinic', adminCmd('/rejectclinic', onboardingApprovals.handleRejectClinic));
 
 // ─── ADMIN: /requests — list pending change requests ─────────────
 bot.command('requests', adminCmd('/requests', async (ctx) => {
