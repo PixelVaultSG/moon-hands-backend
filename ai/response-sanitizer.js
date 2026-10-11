@@ -116,6 +116,34 @@ const FORBIDDEN_PATTERNS = [
       return '';
     },
   },
+  // MEDICAL ADVICE — ABSOLUTE RED LINE
+  // If the AI gives diagnosis, treatment recommendations, clinical opinions,
+  // suitability assessments, or discusses risks/side effects — replace entirely.
+  {
+    patterns: [
+      // Direct medical advice patterns
+      /(?:it['']?s\s+)?(?:safe|not\s+safe|recommended|not\s+recommended|suitable|not\s+suitable)\s+(?:for\s+you|for\s+your\s+skin|if\s+you['']?re\s+pregnant|during\s+pregnancy|while\s+breastfeeding)/gi,
+      /(?:you\s+(?:should|can|could|may|might|will))\s+(?:try|consider|use|get|do|avoid)\s+(?:botox|filler|laser|hifu|rejuran|chemical\s+peel|thermage)/gi,
+      /(?:treatment|procedure)\s+(?:is|will\s+be)\s+(?:effective|safe|risky|dangerous|best|ideal|perfect)\s+(?:for\s+your|for\s+you|given\s+your)/gi,
+      /(?:side\s+effects|risk|downtime|recovery|healing|result|outcome)\s+(?:include|are|may\s+be|typically|usually|generally|expected)/gi,
+      /(?:i\s+(?:recommend|suggest|advise))\s+(?:that\s+you|getting|trying|doing|using)/gi,
+      /(?:for\s+your\s+(?:acne|scars|pigmentation|wrinkles|aging|skin\s+type|condition))\s*,?\s*(?:i\s+(?:recommend|suggest)|the\s+best\s+(?:option|treatment)|you\s+should)/gi,
+      /(?:if\s+you\s+have\s+(?:sensitive\s+skin|acne|rosacea|eczema|allergies))\s*,?\s*(?:you\s+(?:should|can|may)|we\s+recommend|it['']?s\s+best)/gi,
+      /(?:before|after)\s+(?:botox|filler|laser|hifu|treatment)\s*,?\s*(?:you\s+(?:should|must|need\s+to)|avoid|stop|refrain\s+from)/gi,
+      // Weak hedging that still gives medical guidance
+      /(?:i\s+(?:think|believe|feel))\s+(?:it|this|that)\s+(?:would\s+be|is|might\s+be)\s+(?:good|safe|fine|okay|suitable)\s+(?:for\s+you|given\s+your)/gi,
+    ],
+    replacement: (ctx) => {
+      // Medical advice detected — replace with safe redirect
+      const clinicName = ctx.clinicName || 'our clinic';
+      const options = [
+        `I'm not a medical professional, so I can't give clinical advice. The best next step is to book a consultation with our doctor, who can assess your needs properly. Would you like me to arrange that?`,
+        `I'd love to help, but I'm not qualified to give medical advice. Would you like the clinic to give you a call? Our doctor can discuss this with you directly.`,
+        `For clinical questions like this, I'd recommend speaking directly with our doctor. Shall I book a consultation for you, or would you prefer a callback?`,
+      ];
+      return options[Math.floor(Math.random() * options.length)];
+    },
+  },
   // Multiple newlines (excessive spacing)
   {
     patterns: [
