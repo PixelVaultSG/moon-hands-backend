@@ -32,6 +32,12 @@ const memory = require('../memory'); // Episodic memory — loads relevant proje
 const { classifyMessage, executeExperts } = require('./expert-system/patient-experts');
 const { matchIntents } = require('./intent-matcher');
 const { getFunctionDefinitions, executeFunction } = require('./expert-system/functions');
+const { detectRedFlag, PATH_A_RESPONSE } = require('./red-flag-detector');
+const { classifyMedicalSafety } = require('./medical-classifier');
+const convState = require('./conversation-state');
+const { sendClinicNotification } = require('../telegram/multi-clinic-sender');
+const { createCallbackRequest } = require('../server/callback-requests');
+const { buildQuickReplyButtons } = require('./whatsapp-interactive');
 
 // ─── INITIALIZATION ────────────────────────────────────────────────
 
@@ -159,6 +165,7 @@ async function loadClientConfig(clientId) {
       id: data.id,
       name: data.name,
       slug: data.slug,
+      industry: data.industry || 'aesthetic',
       googleCalendarId: data.google_calendar_id,
       // Flattened properties for direct access
       services,
@@ -743,13 +750,122 @@ function getNextBusinessDay(dateStr) {
 
 // ─── MAIN BOT INTERFACE ───────────────────────────────────────────
 
+// ─── MADS: DOCTOR CALLBACK CHOICE HANDLER (Handoff §19) ─────────────────
+// Patient was offered a doctor callback (MADS Layer 2 fired) and tapped a button.
+async function handleCallbackChoice(interactiveId, clientConfig, patientPhone, messageText, startTime) {
+  const pending = convState.getState(patientPhone);
+  const topic = pending.data?.callbackTopic || messageText || 'Medical question';
+
+  if (interactiveId === 'callback_no') {
+    convState.resetIdle(patientPhone);
+    const text = "No problem at all. Would you like me to book a consultation instead? Our doctor can assess you in person.";
+    const interactive = buildQuickReplyButtons({
+      body: text,
+      buttons: [
+        { id: 'book', title: 'Book Consultation' },
+        { id: 'back_menu', title: 'Back to menu' },
+      ]
+    });
+    await logConversation(clientConfig.id, 'whatsapp', patientPhone, null, messageText, text, 'mads:callback_declined');
+    return { text, function_called: null, model: 'mads-offer', whatsappInteractive: interactive, latency_ms: Date.now() - startTime };
+  }
+
+  // callback_yes — create the request + alert the clinic (Handoff §6.1 IF YES)
+  try {
+    const row = await createCallbackRequest({
+      clinicId: clientConfig.id,
+      patientPhone,
+      patientName: convState.getKnownName(patientPhone),
+      topic
+    });
+    convState.resetIdle(patientPhone);
+    await sendClinicNotification(clientConfig.id,
+      `📞 *Callback request*\n\nPatient: +${String(patientPhone).replace(/\D/g, '')}\nTopic: ${String(topic).slice(0, 200)}\n\nReply \`/callbackdone ${row.id.slice(0, 8)}\` when complete.`
+    ).catch(e => console.error('[MADS] callback alert failed:', e.message));
+    const text = "Thank you! Our doctor will call you shortly. Is there anything else I can help with in the meantime?";
+    await logConversation(clientConfig.id, 'whatsapp', patientPhone, null, messageText, text, 'mads:callback_accepted');
+    return { text, function_called: 'create_callback_request', model: 'mads-callback', latency_ms: Date.now() - startTime };
+  } catch (err) {
+    console.error('[MADS] callback creation failed:', err.message);
+    return {
+      text: "I've noted your request for a doctor's call. If our team doesn't reach out shortly, please call the clinic directly.",
+      function_called: null, model: 'mads-callback', error: err.message, latency_ms: Date.now() - startTime
+    };
+  }
+}
+
+// ─── MADS GATE (Handoff §17–18) ───────────────────────────────────────────
+// Returns a response object if MADS intercepted the message, else null.
+async function madsGate(messageText, clientConfig, patientPhone, startTime) {
+  const startLabel = Date.now();
+
+  // Pre-layer: regex red-flag detector — free, instant, always first
+  const redFlag = detectRedFlag(messageText);
+  if (redFlag.isRedFlag) {
+    console.log(`[MADS] RED FLAG (regex) for phone=...${String(patientPhone || '').slice(-4)}: ${redFlag.matchedPattern}`);
+    await sendClinicNotification(clientConfig.id,
+      `🚨 *Red flag detected*\n\nPatient: +${String(patientPhone).replace(/\D/g, '')}\nMessage: "${String(messageText).slice(0, 200)}"\n\nNo booking offered. Patient advised to visit A&E/GP.`
+    ).catch(e => console.error('[MADS] red-flag alert failed:', e.message));
+    await logConversation(clientConfig.id, 'whatsapp', patientPhone, null, messageText, PATH_A_RESPONSE, 'mads:red_flag');
+    return { text: PATH_A_RESPONSE, function_called: null, model: 'mads-red-flag', latency_ms: Date.now() - startLabel };
+  }
+
+  // Layer 2: LLM classifier
+  const classification = await classifyMedicalSafety(messageText);
+  console.log(`[MADS] Classification: ${classification.category} (source=${classification.source})`);
+
+  if (classification.isRedFlag) {
+    await sendClinicNotification(clientConfig.id,
+      `🚨 *Red flag detected (classifier)*\n\nPatient: +${String(patientPhone).replace(/\D/g, '')}\nMessage: "${String(messageText).slice(0, 200)}"\n\nNo booking offered. Patient advised to visit A&E/GP.`
+    ).catch(e => console.error('[MADS] red-flag alert failed:', e.message));
+    await logConversation(clientConfig.id, 'whatsapp', patientPhone, null, messageText, PATH_A_RESPONSE, 'mads:red_flag_llm');
+    return { text: PATH_A_RESPONSE, function_called: null, model: 'mads-red-flag', latency_ms: Date.now() - startLabel };
+  }
+
+  if (classification.isMedicalAdvice) {
+    convState.setState(patientPhone, 'callback_pending', { callbackTopic: String(messageText).slice(0, 500) });
+    const offerText = "I'm not a medical professional, so I can't give clinical advice. Would you like our doctor to give you a call to discuss this?";
+    const interactive = buildQuickReplyButtons({
+      body: offerText,
+      buttons: [
+        { id: 'callback_yes', title: 'Yes, please call me' },
+        { id: 'callback_no', title: 'No, thanks' },
+      ]
+    });
+    await logConversation(clientConfig.id, 'whatsapp', patientPhone, null, messageText, offerText, 'mads:medical_advice_offer');
+    return { text: offerText, function_called: null, model: 'mads-offer', whatsappInteractive: interactive, latency_ms: Date.now() - startLabel };
+  }
+
+  return null; // cleared — proceed with normal flow
+}
+
 async function processMessage(messageText, clientId, conversationHistory = [], patientPhone = null, interactiveId = null) {
   const startTime = Date.now();
   try {
     console.log(`[BOT_ENGINE] === START === clientId=${clientId}, phone=${patientPhone}, interactiveId=${interactiveId}, msg="${messageText?.substring(0,60)}"`);
     
     const clientConfig = await loadClientConfig(clientId);
-    console.log(`[BOT_ENGINE] Config loaded: name=${clientConfig?.name}, services=${clientConfig?.services?.length}, config.services=${clientConfig?.config?.services?.length}`);
+    console.log(`[BOT_ENGINE] Config loaded: name=${clientConfig?.name}, industry=${clientConfig?.industry}, services=${clientConfig?.services?.length}, config.services=${clientConfig?.config?.services?.length}`);
+
+    // ─── MADS GATE — before ALL routing (Handoff §17–18) ────────────────
+    // A red flag or medical-advice request must never reach booking logic,
+    // the smart router, or the LLM response path.
+    // Enabled for chiropractic clinics, or any clinic with the safeguard on.
+    // Aesthetic clinics with no flags set: zero behaviour change.
+    const madsCfg = clientConfig.config?.medical_safeguard || {};
+    const madsEnabled = clientConfig.industry === 'chiropractic'
+      || madsCfg.strict_mode === true
+      || clientConfig.config?.features?.red_flag_triage === true;
+
+    // Callback-offer button taps are part of the MADS flow — handle first.
+    if (interactiveId === 'callback_yes' || interactiveId === 'callback_no') {
+      return await handleCallbackChoice(interactiveId, clientConfig, patientPhone, messageText, startTime);
+    }
+
+    if (madsEnabled && !interactiveId && messageText) {
+      const madsResult = await madsGate(messageText, clientConfig, patientPhone, startTime);
+      if (madsResult) return madsResult;
+    }
     
     // ─── INTERACTIVE ID ROUTING ─────────────────────────────────────
     // If user tapped a button/list item, map the ID directly to an intent
@@ -1127,4 +1243,8 @@ function formatDateNice(dateStr) {
 module.exports = {
   processMessage,
   logConversation,
+  // Exported for testing (MADS gate + callback flow are exercised in
+  // scripts/mads-test.js without touching the live OpenAI budget)
+  madsGate,
+  handleCallbackChoice,
 };

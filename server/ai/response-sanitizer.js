@@ -63,6 +63,21 @@ const FORBIDDEN_PATTERNS = [
   { regex: /\n{3,}/g, replace: '\n\n' },
 ];
 
+// ── MEDICAL ADVICE CATCH-ALL (MADS Layer 3 — this is the live path) ──────
+// If ANY of these appear in an AI response, the whole response is clinical
+// advice — do not salvage it, replace it entirely. Industry-neutral.
+const MEDICAL_ADVICE_TEST = [
+  /(?:safe|not safe|recommended|suitable|not suitable) for (?:you|your skin|your condition|pregnant)/i,
+  /you (?:should|can|could|may|might|will) (?:try|consider|get|do|avoid) (?:botox|filler|laser|hifu|rejuran|an? (?:spinal )?adjustment|adjustments|manipulation|decompression|dry needling|shockwave|chiropractic)/i,
+  /(?:side effects|risks?|downtime|recovery|results?) (?:include|are|may be|typically|usually|generally|expected)/i,
+  /i (?:recommend|suggest|advise) (?:that you|getting|trying|doing|using)/i,
+  /for your (?:acne|scars|pigmentation|wrinkles|skin type|condition|back pain|neck pain|sciatica|slipped disc|herniated|scoliosis|posture|whiplash|migraine),? (?:i recommend|the best|you should)/i,
+  /(?:this|that|it|adjustment|treatment) (?:will|would|should|can) (?:help|cure|fix|heal|relieve|resolve) your/i,
+];
+
+const MEDICAL_SAFE_REDIRECT =
+  "I'm not a medical professional, so I can't give clinical advice. The best next step is to book a consultation with our doctor, who can assess your needs properly. Would you like me to arrange that?";
+
 // ─── SMART RESPONSES (when sanitization empties the message) ─────
 
 const FALLBACK_RESPONSES = {
@@ -78,7 +93,14 @@ const FALLBACK_RESPONSES = {
 
 function sanitizeResponse(text, context = {}) {
   if (!text || typeof text !== 'string') return text;
-  
+
+  // MADS Layer 3: clinical advice in the response = replace entire message.
+  // Last line of defense — Layers 1 (prompt) and 2 (classifier) come first.
+  if (MEDICAL_ADVICE_TEST.some(p => p.test(text))) {
+    console.warn('[SANITIZER] MADS Layer 3 caught clinical advice — replaced with safe redirect');
+    return MEDICAL_SAFE_REDIRECT;
+  }
+
   let cleaned = text.trim();
   
   // Apply all forbidden patterns
@@ -110,4 +132,4 @@ function sanitizeResponse(text, context = {}) {
 
 // ─── EXPORTS ─────────────────────────────────────────────────────
 
-module.exports = { sanitizeResponse, FORBIDDEN_PATTERNS, FALLBACK_RESPONSES };
+module.exports = { sanitizeResponse, FORBIDDEN_PATTERNS, FALLBACK_RESPONSES, MEDICAL_ADVICE_TEST, MEDICAL_SAFE_REDIRECT };

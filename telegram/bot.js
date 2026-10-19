@@ -647,7 +647,9 @@ bot.help(safeHandler('/help', async (ctx) => {
     '*Daily ops:*\n' +
     '`/patientpause <phone>` — Pause bot for a patient\n' +
     '`/patientresume <phone>` — Resume bot\n' +
-    '`/patientstatus` — List paused conversations\n\n' +
+    '`/patientstatus` — List paused conversations\n' +
+    '`/callbacks` — Pending doctor callbacks\n' +
+    '`/callbackdone <id>` — Mark callback complete\n\n' +
     '*Request changes (Moon Hands approves before going live):*\n' +
     '`/req_addservice "Name" $price durationMin`\n' +
     '`/req_updateprice "Name" $newPrice`\n' +
@@ -864,6 +866,20 @@ bot.command('takeover', safeHandler('/takeover', async (ctx) => {
   const text = ctx.message.text;
   const chatId = ctx.chat.id;
   await handleTakeoverCommand(bot.telegram, chatId, text, null);
+}));
+
+// ─── DOCTOR CALLBACK COMMANDS (Handoff §19.2) ────────────────────
+// Clinic staff: see/complete their own clinic's callbacks.
+// Moon Hands admin: sees all clinics. Scoping enforced in callbacks.js.
+
+const { handleCallbacks, handleCallbackDone } = require('./commands/callbacks');
+
+bot.command('callbacks', safeHandler('/callbacks', async (ctx) => {
+  await handleCallbacks(ctx);
+}));
+
+bot.command('callbackdone', safeHandler('/callbackdone', async (ctx) => {
+  await handleCallbackDone(ctx);
 }));
 
 // ─── QUICK MENU KEYBOARD ─────────────────────────────────────────

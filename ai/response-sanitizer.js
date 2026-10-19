@@ -130,6 +130,12 @@ const FORBIDDEN_PATTERNS = [
       /(?:for\s+your\s+(?:acne|scars|pigmentation|wrinkles|aging|skin\s+type|condition))\s*,?\s*(?:i\s+(?:recommend|suggest)|the\s+best\s+(?:option|treatment)|you\s+should)/gi,
       /(?:if\s+you\s+have\s+(?:sensitive\s+skin|acne|rosacea|eczema|allergies))\s*,?\s*(?:you\s+(?:should|can|may)|we\s+recommend|it['']?s\s+best)/gi,
       /(?:before|after)\s+(?:botox|filler|laser|hifu|treatment)\s*,?\s*(?:you\s+(?:should|must|need\s+to)|avoid|stop|refrain\s+from)/gi,
+      // ── Chiropractic-specific medical advice (chiro expansion) ──
+      /(?:you\s+(?:should|can|could|may|might|will))\s+(?:try|consider|get|do|avoid)\s+(?:a\s+)?(?:spinal\s+)?(?:adjustment|manipulation|decompression|dry\s+needling|shockwave|chiropractic\s+care)/gi,
+      /(?:adjustment|manipulation|decompression|dry\s+needling|shockwave|chiropractic)\s+(?:is|will\s+be|would\s+be)\s+(?:effective|safe|risky|dangerous|best|ideal|perfect|good)\s+(?:for\s+your|for\s+you|given\s+your)/gi,
+      /(?:for\s+your\s+(?:back\s+pain|neck\s+pain|sciatica|slipped\s+disc|herniated\s+disc|scoliosis|posture|whiplash|migraine|headache|joint\s+pain))\s*,?\s*(?:i\s+(?:recommend|suggest)|the\s+best\s+(?:option|treatment)|you\s+should)/gi,
+      /(?:this|that|it|adjustment|treatment)\s+(?:will|would|should|can)\s+(?:help|cure|fix|heal|relieve|resolve)\s+(?:your|the)\s+(?:pain|sciatica|disc|back|neck|posture|migraine|headache)/gi,
+      /(?:how\s+many\s+sessions|how\s+long)\s+(?:until|before|to)\s+(?:you|u)\s+(?:see|feel|get)\s+(?:results|better|relief)/gi,
       // Weak hedging that still gives medical guidance
       /(?:i\s+(?:think|believe|feel))\s+(?:it|this|that)\s+(?:would\s+be|is|might\s+be)\s+(?:good|safe|fine|okay|suitable)\s+(?:for\s+you|given\s+your)/gi,
     ],

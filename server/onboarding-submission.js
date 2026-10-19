@@ -103,12 +103,14 @@ async function sendTelegramNotification(data, submissionId = null) {
   }
 
   const planLabel = data.selectedPlan === 'premium' ? 'Premium (S$547/mo)' : 'Basic (S$347/mo)';
+  const industryLabel = data.industry === 'chiropractic' ? '🦴 Chiropractic' : '✨ Aesthetic';
   const treatmentCount = data.treatments?.length || 0;
 
   const message = [
     '🏥 *NEW CLINIC ONBOARDING*',
     '',
     `*${escapeMarkdown(data.clinicName || 'Unknown')}*`,
+    industryLabel,
     `📧 ${escapeMarkdown(data.clinicEmail || '—')}`,
     `📱 ${escapeMarkdown(data.whatsapp || '—')}`,
     `👤 ${escapeMarkdown(data.contactName || '—')} (${escapeMarkdown(data.contactRole || '—')})`,
@@ -185,6 +187,8 @@ async function storeInSupabase(data) {
     booking_reminder_1h: data.rem1h,
     booking_followup_48h: data.follow48h,
     faqs: JSON.stringify(data.faqs || []),
+    // Chiro expansion: whitelisted industry field (defaults to aesthetic)
+    industry: data.industry === 'chiropractic' ? 'chiropractic' : 'aesthetic',
     status: 'pending',
   };
 

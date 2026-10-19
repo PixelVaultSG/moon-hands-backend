@@ -131,6 +131,7 @@ async function handleApproveClinic(ctx) {
         slug: slug,
         status: 'active',
         plan: plan,
+        industry: submission.industry === 'chiropractic' ? 'chiropractic' : 'aesthetic',
         monthly_amount: monthlyAmount,
         whatsapp_number: submission.whatsapp_number || submission.clinic_phone,
         google_calendar_id: null,
@@ -188,10 +189,32 @@ async function handleApproveClinic(ctx) {
     }
 
     // 7. Build config JSONB
+    const isChiro = submission.industry === 'chiropractic';
     const config = {
       agent_name: submission.preferred_agent_name || 'Sophia',
       tone: submission.preferred_tone || 'warm and professional',
       greeting: submission.preferred_greeting || `Hello! Welcome to ${submission.clinic_name}.`,
+      // Chiro expansion: industry + feature flags (Handoff §3.2.4 / §20)
+      industry: isChiro ? 'chiropractic' : 'aesthetic',
+      features: isChiro ? {
+        treatment_plan_tracking: true,
+        insurance_faq: true,
+        doctor_callback: true,
+        patient_history_lookup: true,
+        red_flag_triage: true,
+      } : {
+        treatment_plan_tracking: false,
+        insurance_faq: false,
+        doctor_callback: false,
+        patient_history_lookup: false,
+        red_flag_triage: false,
+      },
+      // Chiro booking rules (Handoff §9.4): first visit = consultation,
+      // same-day for existing patients only, 1h notice for existing.
+      booking_require_consult_first: isChiro,
+      medical_safeguard: isChiro
+        ? { strict_mode: true, callback_enabled: true, er_redirect_for_red_flags: true }
+        : { strict_mode: false, callback_enabled: false, er_redirect_for_red_flags: false },
       phone: submission.clinic_phone || submission.whatsapp_number || '',
       whatsapp_number: submission.whatsapp_number || '',
       address: submission.clinic_address || '',
