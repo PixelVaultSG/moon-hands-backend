@@ -439,6 +439,12 @@ RULES:
 function formatHours(hours) {
   if (!hours) return 'Contact us for hours';
   if (typeof hours === 'string') return hours;
+  // Live data shape: array of {day, isOpen, open_time, close_time}
+  if (Array.isArray(hours)) {
+    return hours
+      .map(h => `${h.day}: ${h.isOpen === false ? 'Closed' : `${h.open_time}-${h.close_time}`}`)
+      .join(', ');
+  }
   if (typeof hours === 'object') {
     return Object.entries(hours).map(([d, t]) => `${d}: ${t}`).join(', ');
   }

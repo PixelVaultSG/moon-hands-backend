@@ -1406,8 +1406,10 @@ bot.catch((err, ctx) => {
 
 // ─── START ───────────────────────────────────────────────────────
 
-// Prevent 409 Conflict on Render redeploys: clear pending updates and handle errors gracefully
-const LAUNCH_RETRIES = 5;
+// Prevent 409 Conflict on Render redeploys: clear pending updates and handle errors gracefully.
+// Also retry transient network failures (DNS/socket blips at boot) — previously these killed
+// the bot permanently until a manual restart because only 409s were retried.
+const LAUNCH_RETRIES = 8;
 const RETRY_DELAY_MS = 3000;
 
 async function startBot(attempt = 1) {
@@ -1419,9 +1421,13 @@ async function startBot(attempt = 1) {
     console.log(`  Security: Rate limiting + Input sanitization + Injection detection ACTIVE`);
   } catch (err) {
     const is409 = err.response?.error_code === 409 || err.message?.includes('409');
-    if (is409 && attempt < LAUNCH_RETRIES) {
-      console.warn(`[TELEGRAM] 409 Conflict on attempt ${attempt}. Waiting ${RETRY_DELAY_MS}ms for old polling session to expire...`);
-      await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
+    // Network-level failures (no HTTP response object): DNS, socket reset, timeout at boot.
+    const isNetwork = !err.response;
+    if ((is409 || isNetwork) && attempt < LAUNCH_RETRIES) {
+      const waitMs = RETRY_DELAY_MS * attempt; // linear backoff: 3s, 6s, 9s...
+      const kind = is409 ? '409 Conflict' : 'Network error';
+      console.warn(`[TELEGRAM] ${kind} on attempt ${attempt}. Waiting ${waitMs}ms before retry...`);
+      await new Promise(r => setTimeout(r, waitMs));
       return startBot(attempt + 1);
     }
     console.error(`[TELEGRAM] Bot failed to start after ${attempt} attempts:`, err.message);

@@ -331,15 +331,20 @@ async function handleRejectClinic(ctx) {
       return ctx.reply(`❌ Pending submission #${submissionId} not found.`);
     }
 
-    await supabase
+    const { error: rejectErr } = await supabase
       .from('onboarding_submissions')
       .update({
         status: 'rejected',
-        rejected_at: new Date().toISOString(),
-        rejected_by: ctx.from.id,
-        rejection_reason: reason
+        reviewed_at: new Date().toISOString(),
+        reviewed_by: String(ctx.from.id),
+        admin_notes: `Rejected by Telegram admin ${ctx.from.id}: ${reason}`
       })
       .eq('id', submissionId);
+
+    if (rejectErr) {
+      console.error('[ONBOARDING_APPROVALS] Reject status update failed:', rejectErr.message);
+      return ctx.reply(`❌ Failed to update submission status: ${rejectErr.message}`);
+    }
 
     // Notify clinic contact
     try {
