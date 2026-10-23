@@ -41,6 +41,25 @@ function makeUniqueSlug(baseSlug, existingSlugs) {
   return `${baseSlug}-${i}`;
 }
 
+// ─── SUBMISSION RESOLVER ─────────────────────────────────────────
+// Submissions use UUIDs, but Telegram admins can't type 36-char IDs.
+// Resolve by short code (first 8+ chars of UUID, case-insensitive, optional #)
+// or full UUID. Prefix match against PENDING submissions only.
+
+async function resolveSubmission(ref) {
+  const clean = String(ref || '').replace(/^#/, '').trim().toLowerCase();
+  if (clean.length < 4) return { error: 'too_short' };
+  const { data: pending, error } = await supabase
+    .from('onboarding_submissions')
+    .select('*')
+    .eq('status', 'pending');
+  if (error) return { error: error.message };
+  const matches = (pending || []).filter(s => String(s.id).toLowerCase().startsWith(clean));
+  if (matches.length === 0) return { error: 'not_found' };
+  if (matches.length > 1) return { error: 'ambiguous', matches };
+  return { submission: matches[0] };
+}
+
 // ─── /PENDINGONBOARDING ──────────────────────────────────────────
 
 async function handlePendingOnboarding(ctx) {
@@ -65,14 +84,15 @@ async function handlePendingOnboarding(ctx) {
     for (const s of submissions) {
       const plan = s.selected_plan === 'premium' ? 'Premium (S$547/mo)' : 'Basic (S$347/mo)';
       const treatments = s.treatment_menu ? JSON.parse(s.treatment_menu).length : 0;
-      lines.push(`*#${s.id}* — ${escapeMarkdown(s.clinic_name)}`);
+      const shortCode = String(s.id).substring(0, 8);
+      lines.push(`*\`${shortCode}\`* — ${escapeMarkdown(s.clinic_name)}`);
       lines.push(`  📧 ${escapeMarkdown(s.clinic_email)}`);
       lines.push(`  📱 ${escapeMarkdown(s.whatsapp_number || s.clinic_phone || '—')}`);
       lines.push(`  👤 ${escapeMarkdown(s.contact_name)} (${escapeMarkdown(s.contact_role || '—')})`);
       lines.push(`  💎 ${plan}`);
       lines.push(`  💉 ${treatments} treatments`);
       lines.push(`  🕐 Submitted: ${new Date(s.created_at).toLocaleString('en-SG')}`);
-      lines.push(`  Actions: /approveclinic ${s.id}  |  /rejectclinic ${s.id}`);
+      lines.push(`  Actions: /approveclinic \`${shortCode}\`  |  /rejectclinic \`${shortCode}\``);
       lines.push('');
     }
 
@@ -91,26 +111,22 @@ async function handlePendingOnboarding(ctx) {
 async function handleApproveClinic(ctx) {
   const args = ctx.message.text.split(/\s+/).slice(1);
   if (args.length < 1) {
-    return ctx.reply('⚠️ Usage: /approveclinic <submission_id>\n\nExample: /approveclinic 42');
-  }
-
-  const submissionId = parseInt(args[0]);
-  if (isNaN(submissionId)) {
-    return ctx.reply('❌ Submission ID must be a number.');
+    return ctx.reply('⚠️ Usage: /approveclinic <short_code>\n\nExample: /approveclinic 8ab2e5b4\n\nGet the short code from /pendingonboarding');
   }
 
   try {
-    // 1. Fetch the submission
-    const { data: submission, error: fetchErr } = await supabase
-      .from('onboarding_submissions')
-      .select('*')
-      .eq('id', submissionId)
-      .eq('status', 'pending')
-      .single();
-
-    if (fetchErr || !submission) {
-      return ctx.reply(`❌ Pending submission #${submissionId} not found. Use /pendingonboarding to see pending submissions.`);
+    // 1. Resolve submission by short code or full UUID
+    const { submission, error: resolveErr, matches } = await resolveSubmission(args[0]);
+    if (resolveErr === 'not_found') {
+      return ctx.reply(`❌ Pending submission "${args[0]}" not found. Use /pendingonboarding to see pending submissions.`);
     }
+    if (resolveErr === 'ambiguous') {
+      return ctx.reply(`⚠️ "${args[0]}" matches ${matches.length} pending submissions — use a longer code.`);
+    }
+    if (resolveErr || !submission) {
+      return ctx.reply('⚠️ Unable to fetch submissions. Please try again.');
+    }
+    const submissionId = submission.id;
 
     // 2. Check for slug collision
     const { data: existingClients } = await supabase
@@ -309,27 +325,23 @@ async function handleApproveClinic(ctx) {
 async function handleRejectClinic(ctx) {
   const args = ctx.message.text.split(/\s+/).slice(1);
   if (args.length < 1) {
-    return ctx.reply('⚠️ Usage: /rejectclinic <submission_id> [reason]\n\nExample: /rejectclinic 42 Duplicate submission');
+    return ctx.reply('⚠️ Usage: /rejectclinic <short_code> [reason]\n\nExample: /rejectclinic 8ab2e5b4 Duplicate submission');
   }
 
-  const submissionId = parseInt(args[0]);
   const reason = args.slice(1).join(' ') || 'Not specified';
 
-  if (isNaN(submissionId)) {
-    return ctx.reply('❌ Submission ID must be a number.');
-  }
-
   try {
-    const { data: submission, error: fetchErr } = await supabase
-      .from('onboarding_submissions')
-      .select('*')
-      .eq('id', submissionId)
-      .eq('status', 'pending')
-      .single();
-
-    if (fetchErr || !submission) {
-      return ctx.reply(`❌ Pending submission #${submissionId} not found.`);
+    const { submission, error: resolveErr, matches } = await resolveSubmission(args[0]);
+    if (resolveErr === 'not_found') {
+      return ctx.reply(`❌ Pending submission "${args[0]}" not found.`);
     }
+    if (resolveErr === 'ambiguous') {
+      return ctx.reply(`⚠️ "${args[0]}" matches ${matches.length} pending submissions — use a longer code.`);
+    }
+    if (resolveErr || !submission) {
+      return ctx.reply('⚠️ Unable to fetch submissions. Please try again.');
+    }
+    const submissionId = submission.id;
 
     const { error: rejectErr } = await supabase
       .from('onboarding_submissions')
@@ -399,4 +411,5 @@ module.exports = {
   handlePendingOnboarding,
   handleApproveClinic,
   handleRejectClinic,
+  resolveSubmission,
 };

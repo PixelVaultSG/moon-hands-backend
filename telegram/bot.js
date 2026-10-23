@@ -580,7 +580,7 @@ bot.action(/^reject_(.+)$/, safeHandler('reject_btn', async (ctx) => {
 // ─── ONBOARDING APPROVAL INLINE BUTTONS ──────────────────────────
 // Approve/Reject buttons from onboarding notification messages
 
-bot.action(/^onboarding_approve:(\d+)$/, safeHandler('onboarding_approve_btn', async (ctx) => {
+bot.action(/^onboarding_approve:([0-9a-fA-F-]{4,36})$/, safeHandler('onboarding_approve_btn', async (ctx) => {
   const submissionId = ctx.match[1];
   console.log(`[TELEGRAM] Onboarding approve button clicked for submission ${submissionId}`);
   
@@ -595,7 +595,7 @@ bot.action(/^onboarding_approve:(\d+)$/, safeHandler('onboarding_approve_btn', a
   await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
 }));
 
-bot.action(/^onboarding_reject:(\d+)$/, safeHandler('onboarding_reject_btn', async (ctx) => {
+bot.action(/^onboarding_reject:([0-9a-fA-F-]{4,36})$/, safeHandler('onboarding_reject_btn', async (ctx) => {
   const submissionId = ctx.match[1];
   console.log(`[TELEGRAM] Onboarding reject button clicked for submission ${submissionId}`);
   
