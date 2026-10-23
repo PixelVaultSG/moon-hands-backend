@@ -114,13 +114,50 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  // ─── CHIRO EXPANSION APIS (Handoff §10.3) ────────────────────────────
+  // Doctor callbacks + patient history. Handlers self-authenticate via
+  // x-api-key; rate-limited per IP like the other API endpoints.
+  if ((url.pathname === '/api/callback-requests' || url.pathname === '/api/callback-requests/complete') && (req.method === 'GET' || req.method === 'POST')) {
+    if (isRateLimited('callback_requests', 30, 60 * 1000)) {
+      res.writeHead(429, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, message: 'Too many requests. Please wait a minute and try again.' }));
+      return;
+    }
+    try {
+      const { handleCallbackRequestsAPI } = require('./server/callback-requests');
+      await handleCallbackRequestsAPI(req, res, url);
+    } catch (err) {
+      console.error('[SERVER] Callback API error:', err.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'Callback handler error' }));
+    }
+    return;
+  }
+
+  if (url.pathname === '/api/patient-history' && (req.method === 'GET' || req.method === 'POST')) {
+    if (isRateLimited('patient_history', 30, 60 * 1000)) {
+      res.writeHead(429, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, message: 'Too many requests. Please wait a minute and try again.' }));
+      return;
+    }
+    try {
+      const { handlePatientHistoryAPI } = require('./server/patient-history');
+      await handlePatientHistoryAPI(req, res, url);
+    } catch (err) {
+      console.error('[SERVER] Patient history API error:', err.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'Patient history handler error' }));
+    }
+    return;
+  }
+
   // Health check — always available
   if (url.pathname === '/health' && req.method === 'GET') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
       status: 'ok',
       service: 'moon-hands',
-      version: '2.0.0',
+      version: '2.1.0',
       webhook: !!webhookHandler,
       telegram: telegramOk,
       uptime: process.uptime(),

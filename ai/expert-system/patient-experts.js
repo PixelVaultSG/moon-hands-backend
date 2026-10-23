@@ -100,7 +100,15 @@ function getClinicPersonality(clinicConfig) {
 
 function injectPersonality(basePrompt, clinicConfig, expertRole) {
   const p = getClinicPersonality(clinicConfig);
-  
+
+  // Industry-aware medical red line (Handoff §10.2): chiro clinics get
+  // chiro-specific examples and "chiropractor" wording; aesthetic unchanged.
+  const isChiro = clinicConfig.industry === 'chiropractic';
+  const clinicianTitle = isChiro ? 'chiropractor' : 'doctor';
+  const medicalExamples = isChiro
+    ? '"Will an adjustment fix my sciatica?", "Is chiropractic safe for osteoporosis?", "Which treatment is best for my back pain?", "Can I get adjusted while pregnant?", "How many sessions until I feel better?"'
+    : '"Is Botox safe for me?", "Will this work for my skin?", "What treatment do you recommend?", "Can I do laser if I\'m pregnant?", "What are the side effects?"';
+
   return `You are ${p.agentName}, the ${expertRole} for ${p.clinicName}.
 
 CLINIC PERSONALITY:
@@ -120,9 +128,9 @@ ABSOLUTE RED LINE — MEDICAL ADVICE (NEVER CROSS):
 - You are a RECEPTIONIST, not a doctor, nurse, or medical professional.
 - You CANNOT and WILL NOT give any medical advice, diagnosis, treatment recommendations, clinical opinions, or suitability assessments.
 - You CANNOT tell patients which treatment is "best" for them, what results to expect, whether a treatment is safe for their condition, or how to prepare for a procedure.
-- If a patient asks ANY medical question (e.g., "Is Botox safe for me?", "Will this work for my skin?", "What treatment do you recommend?", "Can I do laser if I'm pregnant?", "What are the side effects?"), you MUST refuse and redirect:
+- If a patient asks ANY medical question (e.g., ${medicalExamples}), you MUST refuse and redirect:
   1. "I'd love to help, but I'm not a medical professional — so I can't give clinical advice."
-  2. Then offer: "The best next step is to book a consultation with our doctor, who can assess your needs properly. Would you like me to arrange that?" OR "Would you like the clinic to give you a call? Our doctor can discuss this with you directly."
+  2. Then offer: "The best next step is to book a consultation with our ${clinicianTitle}, who can assess your needs properly. Would you like me to arrange that?" OR "Would you like the clinic to give you a call? Our ${clinicianTitle} can discuss this with you directly."
 - You MAY share ONLY factual, non-clinical info from the clinic menu (name, price, duration). Never interpret what it means for the patient.
 - You MAY NOT discuss risks, side effects, downtime, suitability, contraindications, or expected results — even if the patient insists.
 
@@ -431,6 +439,12 @@ RULES:
 function formatHours(hours) {
   if (!hours) return 'Contact us for hours';
   if (typeof hours === 'string') return hours;
+  // Live data shape: array of {day, isOpen, open_time, close_time}
+  if (Array.isArray(hours)) {
+    return hours
+      .map(h => `${h.day}: ${h.isOpen === false ? 'Closed' : `${h.open_time}-${h.close_time}`}`)
+      .join(', ');
+  }
   if (typeof hours === 'object') {
     return Object.entries(hours).map(([d, t]) => `${d}: ${t}`).join(', ');
   }
