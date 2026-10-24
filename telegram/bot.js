@@ -290,9 +290,15 @@ bot.start(safeHandler('/start', async (ctx) => {
     return;
   }
 
-  // New user with start parameter (from onboarding link)
+  // New user with start parameter (invite code or clinic UUID)
   if (startParam) {
-    const result = await linkChatToClinic(chatId, startParam);
+    // 1) Try one-time invite code first (e.g. from clinic-invite system)
+    const { redeemInviteCode } = require('./clinic-invite');
+    let result = await redeemInviteCode(startParam, chatId);
+    // 2) Fall back to direct clinic UUID (admin-issued linking link)
+    if (!result.success) {
+      result = await linkChatToClinic(chatId, startParam);
+    }
     if (result.success) {
       await ctx.reply(
         `👋 Welcome, ${name}!\n\n` +
@@ -609,6 +615,69 @@ bot.action(/^onboarding_reject:([0-9a-fA-F-]{4,36})$/, safeHandler('onboarding_r
   await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
 }));
 
+// ─── DOCTOR CALLBACK BUTTONS (MADS) ──────────────────────────────
+// One-tap complete/cancel on callback request notifications.
+// Permission is enforced inside the core fns via resolveCallerClinic —
+// staff can only touch their own clinic's callbacks.
+
+bot.action(/^cbdone:([0-9a-f]{8})$/, safeHandler('cbdone_btn', async (ctx) => {
+  const { completeCallbackByRef } = require('./commands/callbacks');
+  const result = await completeCallbackByRef(ctx.match[1], ctx.chat.id);
+  await ctx.answerCbQuery(result.ok ? '✅ Marked complete' : 'Could not complete');
+  if (result.ok) {
+    const original = ctx.callbackQuery.message?.text || '';
+    await ctx.editMessageText(`${original}\n\n✅ COMPLETED — ${ctx.from.first_name || 'staff'}`).catch(() => {});
+  } else {
+    await ctx.reply(result.message, { parse_mode: 'Markdown' });
+  }
+}));
+
+bot.action(/^cbcancel:([0-9a-f]{8})$/, safeHandler('cbcancel_btn', async (ctx) => {
+  const { cancelCallbackByRef } = require('./commands/callbacks');
+  const result = await cancelCallbackByRef(ctx.match[1], ctx.chat.id);
+  await ctx.answerCbQuery(result.ok ? '🚫 Cancelled' : 'Could not cancel');
+  if (result.ok) {
+    const original = ctx.callbackQuery.message?.text || '';
+    await ctx.editMessageText(`${original}\n\n🚫 CANCELLED — ${ctx.from.first_name || 'staff'}`).catch(() => {});
+  } else {
+    await ctx.reply(result.message, { parse_mode: 'Markdown' });
+  }
+}));
+
+// ─── ADMIN "ACT AS CLINIC" PICKER ────────────────────────────────
+bot.action(/^staffctx:([a-z0-9-]+)$/, safeHandler('staffctx_btn', async (ctx) => {
+  if (!adminOnly(ctx)) return;
+  const { supabase } = require('../supabase/client');
+  const { data: clinic } = await supabase
+    .from('clients')
+    .select('id, name, slug')
+    .eq('slug', ctx.match[1])
+    .single();
+  if (!clinic) {
+    await ctx.answerCbQuery('Clinic not found');
+    return;
+  }
+  adminStaffCtx.set(String(ctx.chat.id), clinic);
+  await ctx.answerCbQuery(`Acting as ${clinic.name}`);
+  await ctx.editMessageText(`👑 Admin mode — acting as *${clinic.name}*.\nTap the menu button again. Use /clinicfor to switch.`, { parse_mode: 'Markdown' }).catch(() => {});
+}));
+
+// ─── ONE-TAP STAFF LINKING ───────────────────────────────────────
+// Sent on the approval message; also usable by staff directly.
+bot.action(/^linkme:([0-9a-f-]{36})$/, safeHandler('linkme_btn', async (ctx) => {
+  const { linkChatToClinic } = require('./multi-clinic-sender');
+  const result = await linkChatToClinic(ctx.chat.id, ctx.match[1]);
+  await ctx.answerCbQuery(result.success ? '✅ Linked!' : 'Link failed');
+  if (result.success) {
+    await ctx.reply(
+      `🔗 You're now linked to *${result.clinicName}*.\nYou'll receive this clinic's alerts here. Tap /start for the staff menu.`,
+      { parse_mode: 'Markdown' }
+    );
+  } else {
+    await ctx.reply(`❌ Could not link: ${result.error || 'unknown error'}`);
+  }
+}));
+
 bot.action('pendingonboarding', safeHandler('pendingonboarding_btn', async (ctx) => {
   if (!adminOnly(ctx)) return;
   await ctx.answerCbQuery('Loading...');
@@ -714,6 +783,9 @@ bot.command('requests', adminCmd('/requests', async (ctx) => {
 // notify Moon Hands admin with Approve/Reject buttons. Slug is resolved
 // automatically from the staff chat's linked clinic.
 
+// Admin "act as clinic" context — picked via inline buttons, in-memory only.
+const adminStaffCtx = new Map(); // chatId(String) -> {id, name, slug}
+
 async function resolveStaffClinic(ctx) {
   const chatId = ctx.chat.id;
   const { supabase } = require('../supabase/client');
@@ -721,11 +793,35 @@ async function resolveStaffClinic(ctx) {
     .from('clients')
     .select('id, name, slug')
     .contains('telegram_chat_ids', [chatId]);
-  if (!linked || linked.length === 0) {
-    await ctx.reply('❌ Your Telegram is not linked to a clinic yet. Use the onboarding link (e.g. /start GLOW001) first.');
+  if (linked && linked.length > 0) return linked[0]; // primary linked clinic
+
+  // Moon Hands admin fallback: admin may act as any clinic's staff.
+  // With multiple active clinics, ask once and remember the pick (in-memory).
+  if (String(chatId) === String(ADMIN_CHAT_ID)) {
+    const picked = adminStaffCtx.get(String(chatId));
+    if (picked) return picked;
+    const { data: clinics } = await supabase
+      .from('clients')
+      .select('id, name, slug')
+      .eq('status', 'active')
+      .order('name');
+    if (!clinics || clinics.length === 0) {
+      await ctx.reply('❌ No active clinics found.');
+      return null;
+    }
+    if (clinics.length === 1) {
+      adminStaffCtx.set(String(chatId), clinics[0]);
+      return clinics[0];
+    }
+    const keyboard = clinics.map(c => [{ text: c.name, callback_data: `staffctx:${c.slug}` }]);
+    await ctx.reply('👑 Admin mode — which clinic are you acting for?\n\n(This is remembered until restart; use /clinicfor to switch.)', {
+      reply_markup: { inline_keyboard: keyboard }
+    });
     return null;
   }
-  return linked[0]; // primary linked clinic
+
+  await ctx.reply('❌ Your Telegram is not linked to a clinic yet. Ask your Moon Hands admin for your clinic\'s linking link.');
+  return null;
 }
 
 async function submitChangeRequest(ctx, action, payload) {
@@ -880,6 +976,13 @@ bot.command('callbacks', safeHandler('/callbacks', async (ctx) => {
 
 bot.command('callbackdone', safeHandler('/callbackdone', async (ctx) => {
   await handleCallbackDone(ctx);
+}));
+
+// Admin: switch which clinic staff commands act on
+bot.command('clinicfor', safeHandler('/clinicfor', async (ctx) => {
+  if (!adminOnly(ctx)) return;
+  adminStaffCtx.delete(String(ctx.chat.id));
+  await resolveStaffClinic(ctx); // shows the picker
 }));
 
 // ─── QUICK MENU KEYBOARD ─────────────────────────────────────────
@@ -1116,22 +1219,51 @@ bot.hears('⚙️ View Config', safeHandler('⚙️ View Config', async (ctx) =>
 }));
 
 bot.hears('📝 Request Changes', safeHandler('📝 Request Changes', async (ctx) => {
+  // Resolve the clinic first — examples and wording follow the clinic's industry
+  const clinic = await resolveStaffClinic(ctx);
+  if (!clinic) return;
+
+  const { supabase } = require('../supabase/client');
+  const { data: cfgRow } = await supabase
+    .from('client_configs')
+    .select('config')
+    .eq('client_id', clinic.id)
+    .single();
+  const isChiro = cfgRow?.config?.industry === 'chiropractic';
+
+  // Industry-aware examples (chiro vs aesthetic)
+  const ex = isChiro ? {
+    add: '`/req_addservice "Chiropractic Adjustment" $90 30`',
+    range: '`/req_addservice "Initial Consultation" "$100-$150" 60`',
+    price: '`/req_updateprice "Chiropractic Adjustment" $85`',
+    priceRange: '`/req_updateprice "Initial Consultation" "$100-$150"`',
+    voice: '`/req_voice greeting "Welcome to our clinic!"`',
+    item: 'service',
+  } : {
+    add: '`/req_addservice "HIFU Treatment" $350 60`',
+    range: '`/req_addservice "Consultation" "$50-$100" 60`',
+    price: '`/req_updateprice "HIFU Treatment" $299`',
+    priceRange: '`/req_updateprice "Consultation" "$50-$100"`',
+    voice: '`/req_voice greeting "Welcome to our clinic!"`',
+    item: 'treatment',
+  };
+
   await ctx.reply(
-    '📝 *Request Changes to Your Clinic Setup*\n\n' +
+    `📝 *Request Changes — ${clinic.name}*\n\n` +
     'Changes are reviewed and approved by Moon Hands before going live. ' +
     'Send your request with one of these commands:\n\n' +
-    '*Add a treatment:*\n' +
-    '`/req_addservice "HIFU Treatment" $350 60`\n' +
-    '(price can be a range: `/req_addservice "Consultation" "$50-$100" 60`)\n\n' +
+    `*Add a ${ex.item}:*\n` +
+    `${ex.add}\n` +
+    `(price can be a range: ${ex.range})\n\n` +
     '*Update a price:*\n' +
-    '`/req_updateprice "HIFU Treatment" $299`\n' +
-    '(or a range: `/req_updateprice "Consultation" "$50-$100"`)\n\n' +
+    `${ex.price}\n` +
+    `(or a range: ${ex.priceRange})\n\n` +
     '*Update operating hours:*\n' +
     '`/req_hours Saturday 09:00 17:00`\n\n' +
     '*Add an FAQ:*\n' +
     '`/req_faq Parking available? | Free parking at rear`\n\n' +
     '*Update bot voice/greeting:*\n' +
-    '`/req_voice greeting "Welcome to Glow!"`\n\n' +
+    `${ex.voice}\n\n` +
     'You\'ll get a Telegram notification here once approved (usually within 24h).',
     { parse_mode: 'Markdown' }
   );
