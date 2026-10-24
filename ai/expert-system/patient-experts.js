@@ -120,7 +120,9 @@ ${p.specialNotes ? `- Special instructions: ${p.specialNotes}` : ''}
 
 RULES FOR ALL RESPONSES:
 - Speak in the ${p.tone} tone consistently
-- Use the clinic's greeting style when appropriate
+- GREETING DISCIPLINE: The greeting above is for the patient's VERY FIRST message only.
+  If there is any prior conversation context, NEVER begin your reply with a greeting,
+  with "Welcome to", with the clinic's name, or with your own name — answer directly.
 - Never break character — you are ${p.agentName}, not a generic AI
 - Today is ${getTodaySG()}
 
@@ -149,6 +151,12 @@ function buildInfoExpertBase(clinicConfig) {
   const phone = clinicConfig.phone || '';
   const prep = clinicConfig.faqs?.prep_general || 'Arrive with clean skin. Avoid alcohol 24hrs before.';
   const aftercare = clinicConfig.faqs?.aftercare_general || 'Avoid sun for 48hrs. No strenuous exercise for 24hrs.';
+  // Service menu included so service-ish questions ("the two therapy treatments")
+  // are answered from FACTS, not improvised — a missing menu is how the bot
+  // once invented a "therapeutic massage" the clinic doesn't offer.
+  const services = (clinicConfig.services || [])
+    .map(s => `- ${s.name}${s.price ? ` ($${String(s.price).replace(/^\$/, '')})` : ''}${s.duration ? `, ${s.duration}min` : ''}${s.description ? `: ${s.description}` : ''}`)
+    .join('\n');
   
   return `YOUR ROLE: Info & FAQ Expert
 You provide factual clinic information. Strict, concise, never guesses.
@@ -156,6 +164,9 @@ You provide factual clinic information. Strict, concise, never guesses.
 CLINIC INFO:
 - Hours: ${hours}
 - Address: ${address}${mrt ? `\n- Nearest MRT: ${mrt}` : ''}${parking ? `\n- Parking: ${parking}` : ''}${phone ? `\n- Phone: ${phone}` : ''}
+
+SERVICE MENU (answer service questions ONLY from this list — if it's not here, say so):
+${services || 'Not configured — direct service questions to the clinic.'}
 
 GENERAL PREP: ${prep}
 GENERAL AFTERCARE: ${aftercare}
@@ -335,9 +346,16 @@ async function executeExpert(expertKey, message, clinicConfig, conversationHisto
   const systemPrompt = buildExpertPrompt(expertKey, clinicConfig);
   
   // Add conversation context (last 3 turns)
-  const recentContext = conversationHistory.slice(-3).map(h => 
-    `${h.role === 'user' ? 'Patient' : 'Assistant'}: ${h.content}`
-  ).join('\n');
+  // History turns are stored by webhook.js addConversationTurn as
+  // { user, ai, timestamp } — NOT { role, content }. Reading .role/.content
+  // here reduced every turn to "Assistant: undefined" and left the expert
+  // with zero context (couldn't resolve "the two", re-greeted, etc.).
+  const recentContext = conversationHistory.slice(-3).map(h => {
+    if (h.user !== undefined || h.ai !== undefined) {
+      return `Patient: ${h.user || ''}\nAssistant: ${h.ai || ''}`;
+    }
+    return `${h.role === 'user' ? 'Patient' : 'Assistant'}: ${h.content || ''}`;
+  }).join('\n');
   
   const messages = [
     { role: 'system', content: systemPrompt },

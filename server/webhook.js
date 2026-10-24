@@ -1241,8 +1241,9 @@ async function routeToAI(text, message, channel, preResolvedClientId = null, int
     addConversationTurn(message.from, text, result.text);
     
     // ── SANITIZE: Strip forbidden phrases (Hello!, Welcome, etc.) ──
+    // First contact keeps its greeting; follow-ups get greetings stripped.
     const sanitizedText = sanitizerLoaded 
-      ? sanitizeResponse(result.text, { intent: result.intent })
+      ? sanitizeResponse(result.text, { intent: result.intent, isFirstContact: history.length === 0 })
       : result.text;
     
     if (sanitizedText !== result.text) {

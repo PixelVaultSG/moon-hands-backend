@@ -1023,6 +1023,15 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
         
         console.log(`[BOT_ENGINE] Experts: [${expertsUsed.join(', ')}] — cost: $${expertResult.totalCost.toFixed(4)}`);
         
+        // If the reply ends by offering to arrange/book ("Would you like me to
+        // arrange that?"), park the conversation in BOOKING_OFFERED so a bare
+        // "yes please" next turn starts the booking flow deterministically
+        // instead of falling through to the LLM and getting a greeting back.
+        if (patientPhone && /would you like me to (arrange|book|help you book)|shall i (book|arrange|help you book)|want me to (book|arrange)/i.test(expertResult.text)) {
+          convState.setState(patientPhone, 'booking_offered', {});
+          console.log('[BOT_ENGINE] Expert offered booking — state set to booking_offered');
+        }
+        
         return {
           text: expertResult.text,
           function_called: expertResult.functionCall,
