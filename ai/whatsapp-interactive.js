@@ -256,8 +256,11 @@ function getDateButtonOptions(dateOptions, customBody) {
  * Build time slot buttons (Quick Reply)
  * Shows up to 3 time slots + "Other" as quick reply buttons.
  * Each button ID encodes the actual time: `time_HH:MM`
+ * NOTE: when an interactive payload is sent, the plain reply text is NOT
+ * delivered — any explanation (e.g. "we close at 2pm on Saturdays") MUST be
+ * passed via customBody or the patient never sees it.
  */
-function getTimeSlotButtons(timeSlots, operatingHours) {
+function getTimeSlotButtons(timeSlots, operatingHours, customBody) {
   const buttons = timeSlots.map(t => ({
     id: `time_${t.replace(/:/g, '-')}`,
     title: formatDisplayTime(t)
@@ -266,7 +269,7 @@ function getTimeSlotButtons(timeSlots, operatingHours) {
     buttons.push({ id: 'time_other', title: '⏰ Other Time' });
   }
   return buildQuickReplyButtons({
-    body: `Here are available time slots:\n🕐 ${operatingHours || 'During operating hours'}`,
+    body: customBody || `Here are available time slots:\n🕐 ${operatingHours || 'During operating hours'}`,
     footer: 'Tap a time to select it',
     buttons: buttons.slice(0, 3)
   });
@@ -323,11 +326,20 @@ function getConfirmationCard({ date, time, treatments, totalDuration, totalPrice
   const treatmentText = Array.isArray(treatments) ? treatments.join(' + ') : (treatments || 'Not selected');
   const durText = totalDuration ? `⏱️ ${totalDuration} mins` : '';
   const priceText = totalPrice ? `💰 ${totalPrice}${priceIsRange ? ' (final price confirmed at the clinic)' : ''}` : '';
+  // Display dates as "Sat, 31 Oct 2026" and times as "21:00hrs" (house format);
+  // pass through anything that isn't an ISO date (e.g. 'TBD', natural language)
+  let displayDate = date;
+  let displayTime = time;
+  try {
+    const { formatDateStrDisplay, normalizeTimeStr } = require('../utils/date-helpers');
+    if (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) displayDate = formatDateStrDisplay(date);
+    if (time && /^\d{1,2}:\d{2}/.test(time)) displayTime = `${normalizeTimeStr(time)}hrs`;
+  } catch (e) { /* fall back to raw values */ }
   // Name & phone the clinic will use to schedule / call back.
   // Phone always comes from WhatsApp; name from profile or asked later.
   const nameText = customerName ? `👤 ${customerName}` : '';
   const phoneText = customerPhone ? `📱 +${String(customerPhone).replace(/^\+/, '')}` : '';
-  const details = [nameText, phoneText, `📅 ${date || 'TBD'}`, `🕐 ${time || 'TBD'}`, `💆 ${treatmentText}`, durText, priceText]
+  const details = [nameText, phoneText, `📅 ${displayDate || 'TBD'}`, `🕐 ${displayTime || 'TBD'}`, `💆 ${treatmentText}`, durText, priceText]
     .filter(Boolean)
     .join('\n');
 
