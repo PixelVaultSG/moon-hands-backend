@@ -60,6 +60,12 @@ CATEGORIES:
 RULES:
 - If the message asks for a recommendation, suitability assessment, safety opinion,
   expected outcome, or personalized clinical guidance → MEDICAL_ADVICE_REQUEST
+- FACTUAL service questions are GENERAL_INQUIRY, NOT medical advice: "What is dry
+  needling?", "What's the difference between decompression and dry needling?",
+  "What happens during a consultation?", "How long does an adjustment take?"
+  (facts about what treatments ARE, per the clinic menu)
+- The moment it becomes about THE PATIENT ("…for me?", "…for my back?", "should I…",
+  "which is better for my condition?", "…while pregnant?") → MEDICAL_ADVICE_REQUEST
 - If the message describes serious symptoms after trauma, chest pain, neurological deficits,
   or stroke signs → RED_FLAG_EMERGENCY
 - Be CONSERVATIVE. If unsure, classify as MEDICAL_ADVICE_REQUEST.
