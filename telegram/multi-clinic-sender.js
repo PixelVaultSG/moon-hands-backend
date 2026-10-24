@@ -38,8 +38,10 @@ async function getClinicTelegramChats(clinicId) {
       .single();
     
     if (!client) {
-      console.error(`[MULTI_CLINIC] ❌ Clinic ${clinicId} not found in DB`);
-      return { clinicChats: [], adminChatId: null, clinicName: 'Unknown' };
+      // NEVER null the admin fallback: a DB hiccup must not silence
+      // notifications entirely — the admin copy is the last line of defense.
+      console.error(`[MULTI_CLINIC] ❌ Clinic ${clinicId} not found in DB — falling back to admin-only`);
+      return { clinicChats: [], adminChatId: process.env.TELEGRAM_ADMIN_CHAT_ID || null, clinicName: 'Unknown Clinic' };
     }
     
     const result = {
@@ -53,8 +55,9 @@ async function getClinicTelegramChats(clinicId) {
     return result;
     
   } catch (err) {
-    console.error(`[MULTI_CLINIC] ❌ DB error for clinic ${clinicId}:`, err.message);
-    return { clinicChats: [], adminChatId: null, clinicName: 'Unknown' };
+    // NEVER null the admin fallback (see above)
+    console.error(`[MULTI_CLINIC] ❌ DB error for clinic ${clinicId}:`, err.message, '— falling back to admin-only');
+    return { clinicChats: [], adminChatId: process.env.TELEGRAM_ADMIN_CHAT_ID || null, clinicName: 'Unknown Clinic' };
   }
 }
 
@@ -82,29 +85,42 @@ async function sendClinicNotification(clinicId, message, options = {}) {
   }
   
   const { clinicChats, adminChatId, clinicName } = await getClinicTelegramChats(clinicId);
-  
+
   const sentTo = [];
-  
+
+  // Hardened sender: fetch does NOT throw on HTTP errors, so check
+  // response.ok explicitly — Telegram rejections (bad chat, parse error,
+  // blocked bot) must never be counted as delivered. One retry on failure.
+  const sendToChat = async (chatId, text, markup) => {
+    const body = {
+      chat_id: chatId,
+      text,
+      parse_mode: parseMode,
+      disable_web_page_preview: true
+    };
+    if (markup) body.reply_markup = markup;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const resp = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        if (resp.ok) return { ok: true };
+        const errBody = await resp.text().catch(() => '');
+        console.error(`[MULTI_CLINIC] ✗ Telegram rejected send to ${chatId} (HTTP ${resp.status}, attempt ${attempt}):`, errBody.substring(0, 300));
+      } catch (err) {
+        console.error(`[MULTI_CLINIC] ✗ Send to ${chatId} failed (attempt ${attempt}):`, err.message);
+      }
+      if (attempt === 1) await new Promise(r => setTimeout(r, 1000));
+    }
+    return { ok: false };
+  };
+
   // 1. Send to clinic's staff (PRIMARY)
   for (const chatId of clinicChats) {
-    try {
-      const body = {
-        chat_id: chatId,
-        text: message,
-        parse_mode: parseMode,
-        disable_web_page_preview: true
-      };
-      if (replyMarkup) body.reply_markup = replyMarkup;
-      
-      await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-      });
-      sentTo.push(chatId);
-    } catch (err) {
-      console.error(`[MULTI_CLINIC] ✗ Failed to send to clinic chat ${chatId}:`, err.message);
-    }
+    const r = await sendToChat(chatId, message, replyMarkup);
+    if (r.ok) sentTo.push(chatId);
   }
   
   // 2. Send COPY to Moon Hands admin (SECONDARY)
@@ -112,30 +128,30 @@ async function sendClinicNotification(clinicId, message, options = {}) {
   const adminNeedsButtons = sentTo.length === 0 && replyMarkup;
   let adminSent = false;
   if (includeAdmin && adminChatId) {
+    const adminMessage = adminPrefix
+      ? `📋 *[${clinicName}]*\n${message}`
+      : message;
+    const r = await sendToChat(adminChatId, adminMessage, adminNeedsButtons ? replyMarkup : null);
+    adminSent = r.ok;
+  }
+
+  // LOUD FAILURE: a notification that reached NOBODY must be queryable,
+  // not just a console line on Render. Write a high-severity event.
+  if (sentTo.length === 0 && !adminSent) {
+    console.error(`[MULTI_CLINIC] 🚨 TOTAL DELIVERY FAILURE | Clinic: ${clinicName} (${clinicId}) | msg: ${message.substring(0, 80)}`);
     try {
-      const adminMessage = adminPrefix 
-        ? `📋 *[${clinicName}]*\n${message}`
-        : message;
-      
-      const adminBody = {
-        chat_id: adminChatId,
-        text: adminMessage,
-        parse_mode: parseMode,
-        disable_web_page_preview: true
-      };
-      if (adminNeedsButtons) adminBody.reply_markup = replyMarkup;
-      
-      await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(adminBody)
-      });
-      adminSent = true;
-    } catch (err) {
-      console.error(`[MULTI_CLINIC] ✗ Failed to send admin copy:`, err.message);
+      await supabase.from('security_events').insert([{
+        severity: 'high',
+        category: 'notification_failure',
+        service: 'telegram',
+        description: `Notification for clinic ${clinicName} (${clinicId}) reached zero recipients`,
+        details: { clinic_id: clinicId, clinicChats, adminChatId: adminChatId ? 'set' : 'UNSET', messagePreview: message.substring(0, 200) },
+      }]);
+    } catch (e) {
+      console.error('[MULTI_CLINIC] 🚨 Failed to record notification failure:', e.message);
     }
   }
-  
+
   console.log(`[MULTI_CLINIC] ✓ Sent to ${sentTo.length} clinic chat(s) + admin: ${adminSent} | Clinic: ${clinicName}`);
   return { sentTo, adminSent };
 }

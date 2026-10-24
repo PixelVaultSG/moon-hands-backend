@@ -127,7 +127,7 @@ function handleGreeting({ clinicConfig }) {
   
   // Build interactive list menu (always included — even with custom greeting)
   const { getWelcomeList } = require('./whatsapp-interactive');
-  const welcomeList = getWelcomeList(name, agentName);
+  const welcomeList = getWelcomeList(name, agentName, getConfig(clinicConfig, 'industry'));
   console.log(`[HANDLER:greeting] Built welcomeList, type=${welcomeList?.type}, interactive=${welcomeList?.interactive?.type}`);
   
   // If clinic has a custom greeting, use it but still attach interactive menu

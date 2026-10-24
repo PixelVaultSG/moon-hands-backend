@@ -5,7 +5,7 @@
  */
 
 const db = require('../../supabase/client');
-const { notifyBookingCreated, notifyBookingCancelled, sendWeeklyRoundup } = require('../../telegram/booking-notifications');
+const { notifyBookingCreated, notifyBookingCancelled, notifyBookingRescheduled, sendWeeklyRoundup } = require('../../telegram/booking-notifications');
 
 // ─── HELPER: Get Supabase client ──────────────────────────────────
 function getSupabase() {
@@ -311,6 +311,108 @@ async function createBooking({ client_id, customer_name, customer_phone, service
   } catch (err) {
     console.error('[FUNCTION] createBooking error:', err.message);
     return { success: false, error: 'Booking system error. Please try again or call the clinic.' };
+  }
+}
+
+// ─── 2b. UPDATE_BOOKING (edit-in-place) ────────────────────────────
+// Used by the patient-facing Edit flow: instead of cancel+recreate (which
+// loses the booking ID and spams notifications), update the existing row.
+// Any change to date/time/service sends the booking back to PENDING —
+// the clinic must re-approve. Name/phone-only edits keep the status.
+async function updateBooking({ client_id, appointment_id, date, time, service, duration, name, phone }) {
+  const supabase = getSupabase();
+
+  try {
+    if (!client_id || !appointment_id) {
+      return { success: false, error: 'Missing booking reference' };
+    }
+
+    // Fetch the existing booking — must belong to this clinic and be live
+    const { data: existing, error: findErr } = await supabase
+      .from('appointments')
+      .select('*')
+      .eq('id', appointment_id)
+      .eq('client_id', client_id)
+      .in('status', ['confirmed', 'pending', 'booked', 'pending_alternative', 'pending_approval'])
+      .single();
+
+    if (findErr || !existing) {
+      return { success: false, error: 'I could not find that booking — it may have been cancelled already.' };
+    }
+
+    // Get clinic config (for hours validation + notification)
+    const { data: clinic, error: clinicErr } = await supabase
+      .from('client_configs')
+      .select('*')
+      .eq('client_id', client_id)
+      .single();
+    if (clinicErr || !clinic) {
+      return { success: false, error: 'Clinic configuration not found' };
+    }
+
+    const newDate = date || existing.appointment_date;
+    const newTime = time || existing.appointment_time;
+    const newService = service || existing.service;
+    const newDuration = parseInt(duration) || existing.duration || clinic.appointment_duration_minutes || 60;
+
+    const scheduleChanged = newDate !== existing.appointment_date || newTime !== existing.appointment_time;
+    const serviceChanged = newService !== existing.service;
+
+    // Validate the new slot — EXCLUDING this booking from the conflict check
+    if (scheduleChanged || serviceChanged) {
+      const { validateBookingSlot } = require('../availability-engine');
+      const gate = await validateBookingSlot(client_id, newDate, newTime, newDuration, clinic, appointment_id);
+      if (!gate.ok) {
+        return { success: false, error: `${gate.reason}. Would you like a different day or time?` };
+      }
+    }
+
+    const updatePayload = {
+      appointment_date: newDate,
+      appointment_time: newTime,
+      service: newService,
+      duration: newDuration,
+      updated_at: new Date().toISOString(),
+    };
+    if (name) updatePayload.customer_name = name;
+    if (phone) updatePayload.customer_phone = phone;
+    // Schedule/service changes need fresh clinic approval
+    if (scheduleChanged || serviceChanged) {
+      updatePayload.status = 'pending';
+      updatePayload.approval_notified = false;
+    }
+
+    const { data: updated, error: updErr } = await supabase
+      .from('appointments')
+      .update(updatePayload)
+      .eq('id', appointment_id)
+      .select()
+      .single();
+
+    if (updErr) {
+      console.error('[FUNCTION] updateBooking update error:', updErr.message);
+      return { success: false, error: 'Unable to update the booking. Please try again.' };
+    }
+
+    // Notify clinic about the change (real-time Telegram alert)
+    if (scheduleChanged || serviceChanged) {
+      try {
+        await notifyBookingRescheduled(existing, updated, clinic);
+      } catch (notifyErr) {
+        console.error('[FUNCTION] Reschedule notification failed:', notifyErr.message);
+      }
+    }
+
+    return {
+      success: true,
+      appointment: updated,
+      changed: scheduleChanged || serviceChanged,
+      message: `Booking updated: ${newService} on ${newDate} at ${newTime}.`
+    };
+
+  } catch (err) {
+    console.error('[FUNCTION] updateBooking error:', err.message);
+    return { success: false, error: 'Update system error. Please try again or call the clinic.' };
   }
 }
 
@@ -669,6 +771,7 @@ async function notifyAdmin(supabase, client_id, eventType, data) {
 module.exports = {
   checkAvailability,
   createBooking,
+  updateBooking,
   cancelBooking,
   rescheduleBooking,
   checkExistingBooking,
