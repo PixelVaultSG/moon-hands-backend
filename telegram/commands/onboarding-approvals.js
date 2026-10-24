@@ -294,12 +294,20 @@ async function handleApproveClinic(ctx) {
       ``,
       `✅ Clinic is now LIVE.`,
       `Next steps:`,
-      `  1. Set up Google Calendar integration`,
-      `  2. Test the bot with the clinic`,
-      `  3. Set up Telegram staff alerts if needed`,
+      `  1. Tap the button below to link YOUR Telegram (receive this clinic's alerts)`,
+      `  2. Forward the staff link to the clinic's team so they can link theirs`,
+      `  3. Set up Google Calendar integration`,
+      ``,
+      `Staff linking link (share with clinic staff):`,
+      `\`https://t.me/${process.env.TELEGRAM_BOT_USERNAME || 'moonhands_admin_bot'}?start=${newClient.id}\``,
     ].join('\n');
 
-    await ctx.reply(msg, { parse_mode: 'Markdown' }).catch(() => {
+    await ctx.reply(msg, {
+      parse_mode: 'Markdown',
+      reply_markup: { inline_keyboard: [[
+        { text: '🔗 Link my Telegram to this clinic', callback_data: `linkme:${newClient.id}` }
+      ]] }
+    }).catch(() => {
       ctx.reply(msg.replace(/[*_`]/g, ''));
     });
 

@@ -779,8 +779,13 @@ async function handleCallbackChoice(interactiveId, clientConfig, patientPhone, m
       topic
     });
     convState.resetIdle(patientPhone);
+    const cbShort = row.id.slice(0, 8);
     await sendClinicNotification(clientConfig.id,
-      `📞 *Callback request*\n\nPatient: +${String(patientPhone).replace(/\D/g, '')}\nTopic: ${String(topic).slice(0, 200)}\n\nReply \`/callbackdone ${row.id.slice(0, 8)}\` when complete.`
+      `📞 *Callback request*\n\nPatient: +${String(patientPhone).replace(/\D/g, '')}\nTopic: ${String(topic).slice(0, 200)}\n\nTap ✅ when the doctor has called (or \`/callbackdone ${cbShort}\`).`,
+      { replyMarkup: { inline_keyboard: [[
+        { text: '✅ Mark Complete', callback_data: `cbdone:${cbShort}` },
+        { text: '🚫 Cancel', callback_data: `cbcancel:${cbShort}` }
+      ]] } }
     ).catch(e => console.error('[MADS] callback alert failed:', e.message));
     const text = "Thank you! Our doctor will call you shortly. Is there anything else I can help with in the meantime?";
     await logConversation(clientConfig.id, 'whatsapp', patientPhone, null, messageText, text, 'mads:callback_accepted');

@@ -3,6 +3,9 @@
  *
  * /callbacks        — list pending doctor-callback requests
  * /callbackdone <id> — mark a callback as completed
+ * Inline buttons on the request notification call the same core functions:
+ *   cbdone:<id8>    — mark complete (one tap, no typing)
+ *   cbcancel:<id8>  — cancel the request
  *
  * Scoping:
  *   - Clinic staff (their chat ID is in clients.telegram_chat_ids) see ONLY
@@ -48,6 +51,81 @@ function formatCallbackRow(r, showClinic) {
   );
 }
 
+// ─── CORE LOOKUP ───────────────────────────────────────────────────────────
+// Shared by commands and inline buttons. Enforces clinic scoping for staff.
+
+async function findPendingByPrefix(idPrefix, caller) {
+  let query = supabase
+    .from('callback_requests')
+    .select('id, client_id, patient_phone, topic')
+    .eq('status', 'pending');
+  if (!caller.isAdmin) {
+    query = query.eq('client_id', caller.clinicId); // DATA ISOLATION
+  }
+  const { data: pending, error } = await query;
+  if (error) return { error: `❌ Could not load callbacks: ${error.message}` };
+
+  const match = (pending || []).filter(r => r.id.startsWith(idPrefix));
+  if (match.length === 0) {
+    return { error: `❌ No pending callback starting with \`${idPrefix}\`. Check /callbacks.` };
+  }
+  if (match.length > 1) {
+    return { error: `⚠️ \`${idPrefix}\` matches ${match.length} callbacks — use more characters.` };
+  }
+  return { callback: match[0] };
+}
+
+/**
+ * Mark a callback complete. Returns { ok, message, callback } — safe for
+ * both command handlers and inline-button actions.
+ */
+async function completeCallbackByRef(idPrefix, chatId) {
+  const caller = await resolveCallerClinic(chatId);
+  if (caller.clinicId === undefined) {
+    return { ok: false, message: '⚠️ This chat is not linked to any clinic. Ask Moon Hands to link it first.' };
+  }
+  const { callback, error } = await findPendingByPrefix(idPrefix, caller);
+  if (error) return { ok: false, message: error };
+
+  const { error: updErr } = await supabase
+    .from('callback_requests')
+    .update({ status: 'completed', completed_at: new Date().toISOString() })
+    .eq('id', callback.id)
+    .eq('status', 'pending'); // guard against double-completion races
+
+  if (updErr) return { ok: false, message: `❌ Failed to update: ${updErr.message}` };
+  return {
+    ok: true,
+    message: `✅ Callback \`${callback.id.slice(0, 8)}\` marked complete (${callback.patient_phone}).`,
+    callback
+  };
+}
+
+/**
+ * Cancel a callback (doctor unavailable, patient unreachable, etc.).
+ */
+async function cancelCallbackByRef(idPrefix, chatId) {
+  const caller = await resolveCallerClinic(chatId);
+  if (caller.clinicId === undefined) {
+    return { ok: false, message: '⚠️ This chat is not linked to any clinic. Ask Moon Hands to link it first.' };
+  }
+  const { callback, error } = await findPendingByPrefix(idPrefix, caller);
+  if (error) return { ok: false, message: error };
+
+  const { error: updErr } = await supabase
+    .from('callback_requests')
+    .update({ status: 'cancelled' })
+    .eq('id', callback.id)
+    .eq('status', 'pending');
+
+  if (updErr) return { ok: false, message: `❌ Failed to update: ${updErr.message}` };
+  return {
+    ok: true,
+    message: `🚫 Callback \`${callback.id.slice(0, 8)}\` cancelled (${callback.patient_phone}).`,
+    callback
+  };
+}
+
 // ─── /callbacks ────────────────────────────────────────────────────────────
 
 async function handleCallbacks(ctx) {
@@ -89,7 +167,7 @@ async function handleCallbacks(ctx) {
 
   const body = rows.map(r => formatCallbackRow(r, caller.isAdmin)).join('\n\n');
   return ctx.reply(
-    `${header}\n\n${body}\n\nReply \`/callbackdone <id>\` when the doctor has called the patient.`,
+    `${header}\n\n${body}\n\nTap ✅ on the request notification, or reply \`/callbackdone <id>\`.`,
     { parse_mode: 'Markdown' }
   );
 }
@@ -101,44 +179,14 @@ async function handleCallbackDone(ctx) {
   if (args.length < 1 || !args[0]) {
     return ctx.reply('⚠️ Usage: `/callbackdone <id>` — get the id from /callbacks', { parse_mode: 'Markdown' });
   }
-  const idPrefix = args[0].trim();
-
-  const caller = await resolveCallerClinic(ctx.chat.id);
-  if (caller.clinicId === undefined) {
-    return ctx.reply('⚠️ This chat is not linked to any clinic. Ask Moon Hands to link it first.');
-  }
-
-  // Find the pending callback by id prefix (ids are UUIDs; prefix is what /callbacks shows)
-  let query = supabase
-    .from('callback_requests')
-    .select('id, client_id, patient_phone, topic')
-    .eq('status', 'pending');
-  if (!caller.isAdmin) {
-    query = query.eq('client_id', caller.clinicId); // DATA ISOLATION
-  }
-  const { data: pending, error } = await query;
-  if (error) return ctx.reply(`❌ Could not load callbacks: ${error.message}`);
-
-  const match = (pending || []).filter(r => r.id.startsWith(idPrefix));
-  if (match.length === 0) {
-    return ctx.reply(`❌ No pending callback starting with \`${idPrefix}\`. Check /callbacks.`, { parse_mode: 'Markdown' });
-  }
-  if (match.length > 1) {
-    return ctx.reply(`⚠️ \`${idPrefix}\` matches ${match.length} callbacks — use more characters.`, { parse_mode: 'Markdown' });
-  }
-
-  const { error: updErr } = await supabase
-    .from('callback_requests')
-    .update({ status: 'completed', completed_at: new Date().toISOString() })
-    .eq('id', match[0].id)
-    .eq('status', 'pending'); // guard against double-completion races
-
-  if (updErr) return ctx.reply(`❌ Failed to update: ${updErr.message}`);
-
-  return ctx.reply(
-    `✅ Callback \`${match[0].id.slice(0, 8)}\` marked complete (${match[0].patient_phone}).`,
-    { parse_mode: 'Markdown' }
-  );
+  const result = await completeCallbackByRef(args[0].trim(), ctx.chat.id);
+  return ctx.reply(result.message, { parse_mode: 'Markdown' });
 }
 
-module.exports = { handleCallbacks, handleCallbackDone, resolveCallerClinic };
+module.exports = {
+  handleCallbacks,
+  handleCallbackDone,
+  completeCallbackByRef,
+  cancelCallbackByRef,
+  resolveCallerClinic,
+};
