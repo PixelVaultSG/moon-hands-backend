@@ -12,13 +12,19 @@
 
 const FORBIDDEN_PATTERNS = [
   // Greetings — remove entirely (these should NEVER appear in follow-up)
-  { regex: /^Hello![\s]*Welcome to (?:our|Pixel Vault|the) clinic[!\.\s]*/im, replace: '' },
-  { regex: /^Hey there![\s]*Welcome to (?:our|Pixel Vault|the) clinic[!\.\s]*/im, replace: '' },
-  { regex: /^Hi![\s]*Welcome to (?:our|Pixel Vault|the) clinic[!\.\s]*/im, replace: '' },
-  { regex: /^Hello there![\s]*Welcome to (?:our|Pixel Vault|the) clinic[!\.\s]*/im, replace: '' },
+  { regex: /^Hello![\s]*Welcome to (?:our|Pixel Vault|the) clinic[!\.\s]*/im, replace: '', greeting: true },
+  { regex: /^Hey there![\s]*Welcome to (?:our|Pixel Vault|the) clinic[!\.\s]*/im, replace: '', greeting: true },
+  { regex: /^Hi![\s]*Welcome to (?:our|Pixel Vault|the) clinic[!\.\s]*/im, replace: '', greeting: true },
+  { regex: /^Hello there![\s]*Welcome to (?:our|Pixel Vault|the) clinic[!\.\s]*/im, replace: '', greeting: true },
+
+  // Branded greetings the patterns above can't catch — the LLM prepends
+  // "Welcome to <Clinic Name>." on follow-ups (e.g. "Welcome to Spine & Co
+  // Chiropractic."). Strip ANY leading "Welcome to X" — anchored to message
+  // start only, so legitimate mid-sentence uses survive.
+  { regex: /^(?:Hello|Hi|Hey|Good\s+(?:morning|afternoon|evening))?[!\.,\s]*Welcome to [^.\n!]{2,60}[!\.\s]+/i, replace: '', greeting: true },
   
   // Standalone greetings at start of message
-  { regex: /^(?:Hello|Hi|Hey there|Hello there)[!\.\s]+/im, replace: '' },
+  { regex: /^(?:Hello|Hi|Hey there|Hello there)[!\.\s]+/im, replace: '', greeting: true },
   
   // "I'd be happy to..." — always verbose and robotic (matches ANY verb after)
   { regex: /I'd be happy to[\s\w]*[!\.]/gi, replace: '' },
@@ -40,9 +46,9 @@ const FORBIDDEN_PATTERNS = [
   { regex: /Feel free to ask if you need more information[!\.\s]*$/gi, replace: '' },
   
   // "How can I assist you today?" and variants
-  { regex: /How can I assist you today[\?！]/gi, replace: '' },
-  { regex: /How may I help you today[\?！]/gi, replace: '' },
-  { regex: /How can I help you today[\?！]/gi, replace: '' },
+  { regex: /How can I assist you today[\?！]/gi, replace: '', greeting: true },
+  { regex: /How may I help you today[\?！]/gi, replace: '', greeting: true },
+  { regex: /How can I help you today[\?！]/gi, replace: '', greeting: true },
   
   // "Let me connect you with our team" — the worst one
   { regex: /Let me connect you with (?:our|the) team[\s\w]*[!\.]/gi, replace: '' },
@@ -55,7 +61,7 @@ const FORBIDDEN_PATTERNS = [
   { regex: / at (?:our|the) clinic/gi, replace: '' },
   
   // "Welcome to [anything]" in the middle of a message
-  { regex: /Welcome to (?:our|Pixel Vault|the) clinic[!\.\s]*/gi, replace: '' },
+  { regex: /Welcome to (?:our|Pixel Vault|the) clinic[!\.\s]*/gi, replace: '', greeting: true },
   
   // Double spaces and extra newlines from removals
   { regex: /  +/g, replace: ' ' },
@@ -102,9 +108,13 @@ function sanitizeResponse(text, context = {}) {
   }
 
   let cleaned = text.trim();
-  
-  // Apply all forbidden patterns
+
+  // Apply all forbidden patterns.
+  // Greeting-type patterns are SKIPPED on the patient's very first message —
+  // the welcome is supposed to be there. On every later reply they're stripped.
+  const skipGreetings = context?.isFirstContact === true;
   for (const pattern of FORBIDDEN_PATTERNS) {
+    if (skipGreetings && pattern.greeting) continue;
     cleaned = cleaned.replace(pattern.regex, pattern.replace);
   }
   

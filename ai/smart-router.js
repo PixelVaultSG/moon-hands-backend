@@ -226,7 +226,13 @@ async function routeMessage(message, clinicConfig, patientPhone = null, conversa
   }
   
   // ── STEP 4: Single intent routing ───────────────────────────────
-  const primaryIntent = confidentIntents[0];
+  // confirmation_yes/no are weighted 0.8 by design ("needs context to be
+  // meaningful") — the >=0.85 filter above exists for multi-intent gating
+  // ONLY. Don't let it swallow a lone confirmation: that's how "Yes please"
+  // after a booking offer fell through to the LLM and got a greeting back.
+  const primaryIntent = confidentIntents[0]
+    || matchedIntents.find(m => m.intent === 'confirmation_yes' || m.intent === 'confirmation_no')
+    || null;
   
   // If no intent matched, send to OpenAI
   if (!primaryIntent) {
