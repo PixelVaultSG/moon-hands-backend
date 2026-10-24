@@ -405,6 +405,17 @@ async function handleCreateBooking(args, clientConfig) {
     return { error: "I'll need your phone number to confirm the booking. Could you please share it?" };
   }
 
+  // UNIFIED GATE: opening hours + duration fits before close + conflicts
+  // with confirmed AND awaiting-confirmation bookings
+  const { validateBookingSlot } = require('./availability-engine');
+  const svcForDuration = (clientConfig.config?.services || []).find(s =>
+    String(s.name || '').toLowerCase() === String(treatment || '').toLowerCase());
+  const durMin = parseInt(svcForDuration?.duration) || clientConfig.config?.appointment_duration_minutes || 60;
+  const gate = await validateBookingSlot(clientConfig.id, date, time, durMin, clientConfig);
+  if (!gate.ok) {
+    return { error: `I'm sorry, that slot won't work — ${gate.reason}. Would you like me to suggest another time?` };
+  }
+
   // Check for double-booking
   const { data: existing } = await db.supabase
     .from('appointments')

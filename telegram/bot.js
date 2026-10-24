@@ -316,22 +316,15 @@ bot.start(safeHandler('/start', async (ctx) => {
     return;
   }
 
-  // New user without start parameter — show available clinics
-  const { data: allClinics } = await supabase
-    .from('clients')
-    .select('id, name')
-    .order('name');
-
-  if (!allClinics || allClinics.length === 0) {
-    await ctx.reply('❌ No clinics found. Contact Pixel Vault support.');
-    return;
-  }
-
-  const keyboard = allClinics.map(c => [{ text: c.name, callback_data: `link_clinic:${c.id}` }]);
+  // New user without start parameter — do NOT list clinics.
+  // Previously this showed every clinic with one-tap self-linking buttons:
+  // any stranger who found the bot could attach themselves to any clinic
+  // and receive its bookings/alerts. Linking requires an invite code or
+  // an admin-issued linking link — never self-service.
   await ctx.reply(
     `👋 Welcome to Moon Hands, ${name}!\n\n` +
-    `Which clinic are you from?`,
-    { reply_markup: { inline_keyboard: keyboard } }
+    `This bot is for clinic staff. To link your Telegram to your clinic, ` +
+    `please use the linking link from your clinic manager or Moon Hands admin.`,
   );
 }));
 
@@ -1105,6 +1098,32 @@ async function callbackQueryRouter(ctx, next) {
   // ── Clinic linking ──
   if (data.startsWith('link_clinic:') || data.startsWith('select_clinic:')) {
     const clinicId = data.split(':')[1];
+    const isSelect = data.startsWith('select_clinic:');
+
+    if (isSelect) {
+      // Only valid if this chat is ALREADY linked to that clinic
+      const { supabase } = require('../supabase/client');
+      const { data: c } = await supabase
+        .from('clients')
+        .select('id, name, telegram_chat_ids')
+        .eq('id', clinicId)
+        .single();
+      const already = (c?.telegram_chat_ids || []).some(id => String(id) === String(chatId));
+      if (!already) {
+        await ctx.answerCbQuery('Not authorized for this clinic');
+        return;
+      }
+      await ctx.answerCbQuery(`Managing ${c.name}`);
+      await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
+      await ctx.reply(
+        `✅ You're managing *${c.name}*.`,
+        { parse_mode: 'Markdown', reply_markup: QUICK_MENU_KEYBOARD }
+      );
+      return;
+    }
+
+    // link_clinic: admin only — staff link via invite code or linking link
+    if (!adminOnly(ctx)) return;
     const { linkChatToClinic } = require('./multi-clinic-sender');
     const result = await linkChatToClinic(chatId, clinicId);
     
