@@ -52,14 +52,19 @@ function getCategory(s) {
 /**
  * Check if patient has a booking with pending_alternative status.
  * Returns the booking or null.
+ * SCOPED BY CLINIC: without client_id this leaks across clinics — a patient
+ * with a pending alternative at Clinic A would hijack their conversation at
+ * Clinic B (proven in prod: aesthetic booking surfaced on chiro number).
  */
-async function checkPendingAlternative(patientPhone) {
+async function checkPendingAlternative(patientPhone, clientId) {
   try {
+    if (!clientId) return null; // fail-closed: never query cross-clinic
     const db = require('../supabase/client');
     const { data, error } = await db.supabase
       .from('appointments')
       .select('*')
       .eq('customer_phone', patientPhone)
+      .eq('client_id', clientId) // DATA ISOLATION
       .eq('status', 'pending_alternative')
       .order('created_at', { ascending: false })
       .limit(1);
@@ -80,7 +85,7 @@ async function routeMessage(message, clinicConfig, patientPhone = null, conversa
 
   // ── STEP 0: Check for pending alternative booking confirmations ──
   // If clinic suggested an alternative time via Telegram and patient replies on WhatsApp
-  const pendingAlt = await checkPendingAlternative(phone);
+  const pendingAlt = await checkPendingAlternative(phone, clinicConfig?.id);
   if (pendingAlt) {
     // 0a — Patient confirms with YES / agreement phrase
     if (isConfirmation(message) || isAgreement(message)) {
@@ -106,6 +111,25 @@ async function routeMessage(message, clinicConfig, patientPhone = null, conversa
     // 0b — Patient counters with a different time (e.g., "How about 3pm?")
     const fields = extractBookingFields(message, clinicConfig?.config?.services || []);
     if (fields.date || fields.time) {
+      // VALIDATE the proposed slot before bothering the clinic with it:
+      // opening hours + duration fits + conflicts with existing bookings
+      const services = clinicConfig?.config?.services || [];
+      const svc = services.find(s => pendingAlt.service &&
+        String(s.name || '').toLowerCase() === String(pendingAlt.service).toLowerCase());
+      const durMin = parseInt(svc?.duration) || pendingAlt.duration || 60;
+      const valDate = fields.date || pendingAlt.appointment_date;
+      const valTime = fields.time || pendingAlt.appointment_time;
+      const { validateBookingSlot } = require('./availability-engine');
+      const v = await validateBookingSlot(clinicConfig?.id, valDate, valTime, durMin, clinicConfig, pendingAlt.id);
+      if (!v.ok) {
+        const { formatBookingDateTime } = require('../utils/date-helpers');
+        return {
+          text: `I'm sorry, ${formatBookingDateTime(valDate, valTime)} won't work — ${v.reason}. Could you suggest another day or time?`,
+          source: 'hardcoded',
+          cost_saved: 1,
+          latency_ms: Date.now() - startTime
+        };
+      }
       const { handlePatientCounterProposal } = require('../telegram/booking-notifications');
       const result = await handlePatientCounterProposal(pendingAlt.id, message, fields);
       if (result.success) {
@@ -799,16 +823,17 @@ function validateBookingTime(dateStr, timeStr, operatingHours) {
     return { isOpen: true }; // No hours configured = allow all
   }
   
-  // Get day of week from date string (YYYY-MM-DD)
-  const date = new Date(dateStr + 'T00:00:00+08:00'); // SGT
-  const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Public Holidays'];
-  const dayName = dayNames[date.getDay()];
+  // Get day of week from date string (YYYY-MM-DD) — TZ-deterministic.
+  // Never new Date(str + 'T00:00:00+08:00').getDay(): on UTC servers (Render)
+  // that yields the PREVIOUS day and validates against the wrong hours.
+  const { getDayNameSafe } = require('../utils/date-helpers');
+  const dayName = getDayNameSafe(dateStr);
   
   // Find operating hours for this day
   let dayEntry = operatingHours.find(h => h.day === dayName);
   
   // Fallback to generic "Public Holidays" if no specific entry
-  if (!dayEntry && date.getDay() === 0) { // Sunday
+  if (!dayEntry && dayName === 'Sunday') {
     dayEntry = operatingHours.find(h => h.day === 'Sunday');
   }
   if (!dayEntry) {

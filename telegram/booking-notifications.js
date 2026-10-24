@@ -598,13 +598,11 @@ async function handlePatientCounterProposal(bookingId, patientMessage, parsedFie
     }
 
     // Build a human-readable time text from parsed fields
+    // Format: "Sat, 31 Oct 2026 at 21:00hrs" (TZ-deterministic)
+    const { formatBookingDateTime } = require('../utils/date-helpers');
     let timeText = '';
-    if (parsedFields.date && parsedFields.time) {
-      timeText = `${parsedFields.date} at ${parsedFields.time}`;
-    } else if (parsedFields.time) {
-      timeText = parsedFields.time;
-    } else if (parsedFields.date) {
-      timeText = parsedFields.date;
+    if (parsedFields.date || parsedFields.time) {
+      timeText = formatBookingDateTime(parsedFields.date, parsedFields.time);
     } else {
       timeText = patientMessage; // fallback to raw message
     }
@@ -631,7 +629,7 @@ async function handlePatientCounterProposal(bookingId, patientMessage, parsedFie
         `🔄 *Patient Counter-Proposal*
 \n` +
         `👤 ${escapeMarkdown(booking.customer_name || 'Patient')}\n` +
-        `📅 Original: ${escapeMarkdown(booking.appointment_date || '')} ${escapeMarkdown(booking.appointment_time || '')}\n` +
+        `📅 Original: ${escapeMarkdown(formatBookingDateTime(booking.appointment_date, booking.appointment_time))}\n` +
         `💬 Patient suggests: *${escapeMarkdown(timeText)}*\n` +
         `🩺 ${escapeMarkdown(booking.service || 'General consultation')}\n\n` +
         `Reply with a new time to suggest another alternative, or use the dashboard to confirm.`,

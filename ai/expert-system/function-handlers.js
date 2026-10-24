@@ -205,6 +205,14 @@ async function createBooking({ client_id, customer_name, customer_phone, service
     
     // Check for conflicts (proper overlap detection, not just exact time match)
     const treatmentDuration = clinic.appointment_duration_minutes || 30;
+
+    // UNIFIED GATE: opening hours + duration fits before close
+    // (overlap conflicts are double-checked below)
+    const { validateBookingSlot } = require('../availability-engine');
+    const gate = await validateBookingSlot(client_id, apptDate, apptTime, callerDuration || treatmentDuration, clinic, null);
+    if (!gate.ok) {
+      return { success: false, error: `${gate.reason}. Would you like a different day or time?` };
+    }
     const { data: existingBookings, error: conflictErr } = await supabase
       .from('appointments')
       .select('*')

@@ -76,20 +76,79 @@ function getTodaySG() {
   }).split('/').reverse().join('-'); // YYYY-MM-DD
 }
 
+/**
+ * Deterministic day-of-week for a YYYY-MM-DD string.
+ * NEVER uses timezone-shifted Date parsing (new Date(str + 'T00:00:00+08:00')
+ * breaks on UTC servers like Render — getDay() returns the PREVIOUS day).
+ */
+const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const DAY_NAMES_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const MONTH_NAMES_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+function getDayOfWeekUTC(dateStr) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).getUTCDay(); // 0=Sunday
+}
+
+function getDayNameSafe(dateStr) {
+  return DAY_NAMES[getDayOfWeekUTC(dateStr)] || '';
+}
+
+function getDayNameShortSafe(dateStr) {
+  return DAY_NAMES_SHORT[getDayOfWeekUTC(dateStr)] || '';
+}
+
+/** Add n days to a YYYY-MM-DD string, returning YYYY-MM-DD. TZ-deterministic. */
+function addDaysToDateStr(dateStr, n) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const t = new Date(Date.UTC(y, m - 1, d) + n * 86400000);
+  return `${t.getUTCFullYear()}-${String(t.getUTCMonth() + 1).padStart(2, '0')}-${String(t.getUTCDate()).padStart(2, '0')}`;
+}
+
+/** Format a date string as "Sat, 31 Oct 2026". TZ-deterministic. */
+function formatDateStrDisplay(dateStr) {
+  if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return dateStr || '';
+  const [, m, d] = dateStr.split('-').map(Number);
+  return `${getDayNameShortSafe(dateStr)}, ${d} ${MONTH_NAMES_SHORT[m - 1]} ${dateStr.slice(0, 4)}`;
+}
+
+/** Normalize "21:00:00" -> "21:00". */
+function normalizeTimeStr(timeStr) {
+  if (!timeStr) return '';
+  const m = String(timeStr).match(/^(\d{1,2}:\d{2})/);
+  return m ? m[1] : String(timeStr);
+}
+
+/**
+ * Format booking date+time for humans: "Sat, 31 Oct 2026 at 21:00hrs".
+ * Falls back gracefully when one side is missing.
+ */
+function formatBookingDateTime(dateStr, timeStr) {
+  const datePart = formatDateStrDisplay(dateStr);
+  const timePart = normalizeTimeStr(timeStr);
+  if (datePart && timePart) return `${datePart} at ${timePart}hrs`;
+  if (timePart) return `${timePart}hrs`;
+  return datePart || '';
+}
+
 function isClinicOpenNow(operatingHours) {
+  // Use Singapore time regardless of server timezone (Render runs UTC)
   const now = new Date();
-  const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-  const dayName = dayNames[now.getDay()];
-  
+  const dayName = now.toLocaleDateString('en-US', { timeZone: 'Asia/Singapore', weekday: 'long' });
+  const timeStr = now.toLocaleString('en-US', {
+    timeZone: 'Asia/Singapore', hour12: false, hour: '2-digit', minute: '2-digit',
+  });
+  const [curH, curM] = timeStr.split(':').map(Number);
+  const currentMinutes = curH * 60 + curM;
+
   const hours = operatingHours?.find(h => h.day === dayName);
   if (!hours || !hours.isOpen) return false;
-  
-  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+
   const [openH, openM] = hours.open_time.split(':').map(Number);
   const [closeH, closeM] = hours.close_time.split(':').map(Number);
   const openMinutes = openH * 60 + openM;
   const closeMinutes = closeH * 60 + closeM;
-  
+
   return currentMinutes >= openMinutes && currentMinutes < closeMinutes;
 }
 
@@ -100,4 +159,11 @@ module.exports = {
   getTodaySG,
   isClinicOpenNow,
   isDateInPast,
+  getDayOfWeekUTC,
+  getDayNameSafe,
+  getDayNameShortSafe,
+  addDaysToDateStr,
+  formatDateStrDisplay,
+  normalizeTimeStr,
+  formatBookingDateTime,
 };

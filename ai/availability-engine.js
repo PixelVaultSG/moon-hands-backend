@@ -11,7 +11,7 @@
  */
 
 const { supabase } = require('../supabase/client');
-const { getTodaySG } = require('../utils/date-helpers');
+const { getTodaySG, getDayNameSafe, addDaysToDateStr, formatDateStrDisplay } = require('../utils/date-helpers');
 
 const SLOT_INTERVAL_MIN = 30; // Offer slots every 30 minutes
 
@@ -25,10 +25,10 @@ const SLOT_INTERVAL_MIN = 30; // Offer slots every 30 minutes
  * @returns {Promise<{available: boolean, slots: string[], reason: string|null, operatingHours: string, totalDuration: number}>}
  */
 async function getAvailableSlots(clientId, dateStr, treatmentNames, clientConfig) {
-  // 1. Get operating hours for the day
-  const dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-  const dateObj = new Date(dateStr + 'T00:00:00+08:00');
-  const dayName = dayNames[dateObj.getDay()];
+  // 1. Get operating hours for the day.
+  // TZ-deterministic: never new Date(str + 'T00:00:00+08:00').getDay() —
+  // on UTC servers (Render) that returns the PREVIOUS day's name.
+  const dayName = getDayNameSafe(dateStr);
   
   const hours = (clientConfig.config?.operating_hours || clientConfig.operating_hours || [])
     .find(h => h.day === dayName);
@@ -65,7 +65,9 @@ async function getAvailableSlots(clientId, dateStr, treatmentNames, clientConfig
     .eq('appointment_date', dateStr)
     // 'pending_alternative' = clinic suggested a different time via Telegram;
     // the slot stays blocked until the patient accepts or declines.
-    .in('status', ['confirmed', 'pending', 'booked', 'pending_alternative'])
+    // 'pending_approval' = patient booked, clinic hasn't confirmed yet — the
+    // slot MUST stay blocked so two patients can't take the same slot.
+    .in('status', ['confirmed', 'pending', 'booked', 'pending_alternative', 'pending_approval'])
     .order('appointment_time');
   
   if (error) {
@@ -139,19 +141,16 @@ async function getNextAvailableDates(clientId, treatmentNames, clientConfig, cou
   const results = [];
   // Compute today in Singapore timezone (UTC+8) regardless of server timezone
   const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Singapore' }); // YYYY-MM-DD
-  const today = new Date(todayStr + 'T00:00:00+08:00');
-  
+
   for (let i = 1; i <= 21 && results.length < count; i++) {
-    const d = new Date(today);
-    d.setDate(d.getDate() + i);
-    const dateStr = formatDateSG(d);
-    
+    const dateStr = addDaysToDateStr(todayStr, i); // TZ-deterministic
+
     const avail = await getAvailableSlots(clientId, dateStr, treatmentNames, clientConfig);
     if (avail.available) {
-      results.push({ date: dateStr, label: getDateLabelSG(d, i), slots: avail.slots, operatingHours: avail.operatingHours });
+      results.push({ date: dateStr, label: formatDateStrDisplay(dateStr), slots: avail.slots, operatingHours: avail.operatingHours });
     }
   }
-  
+
   return results;
 }
 
@@ -168,23 +167,16 @@ async function getNextAvailableDates(clientId, treatmentNames, clientConfig, cou
  * @returns {Promise<{found: boolean, nextDate: string|null, nextSlots: string[], label: string, allDates: Array}>}
  */
 async function findNextAvailableAfter(clientId, treatmentNames, clientConfig, fromDateStr, daysToSearch = 21) {
-  const fromDate = new Date(fromDateStr + 'T00:00:00+08:00');
   const allDates = [];
-  // Compute today in Singapore timezone for accurate offset calculation
-  const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Singapore' });
-  const todaySG = new Date(todayStr + 'T00:00:00+08:00');
-  
+
   for (let i = 1; i <= daysToSearch && allDates.length < 3; i++) {
-    const d = new Date(fromDate);
-    d.setDate(d.getDate() + i);
-    const dateStr = formatDateSG(d);
-    
+    const dateStr = addDaysToDateStr(fromDateStr, i); // TZ-deterministic
+
     const avail = await getAvailableSlots(clientId, dateStr, treatmentNames, clientConfig);
     if (avail.available && avail.slots.length > 0) {
-      const offset = Math.round((d - todaySG) / (1000 * 60 * 60 * 24));
       allDates.push({
         date: dateStr,
-        label: getDateLabelSG(d, offset),
+        label: formatDateStrDisplay(dateStr),
         slots: avail.slots,
         operatingHours: avail.operatingHours
       });
@@ -331,12 +323,87 @@ async function isTimeAvailable(clientId, dateStr, timeStr, treatmentNames, clien
   );
 }
 
+/**
+ * UNIFIED BOOKING GATE — single source of truth for "can this slot be booked?"
+ * Every booking creation path (bot-engine, expert function-handlers, patient
+ * counter-proposals) MUST pass through this before writing an appointment.
+ *
+ * Checks, in order:
+ *   1. Clinic is open that day (closed days rejected)
+ *   2. Start time within opening hours
+ *   3. start + duration fits before closing time
+ *   4. No overlap with existing bookings that still hold their slot:
+ *      confirmed / pending / booked / pending_alternative / pending_approval
+ *
+ * @param {string} clientId
+ * @param {string} dateStr  - YYYY-MM-DD
+ * @param {string} timeStr  - HH:MM (24h)
+ * @param {number} durationMin
+ * @param {Object} clientConfig - full client config (uses config.operating_hours)
+ * @param {string|null} excludeBookingId - booking to ignore (e.g. the one being rescheduled)
+ * @returns {Promise<{ok: boolean, reason: string|null, openTime: string|null, closeTime: string|null}>}
+ */
+async function validateBookingSlot(clientId, dateStr, timeStr, durationMin, clientConfig, excludeBookingId = null) {
+  const hours = clientConfig?.config?.operating_hours || clientConfig?.operating_hours || [];
+  const dur = parseInt(durationMin) || 60;
+
+  // 1–3. Opening-hours checks (only when hours are configured)
+  if (Array.isArray(hours) && hours.length > 0 && dateStr) {
+    const dayName = getDayNameSafe(dateStr); // TZ-deterministic
+    const dayEntry = hours.find(h => h.day === dayName);
+    if (dayEntry) {
+      if (!dayEntry.isOpen) {
+        return { ok: false, reason: `${dayName}s we're closed`, openTime: null, closeTime: null };
+      }
+      if (timeStr && dayEntry.open_time && dayEntry.close_time) {
+        const start = minutesFromTime(timeStr);
+        const open = minutesFromTime(dayEntry.open_time);
+        const close = minutesFromTime(dayEntry.close_time);
+        if (start < open) {
+          return { ok: false, reason: `We open at ${dayEntry.open_time} on ${dayName}s`, openTime: dayEntry.open_time, closeTime: dayEntry.close_time };
+        }
+        if (start + dur > close) {
+          return { ok: false, reason: `We close at ${dayEntry.close_time} on ${dayName}s — a ${dur}-min session wouldn't fit at that time`, openTime: dayEntry.open_time, closeTime: dayEntry.close_time };
+        }
+      }
+    }
+  }
+
+  // 4. Conflict check against slot-holding bookings
+  if (dateStr && timeStr) {
+    const { data: existing, error } = await supabase
+      .from('appointments')
+      .select('id, appointment_time, duration')
+      .eq('client_id', clientId)
+      .eq('appointment_date', dateStr)
+      .in('status', ['confirmed', 'pending', 'booked', 'pending_alternative', 'pending_approval']);
+    if (error) {
+      console.error('[AVAILABILITY] validateBookingSlot conflict check error:', error.message);
+      // fail-closed on conflicts would block all bookings on a DB hiccup;
+      // fail-open here matches existing behavior, hours checks above still ran
+    }
+    const start = minutesFromTime(timeStr);
+    const end = start + dur;
+    for (const b of (existing || [])) {
+      if (excludeBookingId && b.id === excludeBookingId) continue;
+      const bStart = minutesFromTime(b.appointment_time);
+      const bEnd = bStart + (b.duration || 60);
+      if (start < bEnd && end > bStart) {
+        return { ok: false, reason: 'That time overlaps an existing booking', openTime: null, closeTime: null };
+      }
+    }
+  }
+
+  return { ok: true, reason: null, openTime: null, closeTime: null };
+}
+
 module.exports = {
   getAvailableSlots,
   getNextAvailableDates,
   findNextAvailableAfter,
   findNextSlotsOnDate,
   isTimeAvailable,
+  validateBookingSlot,
   formatTime,
   formatDate
 };
