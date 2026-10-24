@@ -368,7 +368,7 @@ async function routeMessage(message, clinicConfig, patientPhone = null, conversa
   // These require looking at conversation history to determine meaning
   
   if (primaryIntent.intent === 'confirmation_yes') {
-    const contextResponse = handleConfirmationYes(message, clinicConfig, patientPhone, conversationHistory, startTime);
+    const contextResponse = await handleConfirmationYes(message, clinicConfig, patientPhone, conversationHistory, startTime);
     if (contextResponse) return contextResponse;
   }
   
@@ -380,6 +380,17 @@ async function routeMessage(message, clinicConfig, patientPhone = null, conversa
   if (primaryIntent.intent === 'clarification') {
     const contextResponse = handleClarification(message, clinicConfig, patientPhone, conversationHistory, startTime);
     if (contextResponse) return contextResponse;
+  }
+
+  // ── STEP 4c: Edit/reschedule with NO active booking state ──────────
+  // The summary card's Edit button (confirm_change → 'correction') and typed
+  // "change my booking" arrive here when the patient is idle (e.g. after the
+  // booking was already created). Open the edit menu on their actual upcoming
+  // booking instead of falling through to an LLM shrug.
+  if (primaryIntent.intent === 'correction' || primaryIntent.intent === 'reschedule_request') {
+    const editResponse = await startEditBookingFlow(message, clinicConfig, patientPhone, conversationHistory, startTime);
+    if (editResponse) return editResponse;
+    // No editable booking found — fall through to normal handlers
   }
 
   // ── STEP 5: Hardcoded handler ───────────────────────────────────
@@ -446,14 +457,79 @@ async function routeMessage(message, clinicConfig, patientPhone = null, conversa
 
 // ─── CONTEXT-DEPENDENT INTENT HANDLERS ───────────────────────────
 
-function handleConfirmationYes(message, clinicConfig, patientPhone, conversationHistory, startTime) {
+// ─── EDIT EXISTING BOOKING FLOW ──────────────────────────────────
+// Patient wants to change an EXISTING booking (idle state): show the edit
+// menu preloaded with their soonest upcoming booking. Selections route
+// through EDITING_BOOKING → the normal booking states, and attemptBooking
+// UPDATES the row in place when data.editBookingId is present (setState
+// merges, so the edit context survives every state transition).
+async function startEditBookingFlow(message, clinicConfig, patientPhone, conversationHistory, startTime) {
+  if (!patientPhone) return null;
+  try {
+    const { supabase } = require('../supabase/client');
+    const { getTodaySG, formatDateStrDisplay, normalizeTimeStr } = require('../utils/date-helpers');
+    const clinicId = clinicConfig.id || clinicConfig.client_id;
+    const phoneDigits = String(patientPhone).replace(/\D/g, '');
+    const { data: appts, error } = await supabase
+      .from('appointments')
+      .select('*')
+      .eq('client_id', clinicId)
+      .eq('customer_phone', phoneDigits)
+      .in('status', ['pending', 'confirmed', 'pending_alternative'])
+      .gte('appointment_date', getTodaySG())
+      .order('appointment_date', { ascending: true })
+      .order('appointment_time', { ascending: true })
+      .limit(1);
+    if (error || !appts || appts.length === 0) return null;
+
+    const appt = appts[0];
+    const treatments = (appt.service || '').split(' + ').filter(Boolean);
+    setState(patientPhone, BOOKING_STATES.EDITING_BOOKING, {
+      editBookingId: appt.id,
+      editOriginal: { date: appt.appointment_date, time: appt.appointment_time, service: appt.service },
+      date: appt.appointment_date,
+      time: normalizeTimeStr(appt.appointment_time),
+      treatment: treatments[0] || appt.service,
+      treatments: treatments.length > 0 ? treatments : [appt.service],
+      name: appt.customer_name,
+    });
+    const { getEditMenuButtons } = require('./whatsapp-interactive');
+    const body = `No problem! Your next booking is ${formatDateStrDisplay(appt.appointment_date)} at ${normalizeTimeStr(appt.appointment_time)}hrs — ${treatments.join(' + ') || appt.service}.\n\nWhat would you like to change?`;
+    return {
+      text: body,
+      source: 'hardcoded',
+      intents: ['edit_booking'],
+      cost_saved: 1,
+      latency_ms: Date.now() - startTime,
+      whatsappInteractive: getEditMenuButtons(body)
+    };
+  } catch (err) {
+    console.error('[EDIT_FLOW] startEditBookingFlow error:', err.message);
+    return null;
+  }
+}
+
+async function handleConfirmationYes(message, clinicConfig, patientPhone, conversationHistory, startTime) {
   // Look at the LAST AI message to understand what the user is confirming
   if (!conversationHistory || conversationHistory.length === 0) return null;
   
   const lastAiMessage = conversationHistory[conversationHistory.length - 1]?.ai?.toLowerCase() || '';
   
-  // Check what the bot last asked/offered
-  const isBookingOffer = lastAiMessage.includes('book') || lastAiMessage.includes('appointment') || lastAiMessage.includes('schedule');
+  // CHANGE/EDIT OFFER takes precedence: "Would you like to make any changes
+  // to this?" — a "yes" here means EDIT the existing booking, not book anew.
+  const isChangeOffer = lastAiMessage.includes('make any changes') || lastAiMessage.includes('make changes')
+    || lastAiMessage.includes('change your') || lastAiMessage.includes('change the') || lastAiMessage.includes('change this')
+    || lastAiMessage.includes('edit') || lastAiMessage.includes('reschedule') || lastAiMessage.includes('modify');
+  if (isChangeOffer) {
+    const editResponse = await startEditBookingFlow(message, clinicConfig, patientPhone, conversationHistory, startTime);
+    if (editResponse) return editResponse;
+    // No upcoming booking found — fall through to normal handling
+  }
+  
+  // Check what the bot last asked/offered. NOTE: must be an offer TO BOOK —
+  // the bare substring 'book' also matches 'treatments booked', which is how
+  // a yes to a change-offer used to launch a fresh booking flow by mistake.
+  const isBookingOffer = /would you like (me )?to (book|arrange|schedule)|shall i (book|arrange|schedule)|like to (book|schedule|make a booking)|interested in booking|want to book|ready to book|help you (book|schedule)|book a consultation|book an appointment|would you like to schedule/.test(lastAiMessage);
   const isServiceOffer = lastAiMessage.includes('treatment') || lastAiMessage.includes('service') || lastAiMessage.includes('offer');
   const isPricingOffer = lastAiMessage.includes('price') || lastAiMessage.includes('cost');
   const isDateAsked = lastAiMessage.includes('what date') || lastAiMessage.includes('when') || lastAiMessage.includes('what day');
@@ -1045,11 +1121,43 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
     }
   }
   
-  // Check if user wants to cancel the booking flow
-  const cancelWords = ['cancel', 'never mind', 'nevermind', 'stop', 'forget it', 'go back'];
+  // Edit button tapped on a (possibly stale) summary card while a booking
+  // state is active — open the edit menu instead of falling into the state
+  // machine. Works for in-progress bookings (no editBookingId → update at
+  // confirm becomes a normal create) and post-booking edits alike.
+  if (msgLower === 'i want to change something' || msgLower === 'confirm_change' || msgLower === 'edit') {
+    setState(patientPhone, BOOKING_STATES.EDITING_BOOKING, currentState.data || {});
+    const { getEditMenuButtons } = require('./whatsapp-interactive');
+    return {
+      text: 'No problem! What would you like to change?',
+      source: 'hardcoded',
+      intents: ['edit_booking'],
+      cost_saved: 1,
+      latency_ms: Date.now() - startTime,
+      whatsappInteractive: getEditMenuButtons()
+    };
+  }
+
+  // Check if user wants to cancel the booking flow — includes natural
+  // refusals ("I don't want to book anything") not just the word "cancel"
+  const cancelWords = ['cancel', 'never mind', 'nevermind', 'stop', 'forget it', 'go back',
+    "don't want to book", "dont want to book", "do not want to book", "don't want this",
+    "don't want anymore", "do not want this", 'not interested', 'changed my mind',
+    'no thanks', 'no thank you', 'forget about it', 'not anymore', 'leave it'];
   if (cancelWords.some(w => message.toLowerCase().includes(w))) {
     resetIdle(patientPhone);
     return { text: "No problem! Let me know if you need anything else.", source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+  }
+
+  // Bare denial mid-flow ("no", "nope", "nah") also exits — EXCEPT where "no"
+  // carries specific meaning: AWAITING_CONFIRMATION (no → edit menu) and
+  // BOOKING_OFFERED (own denial handling). A denial carrying new booking
+  // details ("no, not Friday — Saturday") keeps the flow alive.
+  if (isDenial(message) && !fields.date && !fields.time &&
+      currentState.state !== BOOKING_STATES.AWAITING_CONFIRMATION &&
+      currentState.state !== BOOKING_STATES.BOOKING_OFFERED) {
+    resetIdle(patientPhone);
+    return { text: "No problem — I've stopped that booking. If you'd like anything else, just say so.", source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
   }
 
   // ── OFF-TOPIC ESCAPE: patient changed the subject mid-flow ───────────
@@ -1079,7 +1187,13 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
       // ("know more about X", "do you offer X") — never for bare names
       const inquiryMatch = !offTopicMatch && (matchIntents(message, conversationHistory, false) || [])
         .find(m => m.intent === 'service_inquiry' && m.confidence >= 0.85 && m.params?.treatment && msgLower !== m.params.treatment);
-      const escapeIntent = offTopicMatch || inquiryMatch;
+      // Comparison / what-is questions ("what's the difference between X and
+      // Y", "what is dry needling") match no intent in the matcher — catch the
+      // phrasing directly so a mid-flow question gets ANSWERED, not trapped
+      // behind "Sorry, I didn't catch the date."
+      const COMPARE_OR_INFO_RE = /\bdifferences?\s+between\b|\bcompar(?:e|ing|ison)\b|\bversus\b|\bvs\.?\s|\bwhich\s+(?:one|treatment|service)\b[^?]*(?:better|best|differ)|^(?:what|what's|whats)\s+(?:is|are)\s|^how\s+does\s+\w+\s+work/i;
+      const compareInfoMatch = COMPARE_OR_INFO_RE.test(message) ? { intent: 'offtopic_question' } : null;
+      const escapeIntent = offTopicMatch || inquiryMatch || compareInfoMatch;
       if (escapeIntent) {
         console.log(`[BOOKING_FLOW] Off-topic '${escapeIntent.intent}' in state ${currentState.state} — exiting booking flow, re-routing`);
         resetIdle(patientPhone);
@@ -1663,7 +1777,7 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
       const editData = currentState.data;
       
       if (editChoice.includes('date') || editChoice === 'edit_date') {
-        setState(patientPhone, BOOKING_STATES.AWAITING_DATE, editData);
+        setState(patientPhone, BOOKING_STATES.AWAITING_DATE, { ...editData, date: undefined, time: undefined });
         const { getDateButtonOptions } = require('./whatsapp-interactive');
         const { getNextAvailableDates } = require('./availability-engine');
         try {
@@ -1686,7 +1800,7 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
       }
       
       if (editChoice.includes('time') || editChoice === 'edit_time') {
-        setState(patientPhone, BOOKING_STATES.AWAITING_TIME, editData);
+        setState(patientPhone, BOOKING_STATES.AWAITING_TIME, { ...editData, time: undefined });
         const { getTimeSlotButtons } = require('./whatsapp-interactive');
         const { getAvailableSlots } = require('./availability-engine');
         const date = editData.date;
@@ -2034,6 +2148,63 @@ async function attemptBooking(clinicConfig, patientPhone, fields, conversationHi
   // Range-aware estimated total (fixed prices sum; ranges sum to min–max)
   const priceSum = sumServicePrices(matchedServices);
   const priceText = priceSum.hasPrice ? formatPriceTotal(priceSum.min, priceSum.max) : null;
+
+  // ── EDIT MODE: update the existing booking in place ──
+  // editBookingId rides the state data from startEditBookingFlow (setState
+  // merges, so it survives every transition). Confirming an edit must UPDATE
+  // the row — never INSERT a duplicate booking.
+  if (fields.editBookingId) {
+    try {
+      const { updateBooking } = require('./expert-system/function-handlers');
+      const editResult = await updateBooking({
+        client_id: clinicConfig.id,
+        appointment_id: fields.editBookingId,
+        date: fields.date,
+        time: fields.time,
+        service: serviceNames,
+        duration: totalDuration,
+        name: patientName,
+        phone: String(patientPhone).replace(/\D/g, ''),
+      });
+      if (editResult.success) {
+        resetIdle(patientPhone);
+        const reconfirm = editResult.changed
+          ? `The clinic will review and re-confirm the updated details shortly.`
+          : `Your booking details are up to date.`;
+        return {
+          text: `✅ Done — your booking has been updated:\n\n👤 ${patientName}\n💆 ${serviceNames}\n📅 ${fields.date}\n🕐 ${fields.time}\n\n${reconfirm}`,
+          source: 'hardcoded',
+          intents: ['booking_updated'],
+          cost_saved: 0.5,
+          latency_ms: Date.now() - startTime
+        };
+      }
+      // Update failed — keep the edit state so the patient can retry
+      setState(patientPhone, BOOKING_STATES.EDITING_BOOKING, {
+        editBookingId: fields.editBookingId,
+        editOriginal: fields.editOriginal,
+        date: fields.date,
+        time: fields.time,
+        treatment: fields.treatment,
+        treatments: fields.treatments,
+        name: patientName,
+      });
+      return {
+        text: `I couldn't update your booking: ${editResult.error}`,
+        source: 'hardcoded',
+        cost_saved: 1,
+        latency_ms: Date.now() - startTime
+      };
+    } catch (editErr) {
+      console.error('[attemptBooking] Edit-in-place failed:', editErr.message);
+      return {
+        text: `I had trouble updating your booking. Please try again in a moment.`,
+        source: 'hardcoded',
+        cost_saved: 1,
+        latency_ms: Date.now() - startTime
+      };
+    }
+  }
 
   try {
     const { createBooking } = require('./expert-system/function-handlers');

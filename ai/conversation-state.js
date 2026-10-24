@@ -209,6 +209,17 @@ function parseDatePhrase(phrase) {
     const d = new Date(now); d.setDate(d.getDate() + 7);
     return formatDate(d);
   }
+  // Bare weekday ("Thursday at 4pm" → nearest upcoming Thursday; if today IS
+  // that day, assume next week's — a same-day request would say "today")
+  const dayNames0 = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
+  if (dayNames0.includes(expanded)) {
+    const targetDay = dayNames0.indexOf(expanded);
+    const d = new Date(now);
+    let daysAhead = targetDay - d.getDay();
+    if (daysAhead <= 0) daysAhead += 7;
+    d.setDate(d.getDate() + daysAhead);
+    return formatDate(d);
+  }
   const dayMatch = expanded.match(/(next|this)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)/);
   if (dayMatch) {
     const dayNames = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
@@ -355,6 +366,7 @@ function extractBookingFields(message, services = []) {
     /nxt\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)/i,
     /next\s+(mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun)\b/i,
     /next week/i,
+    /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i, // bare weekday → next occurrence
     /\btmr\b|\btmrw\b/i,
     /tomorrow/i,
     /\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}\b/i,

@@ -1195,7 +1195,10 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
       });
 
       const finalResponse = secondCompletion.choices[0].message.content;
-      
+
+      await logConversation(clientConfig.id, 'whatsapp', patientPhone, null,
+        messageText, finalResponse, `generalist:${funcName}`);
+
       return {
         text: finalResponse,
         function_called: funcName,
@@ -1205,8 +1208,11 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
     }
 
     // Direct response (no function call needed)
+    const directText = response.message?.content || "I'm sorry, I didn't understand that. How can I help you today?";
+    await logConversation(clientConfig.id, 'whatsapp', patientPhone, null,
+      messageText, directText, 'generalist:direct');
     return {
-      text: response.message?.content || "I'm sorry, I didn't understand that. How can I help you today?",
+      text: directText,
       function_called: null,
       model: 'gpt-4o-mini'
     };

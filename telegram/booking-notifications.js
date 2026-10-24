@@ -66,11 +66,16 @@ async function sendTelegramMessage(text, chatId = ADMIN_CHAT_ID, replyMarkup = u
     if (replyMarkup) {
       payload.reply_markup = replyMarkup;
     }
-    await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+    const resp = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
+    if (!resp.ok) {
+      // fetch doesn't throw on HTTP errors — surface Telegram rejections
+      const errBody = await resp.text().catch(() => '');
+      console.error(`[BOOKING_NOTIFY] Telegram rejected send to ${chatId} (HTTP ${resp.status}):`, errBody.substring(0, 300));
+    }
   } catch (err) {
     console.error('[BOOKING_NOTIFY] Telegram send failed:', err.message);
   }

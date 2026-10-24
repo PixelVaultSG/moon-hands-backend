@@ -92,14 +92,26 @@ function buildQuickReplyButtons({ body, footer, buttons }) {
 
 // ─── PRE-BUILT TEMPLATES ──────────────────────────────────────────
 
-function getWelcomeList(clinicName, agentName) {
+// Services-row wording follows the clinic's industry (client_configs.config.industry).
+// Aesthetic wording is preserved for aesthetic clinics; everything else gets
+// neutral or industry-specific wording — never "aesthetic" for a chiropractor.
+const WELCOME_VERTICAL_DESCRIPTIONS = {
+  aesthetic: 'Browse our aesthetic treatments and pricing',
+  aesthetics: 'Browse our aesthetic treatments and pricing',
+  chiropractic: 'Browse our chiropractic treatments and pricing',
+  dental: 'Browse our dental treatments and pricing',
+  physiotherapy: 'Browse our physiotherapy treatments and pricing',
+};
+
+function getWelcomeList(clinicName, agentName, industry) {
+  const servicesDesc = WELCOME_VERTICAL_DESCRIPTIONS[(industry || '').toLowerCase()] || 'Browse our treatments and pricing';
   return buildListMessage({
     header: `Welcome to ${clinicName}`,
     body: `Hi there! I'm ${agentName}, your virtual assistant. How can I help you today?`,
     footer: 'Tap an option below',
     buttonText: 'Get Started',
     rows: [
-      { id: 'services', title: '1. Treatments & Services', description: 'Browse our aesthetic treatments and pricing' },
+      { id: 'services', title: '1. Treatments & Services', description: servicesDesc },
       { id: 'location', title: '2. Location & Contact', description: 'Address, directions, phone number, hours' },
       { id: 'book', title: '3. Book Appointment', description: 'Schedule your visit with us' },
       { id: 'faq', title: '4. Common Questions', description: 'Answers to frequently asked questions' }
@@ -197,9 +209,12 @@ function getTreatmentInfoCard(service, selectedCount = 0) {
 /**
  * Edit menu — shown when user taps Edit on confirmation card
  */
-function getEditMenuButtons() {
+function getEditMenuButtons(customBody) {
+  // NOTE: when an interactive payload is sent, plain reply text is NOT
+  // delivered — any context (e.g. which booking is being edited) MUST be
+  // passed via customBody here, never in response.text.
   return buildListMessage({
-    body: 'What would you like to change?',
+    body: customBody || 'What would you like to change?',
     footer: 'Tap an option below',
     buttonText: 'Edit Options',
     rows: [
