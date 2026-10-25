@@ -382,11 +382,26 @@ function handleServiceList({ clinicConfig }) {
     };
   }
   
-  // Return interactive category list
+  // v2.1.10: pin the consultation quick-book row for chiro clinics here too —
+  // this is the "What treatments do you offer" / Get Started→Services path,
+  // which builds its own list separately from smart-router.showCategorySelection.
+  // Local predicate (not imported) to avoid a circular require with smart-router.
+  const industry = (getConfig(clinicConfig, 'industry') || '').toLowerCase();
+  const consultEnabled = industry === 'chiropractic' || getConfig(clinicConfig, 'quick_book_consultation') === true;
+  const consultService = consultEnabled
+    ? (services.find(s => /consult/i.test(s.name || '') || /consult/i.test(s.category || '')) || null)
+    : null;
+  let shownCategories = categories;
+  if (consultService && consultService.category && /consult/i.test(consultService.category)) {
+    const catServices = services.filter(s => s.category === consultService.category);
+    if (catServices.every(s => /consult/i.test(s.name || ''))) {
+      shownCategories = categories.filter(c => c.name !== consultService.category);
+    }
+  }
   const { getCategoryListMessage } = require('./whatsapp-interactive');
   return {
-    text: `We have ${services.length} treatments across ${categories.length} categories. What are you looking for?`,
-    whatsappInteractive: getCategoryListMessage(categories)
+    text: `We have ${services.length} treatments across ${shownCategories.length} categories. What are you looking for?`,
+    whatsappInteractive: getCategoryListMessage(shownCategories, consultService)
   };
 }
 
