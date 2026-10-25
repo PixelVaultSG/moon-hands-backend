@@ -1101,7 +1101,8 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
   // treatments legitimately contain that word ("back adjustment"). ──
   if (msgLower === 'back to categories' || msgLower === 'nav_categories'
       || msgLower === 'change category' || msgLower === 'change categories'
-      || msgLower === 'different category' || msgLower === 'all categories') {
+      || msgLower === 'different category' || msgLower === 'all categories'
+      || msgLower === 'browse categories') {
     setState(patientPhone, BOOKING_STATES.SELECTING_CATEGORY, { ...currentState.data, category: undefined, categoryServices: undefined });
     return showCategorySelection(clinicConfig, startTime);
   }
@@ -1321,7 +1322,13 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
       // behind "Sorry, I didn't catch the date."
       const COMPARE_OR_INFO_RE = /\bdifferences?\s+between\b|\bcompar(?:e|ing|ison)\b|\bversus\b|\bvs\.?\s|\bwhich\s+(?:one|treatment|service)\b[^?]*(?:better|best|differ)|^(?:what|what's|whats)\s+(?:is|are)\s|^how\s+does\s+\w+\s+work/i;
       const compareInfoMatch = COMPARE_OR_INFO_RE.test(message) ? { intent: 'offtopic_question' } : null;
-      const escapeIntent = offTopicMatch || inquiryMatch || compareInfoMatch;
+      // Symptom statements ("I have back pain", "my neck is stiff") deserve an
+      // answered recommendation from the info expert (it holds the menu) —
+      // not the category-list fallback. Word boundaries keep "painful" etc.
+      // from false-firing; date/time/selection guards above still apply.
+      const SYMPTOM_RE = /\b(pain|ache|aching|hurts?|hurting|sore(?:ness)?|stiff(?:ness)?|numb(?:ness)?|tingl(?:e|es|ing)|cramp(?:s|ing)?|spasms?|strain(?:ed)?|sprain(?:ed)?|injur(?:y|ies|ed)|sciatica|migraines?|headaches?|discomfort)\b/i;
+      const symptomMatch = SYMPTOM_RE.test(message) ? { intent: 'offtopic_question' } : null;
+      const escapeIntent = offTopicMatch || inquiryMatch || compareInfoMatch || symptomMatch;
       if (escapeIntent) {
         console.log(`[BOOKING_FLOW] Off-topic '${escapeIntent.intent}' in state ${currentState.state} — suspending booking, answering, will offer resume`);
         // SUSPEND, don't destroy: answer the question, then offer to pick the
@@ -2764,4 +2771,4 @@ async function composeResponse(responses, message, clinicConfig) {
   return responses.join('. ');
 }
 
-module.exports = { routeMessage, composeResponse };
+module.exports = { routeMessage, composeResponse, findConsultService };
