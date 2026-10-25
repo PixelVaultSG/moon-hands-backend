@@ -538,7 +538,14 @@ function handleFaqPrep({ clinicConfig, params }) {
     return `${faqs.prep_general}\n\nWould you like treatment-specific preparation advice?`;
   }
   
-  return `Preparation varies by treatment. Generally:\n• Avoid alcohol 24 hours before\n• Come with clean skin (no makeup)\n• Inform us of any medications or allergies\n• Arrive 10-15 minutes early\n\n${treatment ? `Would you like specific preparation for ${treatment}?` : 'Would you like to know more about a specific treatment?'}`;
+  // Industry-aware default (v2.2.0): the aesthetic wording stays for
+  // aesthetic clinics; everyone else gets logistics-only, zero clinical content.
+  const industry = (getConfig(clinicConfig, 'industry') || '').toLowerCase();
+  const isAes = industry === 'aesthetic' || industry === 'aesthetics';
+  const prepDefault = isAes
+    ? `Preparation varies by treatment. Generally:\n• Avoid alcohol 24 hours before\n• Come with clean skin (no makeup)\n• Inform us of any medications or allergies\n• Arrive 10-15 minutes early`
+    : `Preparation varies by treatment. Generally:\n• Arrive 10-15 minutes early\n• Wear comfortable clothing\n• Bring any relevant medical reports or referral letters\n• Inform us of any medications or allergies`;
+  return `${prepDefault}\n\n${treatment ? `Would you like specific preparation for ${treatment}?` : 'Would you like to know more about a specific treatment?'}`;
 }
 
 // ─── FAQ AFTERCARE ────────────────────────────────────────────────
@@ -555,7 +562,12 @@ function handleFaqAftercare({ clinicConfig, params }) {
     return `${faqs.aftercare_general}\n\nIs there anything specific about your recovery you'd like to know?`;
   }
   
-  return `General aftercare guidelines:\n• Avoid direct sun exposure for 48 hours\n• No strenuous exercise for 24 hours\n• Keep the area clean and moisturized\n• Follow any specific instructions from your doctor\n• Contact us if you notice any unusual reactions\n\n${treatment ? `Would you like specific aftercare for ${treatment}?` : 'Do you have a specific treatment in mind?'}`;
+  const industry = (getConfig(clinicConfig, 'industry') || '').toLowerCase();
+  const isAes = industry === 'aesthetic' || industry === 'aesthetics';
+  const aftercareDefault = isAes
+    ? `General aftercare guidelines:\n• Avoid direct sun exposure for 48 hours\n• No strenuous exercise for 24 hours\n• Keep the area clean and moisturized\n• Follow any specific instructions from your doctor\n• Contact us if you notice any unusual reactions`
+    : `General aftercare guidance:\n• Follow the instructions given at your appointment\n• Drink water and rest as advised by your practitioner\n• Contact us if anything feels unusual or concerning`;
+  return `${aftercareDefault}\n\n${treatment ? `Would you like specific aftercare for ${treatment}?` : 'Do you have a specific treatment in mind?'}`;
 }
 
 // ─── LANGUAGE SWITCH ──────────────────────────────────────────────

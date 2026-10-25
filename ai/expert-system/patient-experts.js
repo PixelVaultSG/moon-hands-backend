@@ -161,8 +161,17 @@ function buildInfoExpertBase(clinicConfig) {
   const parking = clinicConfig.parking_info || '';
   const mrt = clinicConfig.nearest_mrt || '';
   const phone = clinicConfig.phone || '';
-  const prep = clinicConfig.faqs?.prep_general || 'Arrive with clean skin. Avoid alcohol 24hrs before.';
-  const aftercare = clinicConfig.faqs?.aftercare_general || 'Avoid sun for 48hrs. No strenuous exercise for 24hrs.';
+  // Industry-aware defaults (v2.2.0): aesthetic advice ("clean skin, no
+  // makeup") must never leak onto non-aesthetic clinics — proven on the
+  // chiro demo. Neutral defaults are logistics-only, zero clinical content.
+  const ind = (clinicConfig.industry || '').toLowerCase();
+  const isAes = ind === 'aesthetic' || ind === 'aesthetics';
+  const prep = clinicConfig.faqs?.prep_general
+    || (isAes ? 'Arrive with clean skin. Avoid alcohol 24hrs before.'
+              : 'Arrive 10-15 minutes early, wear comfortable clothing, and bring any relevant medical reports or referral letters.');
+  const aftercare = clinicConfig.faqs?.aftercare_general
+    || (isAes ? 'Avoid sun for 48hrs. No strenuous exercise for 24hrs.'
+              : 'Follow the guidance given at your appointment and contact the clinic if anything feels unusual.');
   // Service menu included so service-ish questions ("the two therapy treatments")
   // are answered from FACTS, not improvised — a missing menu is how the bot
   // once invented a "therapeutic massage" the clinic doesn't offer.
@@ -184,6 +193,7 @@ GENERAL PREP: ${prep}
 GENERAL AFTERCARE: ${aftercare}
 
 RESPONSE RULES:
+- FORMAT for WhatsApp: *bold* treatment names and prices, • for bullet lists, short paragraphs, plain text only (no markdown headers, no [links])
 - Be concise (2-3 sentences max for simple questions)
 - Never guess — if info isn't above, say "Let me connect you with our team"
 - Always offer to book if they seem interested

@@ -9,6 +9,69 @@ const TTL_MS = 60 * 60 * 1000;
 
 const { getNowSG } = require('../utils/date-helpers');
 
+// ─── Persistence (v2.2.0) ─────────────────────────────────────────
+// In-memory state wipes on every deploy/restart — proven in prod when a
+// patient's "yes" to a resume offer landed 30s after a deploy and got a
+// greeting instead. Write-through to kv_store on every mutation; hydrate
+// on inbound webhook when memory is cold. kv_store is the project's
+// designated runtime-state table (already used by the rate limiter).
+const STATE_KV_PREFIX = 'conv_state:';
+
+function persistState(phone) {
+  try {
+    const record = stateStore.get(normalizePhone(phone));
+    if (!record) return;
+    const { supabase } = require('../supabase/client');
+    supabase.from('kv_store').upsert({
+      key: STATE_KV_PREFIX + normalizePhone(phone),
+      data: {
+        state: record.state,
+        data: record.data,
+        lastActivity: record.lastActivity,
+        followUpStage: record.followUpStage || 0,
+        lastFollowUpAt: record.lastFollowUpAt || null
+      },
+      updated_at: new Date().toISOString()
+    }).then(({ error } = {}) => { if (error) console.error('[STATE] persist rejected:', error.message); })
+      .catch(e => console.error('[STATE] persist failed:', e.message));
+  } catch (e) { console.error('[STATE] persist error:', e.message); }
+}
+
+function deletePersistedState(phone) {
+  try {
+    const { supabase } = require('../supabase/client');
+    supabase.from('kv_store').delete().eq('key', STATE_KV_PREFIX + normalizePhone(phone))
+      .then(({ error } = {}) => { if (error) console.error('[STATE] delete rejected:', error.message); })
+      .catch(e => console.error('[STATE] delete failed:', e.message));
+  } catch (e) { console.error('[STATE] delete error:', e.message); }
+}
+
+/**
+ * Warm the in-memory store from kv_store. Called once per inbound webhook,
+ * before routing. No-op when memory already holds a fresh record.
+ */
+async function hydrateState(phone) {
+  const key = normalizePhone(phone);
+  const existing = stateStore.get(key);
+  if (existing && Date.now() - existing.lastActivity <= TTL_MS) return;
+  try {
+    const { supabase } = require('../supabase/client');
+    const { data, error } = await supabase.from('kv_store')
+      .select('data').eq('key', STATE_KV_PREFIX + key).single();
+    if (error || !data || !data.data) return;
+    const rec = data.data;
+    if (!rec.lastActivity || Date.now() - rec.lastActivity > TTL_MS) return; // expired
+    stateStore.set(key, {
+      state: rec.state || BOOKING_STATES.IDLE,
+      data: rec.data || {},
+      lastActivity: rec.lastActivity,
+      followUpStage: rec.followUpStage || 0,
+      lastFollowUpAt: rec.lastFollowUpAt || null
+    });
+    console.log(`[STATE] Hydrated ${key} → ${rec.state} (from kv_store)`);
+  } catch (e) { console.error('[STATE] hydrate error:', e.message); }
+}
+
 const BOOKING_STATES = {
   IDLE: 'idle',
   MULTI_INTENT_CONFIRM: 'multi_intent_confirm',
@@ -79,6 +142,7 @@ function getState(phone) {
   if (!record) return { state: BOOKING_STATES.IDLE, data: {} };
   if (Date.now() - record.lastActivity > TTL_MS) {
     stateStore.delete(normalizePhone(phone));
+    deletePersistedState(phone);
     return { state: BOOKING_STATES.IDLE, data: {} };
   }
   return { state: record.state, data: record.data, followUpStage: record.followUpStage || 0 };
@@ -92,6 +156,7 @@ function setState(phone, state, data = {}) {
     followUpStage: prev?.followUpStage || 0,
     lastFollowUpAt: prev?.lastFollowUpAt || null
   });
+  persistState(phone);
 }
 
 function resetIdle(phone) {
@@ -102,6 +167,7 @@ function resetIdle(phone) {
     followUpStage: 0,
     lastFollowUpAt: null
   });
+  deletePersistedState(phone); // idle is the default — no row needed
 }
 
 /**
@@ -566,6 +632,7 @@ setInterval(() => {
 }, 10 * 60 * 1000);
 
 module.exports = {
+  hydrateState,
   BOOKING_STATES, getState, setState, resetIdle,
   setKnownName, getKnownName,
   FOLLOW_UP_STAGES, FOLLOW_UP_MESSAGES, FOLLOW_UP_DELAYS_MS,

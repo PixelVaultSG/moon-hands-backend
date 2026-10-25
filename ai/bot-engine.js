@@ -35,6 +35,38 @@ const { getFunctionDefinitions, executeFunction } = require('./expert-system/fun
 const { detectRedFlag, PATH_A_RESPONSE } = require('./red-flag-detector');
 const { classifyMedicalSafety } = require('./medical-classifier');
 const convState = require('./conversation-state');
+const { getNowSG } = require('../utils/date-helpers');
+
+// ─── Action footer (v2.2.0) ───────────────────────────────────────
+// Informational AI answers used to arrive as plain-text walls while the
+// booking flow gets cards and buttons. For treatment-related answers,
+// attach quick-reply actions so every answer ends in a tappable next step.
+// Returns a whatsappInteractive payload or null.
+const FOOTER_INTENTS = new Set([
+  'service_inquiry', 'service_list', 'treatment_enquiry',
+  'pricing_inquiry', 'pricing', 'faq', 'faq_prep', 'faq_aftercare'
+]);
+function withActionFooter(text, clientConfig, matchedIntents = [], resumePrompt = null) {
+  try {
+    if (!text || resumePrompt) return null; // resume line is already the CTA
+    if (text.length > 900) return null;     // button-message body cap is 1024
+    const services = clientConfig?.config?.services || clientConfig?.services || [];
+    const textLower = text.toLowerCase();
+    const mentionsService = services.some(s => s.name && textLower.includes(s.name.toLowerCase()));
+    const intentHit = (matchedIntents || []).some(m => FOOTER_INTENTS.has(typeof m === 'string' ? m : m.intent));
+    if (!intentHit && !mentionsService) return null;
+    const { buildQuickReplyButtons } = require('./whatsapp-interactive');
+    const { findConsultService } = require('./smart-router');
+    const consult = findConsultService(clientConfig?.config || clientConfig || {});
+    const buttons = consult
+      ? [{ id: 'quick_consult', title: '📋 Book Consult' }, { id: 'browse_categories', title: 'Browse Treatments' }]
+      : [{ id: 'browse_categories', title: 'Browse Treatments' }];
+    return buildQuickReplyButtons({ body: text, buttons });
+  } catch (e) {
+    console.error('[BOT_ENGINE] action footer failed:', e.message);
+    return null;
+  }
+}
 const { sendClinicNotification } = require('../telegram/multi-clinic-sender');
 const { createCallbackRequest } = require('../server/callback-requests');
 const { buildQuickReplyButtons } = require('./whatsapp-interactive');
@@ -922,6 +954,7 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
       // v2.1.9: consultation quick-book + category-list navigation
       'quick_consult': { intent: 'quick_book_consultation', text: 'I want to book a consultation' },
       'nav_categories': { intent: 'back_to_categories', text: 'Back to categories' },
+      'browse_categories': { intent: 'add_treatment', text: 'Browse categories' },
     };
     
     let effectiveText = messageText;
@@ -979,6 +1012,10 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
       }
     }
     
+    // ─── STATE HYDRATION: restore persisted conversation state (survives
+    // deploys/restarts) before any routing decision reads it ───────────
+    try { await convState.hydrateState(patientPhone); } catch (e) { console.error('[BOT_ENGINE] hydrateState failed:', e.message); }
+
     // ─── SMART ROUTER: Try hardcoded responses first ($0) ───────────
     console.log(`[BOT_ENGINE] Routing: effectiveText="${effectiveText?.substring(0,60)}", forcedIntents=${JSON.stringify(forcedIntents)}`);
     const routerResult = await routeMessage(effectiveText, clientConfig, patientPhone, conversationHistory, forcedIntents);
@@ -1038,8 +1075,10 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
           console.log('[BOT_ENGINE] Expert offered booking — state set to booking_offered');
         }
         
+        const expertFooter = withActionFooter(expertResult.text, clientConfig, matchedIntents, resumePrompt);
         return {
           text: expertResult.text + (resumePrompt || ''),
+          whatsappInteractive: expertFooter || undefined,
           function_called: expertResult.functionCall,
           model: 'gpt-4o-mini-experts',
           experts_used: expertsUsed,
@@ -1126,11 +1165,12 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
       `     b) "Would you like the clinic to give you a call? Our doctor can discuss this with you directly."\n` +
       `- WHAT YOU MAY SHARE — factual, public info from the clinic's OWN menu/FAQs only: what each treatment is and involves per its description, and factual comparisons between treatments (price, duration, what's included, how they differ per the menu text). If the menu doesn't cover it, say so and offer a consultation — never improvise clinical detail from general knowledge.\n` +
       `- STILL ABSOLUTELY FORBIDDEN — the red line stands: whether a treatment is safe, suitable, or "best" for THIS patient (their condition, pregnancy, medications); predicting results, risks, side effects, or downtime beyond what the menu states; interpreting symptoms, diagnosis, or triage — even if the patient insists.\n\n` +
+      `FORMAT (WhatsApp): *bold* for treatment names and prices, • for bullet lists, short paragraphs, plain text only — no markdown headers, no [links].\n\n` +
       `BOOKING RULES:\n` +
       `- ALL bookings start as PENDING — clinic must approve. Say "request received, clinic will confirm soon"\n` +
       `- Confirm name and phone before creating any booking\n` +
       `- For cancellations: get explicit "CANCEL MY BOOKING" confirmation before proceeding\n` +
-      `- Today is ${new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Asia/Singapore' })} (Singapore time, GMT+8). Current day: ${['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][new Date().getDay()]}.`;
+      `- Today is ${getNowSG().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })} (Singapore time, GMT+8). Current day: ${['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][getNowSG().getDay()]}.`;
 
     // Build messages array
     // When conversation is recent, add a system signal to the user message
@@ -1217,8 +1257,10 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
     const directText = response.message?.content || "I'm sorry, I didn't understand that. How can I help you today?";
     await logConversation(clientConfig.id, 'whatsapp', patientPhone, null,
       messageText, directText, 'generalist:direct');
+    const directFooter = withActionFooter(directText, clientConfig, [], resumePrompt);
     return {
       text: directText + (resumePrompt || ''),
+      whatsappInteractive: directFooter || undefined,
       function_called: null,
       model: 'gpt-4o-mini'
     };
@@ -1278,6 +1320,7 @@ function formatDateNice(dateStr) {
 // ─── EXPORTS ──────────────────────────────────────────────────────
 
 module.exports = {
+  withActionFooter,
   processMessage,
   logConversation,
   // Exported for testing (MADS gate + callback flow are exercised in
