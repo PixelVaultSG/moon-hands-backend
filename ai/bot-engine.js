@@ -980,6 +980,9 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
     console.log(`[BOT_ENGINE] Routing: effectiveText="${effectiveText?.substring(0,60)}", forcedIntents=${JSON.stringify(forcedIntents)}`);
     const routerResult = await routeMessage(effectiveText, clientConfig, patientPhone, conversationHistory, forcedIntents);
     console.log(`[BOT_ENGINE] Router result: source=${routerResult?.source}, hasText=${!!routerResult?.text}, intents=${routerResult?.intents?.join(',')}`);
+    // A mid-booking question escaped the flow: the answer comes from the AI
+    // layers below, but the resume offer rides along on whatever they return.
+    const resumePrompt = routerResult?.resumePrompt || null;
     
     if (routerResult.source === 'hardcoded' && routerResult.text) {
       const intents = routerResult.intents || [];
@@ -1027,13 +1030,13 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
         // arrange that?"), park the conversation in BOOKING_OFFERED so a bare
         // "yes please" next turn starts the booking flow deterministically
         // instead of falling through to the LLM and getting a greeting back.
-        if (patientPhone && /would you like me to (arrange|book|help you book)|shall i (book|arrange|help you book)|want me to (book|arrange)/i.test(expertResult.text)) {
+        if (!resumePrompt && patientPhone && /would you like me to (arrange|book|help you book)|shall i (book|arrange|help you book)|want me to (book|arrange)/i.test(expertResult.text)) {
           convState.setState(patientPhone, 'booking_offered', {});
           console.log('[BOT_ENGINE] Expert offered booking — state set to booking_offered');
         }
         
         return {
-          text: expertResult.text,
+          text: expertResult.text + (resumePrompt || ''),
           function_called: expertResult.functionCall,
           model: 'gpt-4o-mini-experts',
           experts_used: expertsUsed,
@@ -1200,7 +1203,7 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
         messageText, finalResponse, `generalist:${funcName}`);
 
       return {
-        text: finalResponse,
+        text: finalResponse + (resumePrompt || ''),
         function_called: funcName,
         function_result: functionResult,
         model: 'gpt-4o-mini'
@@ -1212,7 +1215,7 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
     await logConversation(clientConfig.id, 'whatsapp', patientPhone, null,
       messageText, directText, 'generalist:direct');
     return {
-      text: directText,
+      text: directText + (resumePrompt || ''),
       function_called: null,
       model: 'gpt-4o-mini'
     };
