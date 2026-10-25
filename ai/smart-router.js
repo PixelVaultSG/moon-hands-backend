@@ -333,6 +333,17 @@ async function routeMessage(message, clinicConfig, patientPhone = null, conversa
     );
   }
 
+  // ── QUICK CONSULT: chiro first-visit shortcut → straight to dates ──
+  if (primaryIntent.intent === 'quick_book_consultation') {
+    return await startConsultQuickBook(clinicConfig, patientPhone, conversationHistory, startTime);
+  }
+
+  // ── BACK TO CATEGORIES: nav row on the treatments list ──────────
+  if (primaryIntent.intent === 'back_to_categories') {
+    if (patientPhone) setState(patientPhone, BOOKING_STATES.SELECTING_CATEGORY, {});
+    return showCategorySelection(clinicConfig, startTime);
+  }
+
   // ── ADD TREATMENT: Show categories again ─────────────────────────
   if (primaryIntent.intent === 'add_treatment') {
     return showCategorySelection(clinicConfig, startTime);
@@ -1032,15 +1043,9 @@ async function rePromptSuspendedState(clinicConfig, patientPhone, suspended, sta
         return { ...base, text: `${prefix}Which treatment would you like?`, whatsappInteractive: getServiceListMessage(services) };
       }
       case BOOKING_STATES.SELECTING_CATEGORY: {
-        const services = clinicConfig.config?.services || [];
-        const categories = [...new Set(services.map(s => s.category).filter(Boolean))];
-        if (categories.length > 0) {
-          const { getCategoryListMessage } = require('./whatsapp-interactive');
-          return { ...base, text: `${prefix}Which category?`, whatsappInteractive: getCategoryListMessage(categories) };
-        }
-        const { getServiceListMessage } = require('./whatsapp-interactive');
-        setState(patientPhone, BOOKING_STATES.AWAITING_TREATMENT, {});
-        return { ...base, text: `${prefix}Which treatment would you like?`, whatsappInteractive: getServiceListMessage(services) };
+        const catResponse = showCategorySelection(clinicConfig, startTime);
+        catResponse.text = `${prefix}${catResponse.text}`;
+        return catResponse;
       }
       case BOOKING_STATES.AWAITING_NAME:
         return { ...base, text: `${prefix}👤 May I have your name for the booking?` };
@@ -1083,6 +1088,22 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
     // Patient skipped the prompt and just continued (e.g. "Tuesday 3pm") —
     // process their message inside the restored state.
     return await handleBookingFlow(message, clinicConfig, patientPhone, getState(patientPhone), conversationHistory, startTime);
+  }
+
+  // ── QUICK CONSULT tapped from an old list while in a booking state ──
+  // (Gated: for non-enabled clinics the text falls through to normal flow.)
+  if ((msgLower === 'i want to book a consultation' || msgLower === 'quick_consult')
+      && findConsultService(clinicConfig.config)) {
+    return await startConsultQuickBook(clinicConfig, patientPhone, conversationHistory, startTime);
+  }
+
+  // ── BACK TO CATEGORIES: nav row or typed. Never bare "back" — chiro
+  // treatments legitimately contain that word ("back adjustment"). ──
+  if (msgLower === 'back to categories' || msgLower === 'nav_categories'
+      || msgLower === 'change category' || msgLower === 'change categories'
+      || msgLower === 'different category' || msgLower === 'all categories') {
+    setState(patientPhone, BOOKING_STATES.SELECTING_CATEGORY, { ...currentState.data, category: undefined, categoryServices: undefined });
+    return showCategorySelection(clinicConfig, startTime);
   }
 
   // ── VALIDATE: Reject past dates even in free-text booking ────────
@@ -2096,6 +2117,48 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
 
 // ─── CATEGORY SELECTION HELPERS ──────────────────────────────────
 
+/**
+ * Chiro first-visit shortcut (v2.1.9): find the consultation service IF this
+ * clinic has the feature enabled. Gated to chiropractic (or an explicit
+ * config flag) so the live aesthetic clinic's flow stays byte-identical.
+ */
+function findConsultService(config) {
+  const industry = (config?.industry || '').toLowerCase();
+  const enabled = industry === 'chiropractic' || config?.quick_book_consultation === true;
+  if (!enabled) return null;
+  const services = config?.services || [];
+  return services.find(s => /consult/i.test(s.name || '') || /consult/i.test(getCategory(s))) || null;
+}
+
+/**
+ * One tap on "Book a Consultation" → straight to date picking, skipping the
+ * category → treatment → details → Book This browse chain. Date/time/confirm
+ * remain — the clinic-approval flow depends on them.
+ */
+async function startConsultQuickBook(clinicConfig, patientPhone, conversationHistory, startTime) {
+  const svc = findConsultService(clinicConfig.config);
+  if (!svc) return showCategorySelection(clinicConfig, startTime);
+  const treatmentNames = [svc.name];
+  setState(patientPhone, BOOKING_STATES.AWAITING_DATE, {
+    treatment: svc.name, treatments: treatmentNames, selectedTreatments: treatmentNames
+  });
+  const base = { source: 'hardcoded', intents: ['quick_book_consultation'], cost_saved: 1, latency_ms: Date.now() - startTime };
+  const priceBit = [svc.price, svc.duration ? `${svc.duration} min` : null].filter(Boolean).join(', ');
+  try {
+    const { getNextAvailableDates } = require('./availability-engine');
+    const { getDateButtonOptions } = require('./whatsapp-interactive');
+    const dateOptions = await getNextAvailableDates(clinicConfig.id, treatmentNames, clinicConfig, 3);
+    if (dateOptions.length > 0) {
+      return { ...base,
+        text: `Great — your first visit is the ${svc.name}${priceBit ? ` (${priceBit})` : ''}.\n\nWhich date works for you?`,
+        whatsappInteractive: getDateButtonOptions(dateOptions) };
+    }
+  } catch (e) {
+    console.error(`[QUICK_CONSULT] getNextAvailableDates error: ${e.message}`);
+  }
+  return { ...base, text: `${svc.name} — which date would you like? (e.g. "next Tuesday" or "30 Oct")` };
+}
+
 function showCategorySelection(clinicConfig, startTime) {
   const services = clinicConfig.config?.services || [];
   
@@ -2120,6 +2183,19 @@ function showCategorySelection(clinicConfig, startTime) {
     return { text: 'Which treatment are you looking for?', source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
   }
   
+  // When the consult quick-book row is pinned on top, drop the consultation
+  // category itself from the list (Ash: "the other 3 categories can be in
+  // the collapsible box") — but only if that category is JUST consultations.
+  const consultService = findConsultService(clinicConfig.config);
+  let shownCategories = categories;
+  if (consultService) {
+    const consultCat = getCategory(consultService);
+    const catServices = services.filter(s => getCategory(s) === consultCat);
+    if (/consult/i.test(consultCat) && catServices.every(s => /consult/i.test(s.name || ''))) {
+      shownCategories = categories.filter(c => c.name !== consultCat);
+    }
+  }
+
   const { getCategoryListMessage } = require('./whatsapp-interactive');
   return {
     text: 'What type of treatment are you looking for?',
@@ -2127,7 +2203,7 @@ function showCategorySelection(clinicConfig, startTime) {
     intents: ['category_selection'],
     cost_saved: 1,
     latency_ms: Date.now() - startTime,
-    whatsappInteractive: getCategoryListMessage(categories)
+    whatsappInteractive: getCategoryListMessage(shownCategories, consultService)
   };
 }
 
