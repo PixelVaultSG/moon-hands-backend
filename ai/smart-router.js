@@ -724,6 +724,7 @@ function isBookingState(state) {
     BOOKING_STATES.AWAITING_NAMEPHONE,
     BOOKING_STATES.AWAITING_CONFIRMATION,
     BOOKING_STATES.READY_TO_BOOK,
+    BOOKING_STATES.AWAITING_RESUME,
   ].includes(state);
 }
 
@@ -971,12 +972,118 @@ function validateBookingTime(dateStr, timeStr, operatingHours) {
   }
 }
 
+/**
+ * One-line resume offer appended after an answered mid-flow question.
+ */
+function buildResumeOffer(suspended) {
+  const d = suspended.data || {};
+  const bits = [];
+  const names = (d.treatments && d.treatments.length ? d.treatments.join(' + ') : d.treatment) || null;
+  if (names) bits.push(names);
+  if (d.date) bits.push(d.date);
+  if (d.time) bits.push(d.time);
+  const what = bits.length ? ` (${bits.join(' · ')})` : '';
+  return `\n\n📌 Shall we continue with your booking${what}? Reply *yes* to pick up where you left off, or *no* to drop it.`;
+}
+
+/**
+ * Re-issue the prompt for the state the patient was in when they wandered
+ * off to ask a question. Each case mirrors the prompt that state normally
+ * shows, prefixed with "Let's pick up where we left off."
+ */
+async function rePromptSuspendedState(clinicConfig, patientPhone, suspended, startTime) {
+  const d = suspended.data || {};
+  const prefix = "Let's pick up where we left off. ";
+  const base = { source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+  try {
+    switch (suspended.state) {
+      case BOOKING_STATES.AWAITING_DATE: {
+        const { getNextAvailableDates } = require('./availability-engine');
+        const { getDateButtonOptions } = require('./whatsapp-interactive');
+        const treatmentNames = d.treatments || (d.treatment ? [d.treatment] : []);
+        const dateOptions = await getNextAvailableDates(clinicConfig.id, treatmentNames, clinicConfig, 3);
+        if (dateOptions.length > 0) {
+          return { ...base, text: `${prefix}Which date works for you?`, whatsappInteractive: getDateButtonOptions(dateOptions) };
+        }
+        return { ...base, text: `${prefix}Which date would you like? (e.g. "next Tuesday" or "30 Oct")` };
+      }
+      case BOOKING_STATES.AWAITING_TIME: {
+        const { getAvailableSlots } = require('./availability-engine');
+        const { getTimeSlotButtons } = require('./whatsapp-interactive');
+        const treatmentNames = d.treatments || (d.treatment ? [d.treatment] : []);
+        const avail = await getAvailableSlots(clinicConfig.id, d.date, treatmentNames, clinicConfig);
+        if (avail.available && avail.slots.length > 0) {
+          return { ...base, text: `${prefix}Here are available times on ${d.date}:\n🕐 ${avail.operatingHours}`, whatsappInteractive: getTimeSlotButtons(avail.slots, avail.operatingHours) };
+        }
+        // Slots disappeared meanwhile — step back to date pick
+        setState(patientPhone, BOOKING_STATES.AWAITING_DATE, { date: undefined, time: undefined });
+        return await rePromptSuspendedState(clinicConfig, patientPhone,
+          { state: BOOKING_STATES.AWAITING_DATE, data: { ...d, date: undefined, time: undefined } }, startTime);
+      }
+      case BOOKING_STATES.AWAITING_CONFIRMATION:
+        return await buildConfirmationResponse(clinicConfig, patientPhone, d.date, d.time, d.treatments || [d.treatment], startTime);
+      case BOOKING_STATES.EDITING_BOOKING: {
+        const { getEditMenuButtons } = require('./whatsapp-interactive');
+        return { ...base, text: `${prefix}What would you like to change?`, whatsappInteractive: getEditMenuButtons(`${prefix}What would you like to change?`) };
+      }
+      case BOOKING_STATES.AWAITING_TREATMENT: {
+        const services = clinicConfig.config?.services || [];
+        const { getServiceListMessage } = require('./whatsapp-interactive');
+        return { ...base, text: `${prefix}Which treatment would you like?`, whatsappInteractive: getServiceListMessage(services) };
+      }
+      case BOOKING_STATES.SELECTING_CATEGORY: {
+        const services = clinicConfig.config?.services || [];
+        const categories = [...new Set(services.map(s => s.category).filter(Boolean))];
+        if (categories.length > 0) {
+          const { getCategoryListMessage } = require('./whatsapp-interactive');
+          return { ...base, text: `${prefix}Which category?`, whatsappInteractive: getCategoryListMessage(categories) };
+        }
+        const { getServiceListMessage } = require('./whatsapp-interactive');
+        setState(patientPhone, BOOKING_STATES.AWAITING_TREATMENT, {});
+        return { ...base, text: `${prefix}Which treatment would you like?`, whatsappInteractive: getServiceListMessage(services) };
+      }
+      case BOOKING_STATES.AWAITING_NAME:
+        return { ...base, text: `${prefix}👤 May I have your name for the booking?` };
+      case BOOKING_STATES.AWAITING_PHONE:
+        return { ...base, text: `${prefix}📞 What's the best phone number for the booking?` };
+      case BOOKING_STATES.AWAITING_NAMEPHONE:
+        return { ...base, text: `${prefix}Please provide your name and phone number (e.g., "Tom Hands, 81234567"):` };
+      default:
+        return { ...base, text: `${prefix}Just tell me the date or treatment and we'll carry on.` };
+    }
+  } catch (err) {
+    console.error('[RESUME] Re-prompt failed:', err.message);
+    return { ...base, text: `${prefix}Just tell me the date or treatment and we'll carry on.` };
+  }
+}
+
 async function handleBookingFlow(message, clinicConfig, patientPhone, currentState, conversationHistory, startTime) {
   const fields = extractBookingFields(message);
   const data = { ...currentState.data, ...fields };
   const hours = clinicConfig.config?.operating_hours || clinicConfig.operating_hours || [];
   const services = clinicConfig.config?.services || [];
   const msgLower = message.toLowerCase().trim();
+
+  // ── RESUME: a mid-flow question was answered and we offered to continue ──
+  if (currentState.state === BOOKING_STATES.AWAITING_RESUME) {
+    const suspended = currentState.data?.suspended;
+    if (!suspended || !suspended.state) {
+      resetIdle(patientPhone);
+      return null;
+    }
+    if (isDenial(message)) {
+      resetIdle(patientPhone);
+      return { text: "No problem — I've dropped that booking. If you'd like to start fresh, just say so.", source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+    }
+    // Restore the suspended flow exactly as it was
+    setState(patientPhone, suspended.state, { ...(suspended.data || {}) });
+    if (isConfirmation(message) || isAgreement(message)) {
+      return await rePromptSuspendedState(clinicConfig, patientPhone, suspended, startTime);
+    }
+    // Patient skipped the prompt and just continued (e.g. "Tuesday 3pm") —
+    // process their message inside the restored state.
+    return await handleBookingFlow(message, clinicConfig, patientPhone, getState(patientPhone), conversationHistory, startTime);
+  }
 
   // ── VALIDATE: Reject past dates even in free-text booking ────────
   if (data.date) {
@@ -1195,9 +1302,21 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
       const compareInfoMatch = COMPARE_OR_INFO_RE.test(message) ? { intent: 'offtopic_question' } : null;
       const escapeIntent = offTopicMatch || inquiryMatch || compareInfoMatch;
       if (escapeIntent) {
-        console.log(`[BOOKING_FLOW] Off-topic '${escapeIntent.intent}' in state ${currentState.state} — exiting booking flow, re-routing`);
+        console.log(`[BOOKING_FLOW] Off-topic '${escapeIntent.intent}' in state ${currentState.state} — suspending booking, answering, will offer resume`);
+        // SUSPEND, don't destroy: answer the question, then offer to pick the
+        // booking up exactly where the patient left off (Ash, v2.1.8).
+        // Order matters: resetIdle BEFORE the recursive routeMessage call so
+        // the re-entry sees IDLE; only then park the snapshot in AWAITING_RESUME.
+        const suspended = { state: currentState.state, data: { ...(currentState.data || {}) } };
         resetIdle(patientPhone);
-        return await routeMessage(message, clinicConfig, patientPhone, conversationHistory);
+        const aiResult = await routeMessage(message, clinicConfig, patientPhone, conversationHistory);
+        setState(patientPhone, BOOKING_STATES.AWAITING_RESUME, { suspended });
+        const resumeLine = buildResumeOffer(suspended);
+        if (aiResult && typeof aiResult === 'object') {
+          if (aiResult.text) aiResult.text += resumeLine;
+          else aiResult.resumePrompt = resumeLine; // AI-generated reply — bot-engine appends it
+        }
+        return aiResult;
       }
     }
   }

@@ -7,6 +7,8 @@
 const stateStore = new Map();
 const TTL_MS = 60 * 60 * 1000;
 
+const { getNowSG } = require('../utils/date-helpers');
+
 const BOOKING_STATES = {
   IDLE: 'idle',
   MULTI_INTENT_CONFIRM: 'multi_intent_confirm',
@@ -22,6 +24,7 @@ const BOOKING_STATES = {
   AWAITING_NAMEPHONE: 'awaiting_namephone', // User updating name + phone during edit
   AWAITING_CONFIRMATION: 'awaiting_confirmation',
   READY_TO_BOOK: 'ready_to_book',
+  AWAITING_RESUME: 'awaiting_resume', // Mid-flow question answered; offering to resume suspended booking
 };
 
 // Follow-up stages for stalled customers in booking flow
@@ -184,7 +187,7 @@ function markFollowUpSent(phone, stage) {
 
 // Date parsing
 function parseDatePhrase(phrase) {
-  const now = new Date();
+  const now = getNowSG(); // SG wall-clock — server runs UTC, patients speak in Singapore time
   const lower = phrase.toLowerCase().trim();
   // Handle common short forms and typos: tmr, tmrw, nxt, sat, sun
   const SHORT_FORMS = {

@@ -67,6 +67,15 @@ function getDayName(dateInput) {
   });
 }
 
+/**
+ * Current moment as a Date whose LOCAL getters (getDay, getDate, getMonth...)
+ * reflect Singapore wall-clock time. The server runs UTC; patients speak in
+ * Singapore time — all relative date parsing must anchor to this.
+ */
+function getNowSG() {
+  return new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Singapore' }));
+}
+
 function getTodaySG() {
   return new Date().toLocaleDateString('en-SG', {
     timeZone: 'Asia/Singapore',
@@ -157,6 +166,7 @@ module.exports = {
   formatTimeSG,
   getDayName,
   getTodaySG,
+  getNowSG,
   isClinicOpenNow,
   isDateInPast,
   getDayOfWeekUTC,
