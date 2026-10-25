@@ -919,6 +919,9 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
       'edit_date': { intent: 'date_change', text: 'Change date' },
       'edit_time': { intent: 'time_change', text: 'Change time' },
       'edit_treatment': { intent: 'treatment_change', text: 'Change treatment' },
+      // v2.1.9: consultation quick-book + category-list navigation
+      'quick_consult': { intent: 'quick_book_consultation', text: 'I want to book a consultation' },
+      'nav_categories': { intent: 'back_to_categories', text: 'Back to categories' },
     };
     
     let effectiveText = messageText;

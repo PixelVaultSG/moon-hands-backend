@@ -41,12 +41,31 @@ function uniqueIds(rows) {
  * Build a List Message payload for 360dialog
  * Used for: Welcome menu, service categories, treatment selection
  */
-function buildListMessage({ header, body, footer, buttonText, rows }) {
-  const safeRows = uniqueIds(rows || []).slice(0, 10).map(r => ({
+function buildListMessage({ header, body, footer, buttonText, rows, sections }) {
+  const clampRow = r => ({
     id: r.id,
     title: clampText(r.title, 24),
     description: r.description ? clampText(r.description, 72) : undefined
-  }));
+  });
+  let safeSections;
+  if (sections && sections.length > 0) {
+    // WhatsApp allows ≤10 rows TOTAL across sections — budget top-down
+    let budget = 10;
+    safeSections = [];
+    for (const sec of sections) {
+      if (budget <= 0) break;
+      const secRows = uniqueIds(sec.rows || []).slice(0, budget).map(clampRow);
+      if (secRows.length > 0) {
+        safeSections.push({ title: clampText(sec.title || 'Menu', 24), rows: secRows });
+        budget -= secRows.length;
+      }
+    }
+  } else {
+    safeSections = [{
+      title: 'Menu',
+      rows: uniqueIds(rows || []).slice(0, 10).map(clampRow)
+    }];
+  }
   return {
     type: 'interactive',
     interactive: {
@@ -56,10 +75,7 @@ function buildListMessage({ header, body, footer, buttonText, rows }) {
       footer: footer ? { text: clampText(footer, 60) } : undefined,
       action: {
         button: clampText(buttonText || 'View Menu', 20),
-        sections: [{
-          title: 'Menu',
-          rows: safeRows
-        }]
+        sections: safeSections
       }
     }
   };
@@ -301,18 +317,40 @@ function formatDisplayTime(timeStr) {
  * Build category selection list
  * Groups services by their category field.
  */
-function getCategoryListMessage(categories) {
-  const rows = categories.map((c, i) => ({
+function getCategoryListMessage(categories, consultService = null) {
+  const catRows = categories.map((c, i) => ({
     id: `cat_${c.id}`,
     title: c.name,
     description: c.description || `${c.count || 0} treatment(s)`
   }));
+  // Chiro first-visit shortcut (v2.1.9): the consultation is the product —
+  // pin it above the categories so one tap goes straight to date picking.
+  // Price/duration ride in the description because this skips the info card.
+  if (consultService) {
+    const descParts = [consultService.name];
+    if (consultService.price) descParts.push(consultService.price);
+    if (consultService.duration) descParts.push(`${consultService.duration} min`);
+    return buildListMessage({
+      header: 'Treatment Categories',
+      body: 'What type of treatment are you looking for?',
+      footer: 'Tap a category to browse',
+      buttonText: 'Browse Categories',
+      sections: [
+        { title: 'First visit? Start here', rows: [{
+          id: 'quick_consult',
+          title: 'Book a Consultation',
+          description: descParts.join(' · ')
+        }]},
+        { title: 'All categories', rows: catRows }
+      ]
+    });
+  }
   return buildListMessage({
     header: 'Treatment Categories',
     body: 'What type of treatment are you looking for?',
     footer: 'Tap a category to browse',
     buttonText: 'Browse Categories',
-    rows
+    rows: catRows
   });
 }
 
@@ -320,11 +358,19 @@ function getCategoryListMessage(categories) {
  * Build treatment list for a specific category
  */
 function getTreatmentsByCategoryMessage(categoryName, services) {
-  const rows = services.slice(0, 10).map((s, i) => ({
+  // 9 treatments + 1 nav row = WhatsApp's 10-row cap. The nav row fixes the
+  // dead-end where a patient who picked the wrong category had to scroll up
+  // to find the category list again (Ash, v2.1.9).
+  const rows = services.slice(0, 9).map((s, i) => ({
     id: `svc_${s.name.toLowerCase().replace(/\s+/g, '_')}`,
     title: s.name,
     description: `${s.price || ''} ${s.duration ? '— ' + s.duration + 'min' : ''}`.trim()
   }));
+  rows.push({
+    id: 'nav_categories',
+    title: '← All Categories',
+    description: 'Back to treatment categories'
+  });
   return buildListMessage({
     header: categoryName,
     body: `Here are our ${categoryName.toLowerCase()} treatments. Tap one to learn more or book.`,
