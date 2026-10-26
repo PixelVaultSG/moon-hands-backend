@@ -17,6 +17,9 @@ console.log(`PORT=${PORT}, NODE_ENV=${process.env.NODE_ENV || 'development'}`);
 // Log this deployment event
 logDeployment().catch(() => {}); // fire-and-forget
 
+// Rate limiter for the public /calendar-event endpoint (v2.2.3)
+const icsRateLimit = new Map(); // ip → [request timestamps]
+
 // ─── CREATE SERVER FIRST (always bind to port) ───────────────────
 // This ensures Render always sees an open port, even if modules fail
 
@@ -157,7 +160,7 @@ const server = http.createServer(async (req, res) => {
     res.end(JSON.stringify({
       status: 'ok',
       service: 'moon-hands',
-      version: '2.2.2',
+      version: '2.2.3',
       webhook: !!webhookHandler,
       telegram: telegramOk,
       uptime: process.uptime(),
@@ -173,14 +176,48 @@ const server = http.createServer(async (req, res) => {
   //
   if (url.pathname.startsWith('/calendar-event/') && req.method === 'GET') {
     try {
+      // Rate limit (v2.2.3): public endpoint — 10 req/min/IP is far above
+      // any real patient tapping their confirmation link.
+      const ip = (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || (req.socket && req.socket.remoteAddress) || 'unknown';
+      const nowMs = Date.now();
+      const hits = (icsRateLimit.get(ip) || []).filter(t => nowMs - t < 60000);
+      if (hits.length >= 10) {
+        res.writeHead(429, { 'Content-Type': 'text/plain' });
+        res.end('Too many requests');
+        return;
+      }
+      hits.push(nowMs);
+      icsRateLimit.set(ip, hits);
+
       const parts = url.pathname.split('/');
-      const bookingRef = parts[2] || 'unknown';
       const date = url.searchParams.get('date');
       const time = url.searchParams.get('time');
-      const treatment = url.searchParams.get('treatment') || 'Appointment';
-      const clinic = url.searchParams.get('clinic') || 'Pixel Vault';
       const duration = parseInt(url.searchParams.get('duration')) || 60;
-      const address = url.searchParams.get('address') || '';
+
+      // Input hardening (v2.2.3): strict shapes, length caps, CR/LF strip —
+      // treatment/clinic/address land raw in ICS fields, so an unfiltered
+      // param is a calendar-spam / injection vector on our domain.
+      const stripCtl = (s) => String(s || '').replace(/[\r\n]/g, ' ').trim();
+      const bookingRef = stripCtl(parts[2] || '');
+      const treatment = stripCtl(url.searchParams.get('treatment') || 'Appointment').substring(0, 100);
+      const clinic = stripCtl(url.searchParams.get('clinic') || 'Pixel Vault').substring(0, 100);
+      const address = stripCtl(url.searchParams.get('address') || '').substring(0, 200);
+
+      if (!/^[A-Za-z0-9-]{6,64}$/.test(bookingRef)) {
+        res.writeHead(400, { 'Content-Type': 'text/plain' });
+        res.end('Invalid booking reference');
+        return;
+      }
+      if (!date || !time || !/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^\d{2}:\d{2}$/.test(time)) {
+        res.writeHead(400, { 'Content-Type': 'text/plain' });
+        res.end('Missing or invalid date/time parameter');
+        return;
+      }
+      if (duration < 15 || duration > 480) {
+        res.writeHead(400, { 'Content-Type': 'text/plain' });
+        res.end('Invalid duration');
+        return;
+      }
       
       if (!date || !time) {
         res.writeHead(400, { 'Content-Type': 'text/plain' });

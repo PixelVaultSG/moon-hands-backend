@@ -8,7 +8,9 @@ const db = require('../../supabase/client');
 // ─── FORMAT HELPERS ──────────────────────────────────────────────
 
 function escapeMarkdown(text) {
-  return text.replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&');
+  // Coerce to string: config data with null/undefined fields (closed-day
+  // hours, {q,a}-shaped FAQs) used to crash View Config outright (v2.2.3).
+  return String(text ?? '').replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&');
 }
 
 function formatConfig(config, client) {
@@ -19,11 +21,14 @@ function formatConfig(config, client) {
     .join('\n') || '  None';
 
   const hours = (config.operating_hours || [])
-    .map(h => `  \u2022 ${escapeMarkdown(h.day)}: ${escapeMarkdown(h.open_time)}\u2013${escapeMarkdown(h.close_time)}`)
+    .map(h => (h.isOpen === false || !h.open_time || !h.close_time)
+      ? `  \u2022 ${escapeMarkdown(h.day)}: Closed`
+      : `  \u2022 ${escapeMarkdown(h.day)}: ${escapeMarkdown(h.open_time)}\u2013${escapeMarkdown(h.close_time)}`)
     .join('\n') || '  Not set';
 
   const faqs = (config.faqs || [])
-    .map((f, i) => `  ${i + 1}. ${escapeMarkdown(f.question)}`)
+    // FAQ entries come in two shapes: {question} (aesthetic) and {q} (chiro) — v2.2.3
+    .map((f, i) => `  ${i + 1}. ${escapeMarkdown(f.question || f.q || '(untitled)')}`)
     .join('\n') || '  None';
 
   return [
@@ -126,6 +131,8 @@ async function handleHelp(ctx) {
     '\ud83d\udd27 SYSTEM',
     '/debug \u2014 Server diagnostics',
     '/health \u2014 System status',
+    '/testnotify <slug> \u2014 Send a test notification to a clinic',
+    '/notiflog \u2014 Last 10 notification delivery receipts',
     '',
     '\u26a0\ufe0f Only you can use these commands.',
   ].join('\n');
@@ -649,62 +656,91 @@ async function handleHealth(ctx) {
 // ─── SECURITY COMMANDS ───────────────────────────────────────────
 
 async function handleSecurity(ctx) {
+  // v2.2.3: read security_events directly. The security_dashboard VIEW this
+  // used before does not exist in the database — /security silently showed
+  // "baselines building" forever.
   try {
-    const { data: dashboard } = await db.supabase
-      .from('security_dashboard')
-      .select('*')
-      .single();
+    const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const { data: events, error } = await db.supabase
+      .from('security_events')
+      .select('event_type, severity, created_at')
+      .gte('created_at', dayAgo)
+      .limit(500);
+    if (error) throw new Error(error.message);
 
-    if (!dashboard) {
-      return ctx.reply('\ud83d\udee1\ufe0f Security monitoring active. No data yet \u2013 baselines building...');
+    const rows = events || [];
+    const bySeverity = { critical: 0, high: 0, medium: 0, low: 0 };
+    const byType = {};
+    for (const e of rows) {
+      bySeverity[e.severity] = (bySeverity[e.severity] || 0) + 1;
+      byType[e.event_type] = (byType[e.event_type] || 0) + 1;
     }
 
-    const lines = [
-      '\ud83d\udee1\ufe0f *Security Dashboard*',
-      '',
-      `Active threats: ${dashboard.active_threats_count || 0} ${(dashboard.active_threats_count || 0) > 0 ? '\ud83d\udea8' : '\u2705'}`,
-      `Unresolved critical: ${dashboard.unresolved_critical || 0}`,
-      `Unresolved high: ${dashboard.unresolved_high || 0}`,
-      `Events 24h: ${dashboard.events_24h || 0}`,
-      `Failed auth 1h: ${dashboard.failed_auth_1h || 0}`,
-      `Brute force IPs: ${dashboard.brute_force_ips || 0}`,
-      '',
-      (dashboard.active_threats_count || 0) > 0
-        ? '\u26a0\ufe0f Use /threats to see active threats'
-        : '\u2705 All clear'
-    ];
+    const hourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const { data: failedAuth } = await db.supabase
+      .from('failed_auth_attempts')
+      .select('id')
+      .gte('timestamp', hourAgo)
+      .limit(500);
 
+    const lines = [
+      '🛡️ *Security Dashboard*',
+      '',
+      `Events 24h: ${rows.length}`,
+      `Critical: ${bySeverity.critical || 0} ${bySeverity.critical ? '🚨' : '✅'}`,
+      `High: ${bySeverity.high || 0} ${bySeverity.high ? '🔴' : '✅'}`,
+      `Medium: ${bySeverity.medium || 0}`,
+      `Low: ${bySeverity.low || 0}`,
+      `Failed auth 1h: ${(failedAuth || []).length}`,
+      ''
+    ];
+    const topTypes = Object.entries(byType).sort((a, b) => b[1] - a[1]).slice(0, 5);
+    if (topTypes.length) {
+      lines.push('*Top event types:*');
+      for (const [t, n] of topTypes) lines.push(`  • ${t}: ${n}`);
+      lines.push('');
+    }
+    lines.push((bySeverity.critical || bySeverity.high)
+      ? '⚠️ Use /threats to review high-severity events'
+      : '✅ All clear');
     await safeReplyMD(ctx, lines.join('\n'));
   } catch (err) {
-    ctx.reply('\ud83d\udee1\ufe0f Security monitoring active. Baselines building...');
+    console.error('[TELEGRAM /security] Error:', err.message);
+    ctx.reply('⚠️ Could not load security dashboard: ' + err.message);
   }
 }
 
 async function handleThreats(ctx) {
+  // v2.2.3: query security_events (real table) — active_threats never existed.
   try {
-    const { data: threats } = await db.supabase
-      .from('active_threats')
-      .select('*')
+    const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const { data: threats, error } = await db.supabase
+      .from('security_events')
+      .select('event_type, severity, actor, target, details, created_at')
+      .in('severity', ['high', 'critical'])
+      .gte('created_at', weekAgo)
+      .order('created_at', { ascending: false })
       .limit(10);
+    if (error) throw new Error(error.message);
 
     if (!threats || threats.length === 0) {
-      return ctx.reply('\u2705 No active threats. All clear!');
+      return ctx.reply('✅ No high-severity security events in the last 7 days. All clear!');
     }
 
-    const lines = [`\ud83d\udea8 *Active Threats (${threats.length})*\n`];
-    
+    const lines = [`🚨 *High-Severity Events (${threats.length}, 7d)*\n`];
+
     threats.forEach((t, i) => {
-      const emoji = t.severity === 'critical' ? '\ud83d\udea8' : '\ud83d\udd34';
-      lines.push(`${emoji} *${i + 1}. ${escapeMarkdown(t.category)}* \(${t.severity}\)`);
-      lines.push(`   ${escapeMarkdown(t.description.substring(0, 80))}`);
-      lines.push(`   ${new Date(t.triggered_at).toLocaleString('en-SG')}`);
-      if (t.source_ip) lines.push(`   IP: ${escapeMarkdown(t.source_ip)}`);
+      const emoji = t.severity === 'critical' ? '🚨' : '🔴';
+      const desc = (t.details && t.details.description) ? String(t.details.description) : '(no description)';
+      lines.push(`${emoji} *${i + 1}. ${escapeMarkdown(t.event_type || 'event')}* \(${t.severity}\)`);
+      lines.push(`   ${escapeMarkdown(desc.substring(0, 80))}`);
+      lines.push(`   ${new Date(t.created_at).toLocaleString('en-SG')} – actor: ${escapeMarkdown(String(t.actor || '?'))}`);
       lines.push('');
     });
 
     await safeReplyMD(ctx, lines.join('\n'));
   } catch (err) {
-    ctx.reply('\u26a0\ufe0f Could not fetch threats: ' + err.message);
+    ctx.reply('⚠️ Could not fetch threats: ' + err.message);
   }
 }
 
@@ -940,6 +976,45 @@ async function handleUnsuspend(ctx, providedSlug = null) {
   }
 }
 
+// ─── NOTIFICATION OBSERVABILITY (v2.2.3) ─────────────────────────
+
+// /testnotify <slug> — fire a REAL test notification through the multi-clinic
+// sender and report exactly which chats received it. Admin-only.
+async function handleTestNotify(ctx) {
+  const args = (ctx.message?.text || '').split(/\s+/);
+  const slug = args[1];
+  if (!slug) return ctx.reply('⚠️ Usage: /testnotify <slug>\nExample: /testnotify spine-co-chiropractic-demo');
+  const client = await db.getClientBySlug(slug);
+  if (!client) return ctx.reply(`❌ Clinic "${slug}" not found. Use /clients to see all slugs.`);
+  const { sendClinicNotification } = require('../multi-clinic-sender');
+  const stamp = new Date().toLocaleString('en-SG', { timeZone: 'Asia/Singapore' });
+  const result = await sendClinicNotification(client.id,
+    `🧪 *TEST NOTIFICATION*\n\nClinic: ${client.name}\nSent: ${stamp}\n\nIf you see this, the notification pipeline is working.`);
+  const ok = result.sentTo.length > 0 || result.adminSent;
+  await ctx.reply(
+    `${ok ? '✅' : '❌'} Test notification for *${client.name}*\n\n` +
+    `Clinic chats reached: ${result.sentTo.length}\n` +
+    `Admin copy delivered: ${result.adminSent ? 'yes' : 'no'}\n\n` +
+    (ok ? 'Check the clinic Telegram chat(s) for the 🧪 message.' : 'NOTHING was delivered — check Render logs and /notiflog.'),
+    { parse_mode: 'Markdown' }
+  );
+}
+
+// /notiflog — last 10 delivery receipts (success AND failure). Admin-only.
+async function handleNotifLog(ctx) {
+  const { getDeliveryLog } = require('../multi-clinic-sender');
+  const entries = await getDeliveryLog(10);
+  if (!entries.length) return ctx.reply('📭 No delivery records yet.');
+  const lines = ['📬 *Last notification deliveries:*', ''];
+  for (const e of entries) {
+    const when = new Date(e.ts).toLocaleString('en-SG', { timeZone: 'Asia/Singapore' });
+    const ok = e.sent > 0 || e.adminSent;
+    lines.push(`${ok ? '✅' : '❌'} ${when} — ${e.clinicName || e.clinicId}`);
+    lines.push(`   clinic chats: ${e.sent}/${e.attempted} · admin: ${e.adminSent ? 'ok' : 'fail'}`);
+  }
+  await ctx.reply(lines.join('\n'), { parse_mode: 'Markdown' }).catch(() => ctx.reply(lines.join('\n').replace(/[*_`]/g, '')));
+}
+
 // ─── EXPORT COMMAND MAP ──────────────────────────────────────────
 
 module.exports = {
@@ -967,5 +1042,9 @@ module.exports = {
   handleMarkPaid,
   handleSetBilling,
   handleSuspend,
-  handleUnsuspend
+  handleUnsuspend,
+  handleTestNotify,
+  handleNotifLog,
+  formatConfig,
+  escapeMarkdown
 };

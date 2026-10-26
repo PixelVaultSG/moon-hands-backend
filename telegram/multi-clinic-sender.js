@@ -61,6 +61,36 @@ async function getClinicTelegramChats(clinicId) {
   }
 }
 
+// ─── DELIVERY RECEIPTS (v2.2.3) ──────────────────────────────────
+// Ring buffer of the last 100 notification deliveries in kv_store, so
+// "did it send?" is a lookup (/notiflog), not a Render-log treasure hunt.
+// Never throws — observability must never break the notification itself.
+async function recordDelivery(entry) {
+  try {
+    const KEY = 'telegram_delivery_log';
+    const { data } = await supabase.from('kv_store').select('data').eq('key', KEY).single();
+    // Row shape mirrors conversation-state: the jsonb column is `data`,
+    // so the payload lives at data.data.entries.
+    const log = (data && data.data && Array.isArray(data.data.entries)) ? data.data.entries : [];
+    log.push(entry);
+    while (log.length > 100) log.shift();
+    await supabase.from('kv_store').upsert({ key: KEY, data: { entries: log } });
+  } catch (e) {
+    console.error('[MULTI_CLINIC] delivery log write failed:', e.message);
+  }
+}
+
+async function getDeliveryLog(limit = 10) {
+  try {
+    const { data } = await supabase.from('kv_store').select('data').eq('key', 'telegram_delivery_log').single();
+    const log = (data && data.data && Array.isArray(data.data.entries)) ? data.data.entries : [];
+    return log.slice(-limit).reverse();
+  } catch (e) {
+    console.error('[MULTI_CLINIC] delivery log read failed:', e.message);
+    return [];
+  }
+}
+
 /**
  * Send notification to clinic staff + admin copy
  * This is the ONLY function that should send clinic-bound Telegram messages.
@@ -118,9 +148,15 @@ async function sendClinicNotification(clinicId, message, options = {}) {
   };
 
   // 1. Send to clinic's staff (PRIMARY)
-  for (const chatId of clinicChats) {
+  // Dedupe (v2.2.3): when the admin is ALSO a linked clinic chat (demo
+  // clinics), the prefixed admin copy covers them — no double message.
+  const staffChats = (includeAdmin && adminChatId)
+    ? clinicChats.filter(id => String(id) !== String(adminChatId))
+    : clinicChats;
+  const failedChats = [];
+  for (const chatId of staffChats) {
     const r = await sendToChat(chatId, message, replyMarkup);
-    if (r.ok) sentTo.push(chatId);
+    if (r.ok) sentTo.push(chatId); else failedChats.push(chatId);
   }
   
   // 2. Send COPY to Moon Hands admin (SECONDARY)
@@ -137,20 +173,40 @@ async function sendClinicNotification(clinicId, message, options = {}) {
 
   // LOUD FAILURE: a notification that reached NOBODY must be queryable,
   // not just a console line on Render. Write a high-severity event.
+  // (v2.2.3: real security_events schema — event_type/actor/target/details.
+  //  The old category/service/description columns do not exist, so every
+  //  insert here was being rejected silently.)
   if (sentTo.length === 0 && !adminSent) {
     console.error(`[MULTI_CLINIC] 🚨 TOTAL DELIVERY FAILURE | Clinic: ${clinicName} (${clinicId}) | msg: ${message.substring(0, 80)}`);
     try {
       await supabase.from('security_events').insert([{
+        event_type: 'notification_failure',
+        actor: 'telegram-sender',
+        target: String(clinicId),
         severity: 'high',
-        category: 'notification_failure',
-        service: 'telegram',
-        description: `Notification for clinic ${clinicName} (${clinicId}) reached zero recipients`,
-        details: { clinic_id: clinicId, clinicChats, adminChatId: adminChatId ? 'set' : 'UNSET', messagePreview: message.substring(0, 200) },
+        details: {
+          description: `Notification for clinic ${clinicName} (${clinicId}) reached zero recipients`,
+          clinic_id: clinicId, clinicChats,
+          adminChatId: adminChatId ? 'set' : 'UNSET',
+          messagePreview: message.substring(0, 200)
+        },
       }]);
     } catch (e) {
       console.error('[MULTI_CLINIC] 🚨 Failed to record notification failure:', e.message);
     }
   }
+
+  // Delivery receipt (v2.2.3): every notification — success or failure —
+  // leaves a queryable trace (/notiflog). Ring buffer in kv_store, last 100.
+  await recordDelivery({
+    ts: new Date().toISOString(),
+    clinicId, clinicName,
+    attempted: staffChats.length + ((includeAdmin && adminChatId) ? 1 : 0),
+    sent: sentTo.length,
+    failed: failedChats,
+    adminSent
+  });
+
 
   console.log(`[MULTI_CLINIC] ✓ Sent to ${sentTo.length} clinic chat(s) + admin: ${adminSent} | Clinic: ${clinicName}`);
   return { sentTo, adminSent };
@@ -237,5 +293,7 @@ module.exports = {
   sendAdminOnly,
   linkChatToClinic,
   isChatAuthorizedForClinic,
-  getClinicTelegramChats
+  getClinicTelegramChats,
+  recordDelivery,
+  getDeliveryLog
 };

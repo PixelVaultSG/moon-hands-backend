@@ -754,12 +754,15 @@ async function notifyAdmin(supabase, client_id, eventType, data) {
   // This will be wired to the Telegram bot module
   // For now, log to security_events table
   try {
+    // v2.2.3: real security_events schema — event_type/actor/target/details.
+    // The old category/service/description columns do not exist; every
+    // insert here was being rejected silently.
     await supabase.from('security_events').insert([{
+      event_type: 'admin_notification',
+      actor: 'whatsapp-bot',
+      target: String(client_id || 'unknown'),
       severity: 'medium',
-      category: 'admin_notification',
-      service: 'telegram',
-      description: `${eventType}: ${JSON.stringify(data).substring(0, 200)}`,
-      details: { client_id, eventType, data },
+      details: { description: `${eventType}: ${JSON.stringify(data).substring(0, 200)}`, eventType },
     }]);
   } catch (e) {
     console.error('[FUNCTION] notifyAdmin error:', e.message);
