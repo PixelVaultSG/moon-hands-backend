@@ -354,9 +354,12 @@ async function isSlotAvailable(supabase, clinicId, date, time, durationMinutes =
 
 // ─── ESCAPE MARKDOWN ─────────────────────────────────────────────
 
+// Messages here are sent with legacy parse_mode 'Markdown' (v1), where ONLY
+// _ * ` [ are special. Escaping the MarkdownV2 charset made '.', '+', '-',
+// parens etc. show up as literal backslashes in clinic notifications (v2.2.3).
 function escapeMarkdown(text) {
   if (!text) return '';
-  return text.replace(/[_*\[\]()~`>#+=|{}.!-]/g, '\\$&');
+  return String(text).replace(/([_*`\[\]])/g, '\\$1');
 }
 
 // ─── EXPORTS ─────────────────────────────────────────────────────

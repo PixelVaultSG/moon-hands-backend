@@ -290,15 +290,20 @@ async function runSecurityScan() {
   // Log events to database
   for (const event of allEvents) {
     try {
+      // v2.2.3: real security_events schema — event_type/actor/target/details.
       await db.supabase.from('security_events').insert({
-        severity: event.severity,
-        category: event.category,
-        service: event.service || null,
-        client_id: event.client_id || null,
-        description: event.description,
-        details: event.details || {},
-        source_ip: event.source_ip || null,
-        triggered_at: new Date().toISOString()
+        event_type: event.category || 'general',
+        actor: event.source_ip || 'security-monitor',
+        target: String(event.client_id || 'system'),
+        severity: event.severity || 'medium',
+        details: {
+          description: event.description,
+          category: event.category,
+          service: event.service || null,
+          client_id: event.client_id || null,
+          source_ip: event.source_ip || null,
+          ...(event.details || {})
+        }
       });
     } catch (e) {
       console.error('Failed to log security event:', e.message);

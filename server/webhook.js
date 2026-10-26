@@ -1574,13 +1574,18 @@ async function logSecurityEvent(event) {
     const { supabase } = require('../supabase/client');
     const { error } = await supabase
       .from('security_events')
+      // v2.2.3: real security_events schema — event_type/actor/target/details.
       .insert([{
+        event_type: event.category || 'general',
+        actor: event.source_ip || 'webhook',
+        target: String(event.details?.client_id || 'system'),
         severity: event.severity || 'medium',
-        category: event.category || 'general',
-        service: event.service || 'webhook',
-        description: event.description,
-        details: event.details || {},
-        source_ip: event.source_ip || null,
+        details: {
+          description: event.description,
+          service: event.service || 'webhook',
+          ...(event.details || {}),
+          source_ip: event.source_ip || null
+        },
         created_at: new Date().toISOString()
       }]);
     if (error) console.error('[SECURITY_LOG] Supabase insert failed:', error.message);

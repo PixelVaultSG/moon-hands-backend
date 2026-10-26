@@ -744,6 +744,8 @@ bot.command('security', adminCmd('/security', commands.handleSecurity));
 bot.command('threats', adminCmd('/threats', commands.handleThreats));
 bot.command('authlog', adminCmd('/authlog', commands.handleAuthLog));
 bot.command('debug', adminCmd('/debug', commands.handleDebug));
+bot.command('testnotify', adminCmd('/testnotify', commands.handleTestNotify));
+bot.command('notiflog', adminCmd('/notiflog', commands.handleNotifLog));
 
 // ─── ONBOARDING APPROVAL COMMANDS ────────────────────────────────
 // Clinic submits form → onboarding_submissions (status='pending')
@@ -1354,7 +1356,23 @@ bot.hears('📋 My Bookings', safeHandler('📋 My Bookings', async (ctx) => {
   }
   lines.push('');
   lines.push('_⏳ = pending approval · 🔄 = alternative time suggested_');
-  await ctx.reply(lines.join('\n'), { parse_mode: 'Markdown' });
+
+  // v2.2.3: pending bookings get inline Approve/Reject right in this list,
+  // so staff act here instead of hunting the notification message. The
+  // approve_/reject_ handlers already exist and are authorization-checked.
+  const pendingRows = bookings
+    .filter(b => b.status === 'pending')
+    .slice(0, 8)
+    .map(b => ([
+      { text: `✅ Approve ${String(b.appointment_date).slice(5)} ${String(b.appointment_time).slice(0, 5)} ${String(b.customer_name || '').slice(0, 12)}`, callback_data: `approve_${b.id}` },
+      { text: '❌ Reject', callback_data: `reject_${b.id}` }
+    ]));
+  const opts = { parse_mode: 'Markdown' };
+  if (pendingRows.length > 0) {
+    lines.push('', '⏳ *Pending — tap to action:*');
+    opts.reply_markup = { inline_keyboard: pendingRows };
+  }
+  await ctx.reply(lines.join('\n'), opts);
 }));
 
 bot.hears('❓ Help', safeHandler('❓ Help', async (ctx) => {

@@ -143,14 +143,15 @@ async function sendDailySecurityReport() {
     const { data: todaysEvents } = await db.supabase
       .from('security_events')
       .select('*')
-      .gte('triggered_at', today)
-      .order('triggered_at', { ascending: false });
+      .gte('created_at', today)
+      .order('created_at', { ascending: false });
       
-    const unresolved = todaysEvents?.filter(e => !e.resolved_at) || [];
+    // v2.2.3: resolved_at column doesn't exist — surface today's high/critical instead
+    const unresolved = todaysEvents?.filter(e => e.severity === 'critical' || e.severity === 'high') || [];
     const critical = todaysEvents?.filter(e => e.severity === 'critical') || [];
     const byCategory = {};
     (todaysEvents || []).forEach(e => {
-      byCategory[e.category] = (byCategory[e.category] || 0) + 1;
+      byCategory[e.event_type] = (byCategory[e.event_type] || 0) + 1;
     });
     
     const lines = [
@@ -161,7 +162,7 @@ async function sendDailySecurityReport() {
       '*Today\'s Summary*',
       `Total events: ${todaysEvents?.length || 0}`,
       `Critical: ${critical.length} ${critical.length > 0 ? '\ud83d\udea8' : ''}`,
-      `Unresolved: ${unresolved.length} ${unresolved.length > 0 ? '\u26a0\ufe0f' : ''}`,
+      `High/Critical: ${unresolved.length} ${unresolved.length > 0 ? '\u26a0\ufe0f' : ''}`,
       ''
     ];
     
@@ -174,9 +175,10 @@ async function sendDailySecurityReport() {
     }
     
     if (unresolved.length > 0) {
-      lines.push('\ud83d\udd34 *Unresolved Issues:*');
+      lines.push('\ud83d\udd34 *High/Critical Today:*');
       unresolved.slice(0, 5).forEach(e => {
-        lines.push(`  \u2022 [${e.severity}] ${e.description.substring(0, 60)}`);
+        const desc = (e.details && e.details.description) ? String(e.details.description) : String(e.event_type || 'event');
+        lines.push(`  \u2022 [${e.severity}] ${desc.substring(0, 60)}`);
       });
       lines.push('');
     }
