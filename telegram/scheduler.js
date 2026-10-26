@@ -177,7 +177,10 @@ async function sendDailySecurityReport() {
     if (unresolved.length > 0) {
       lines.push('\ud83d\udd34 *High/Critical Today:*');
       unresolved.slice(0, 5).forEach(e => {
-        const desc = (e.details && e.details.description) ? String(e.details.description) : String(e.event_type || 'event');
+        // details column is TEXT — writers store serialized JSON; parse it back.
+        let det = e.details;
+        if (typeof det === 'string') { try { det = JSON.parse(det || '{}'); } catch { det = {}; } }
+        const desc = (det && det.description) ? String(det.description) : String(e.event_type || 'event');
         lines.push(`  \u2022 [${e.severity}] ${desc.substring(0, 60)}`);
       });
       lines.push('');

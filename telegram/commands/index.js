@@ -731,7 +731,10 @@ async function handleThreats(ctx) {
 
     threats.forEach((t, i) => {
       const emoji = t.severity === 'critical' ? '🚨' : '🔴';
-      const desc = (t.details && t.details.description) ? String(t.details.description) : '(no description)';
+      // details column is TEXT — writers store serialized JSON; parse it back.
+      let det = t.details;
+      if (typeof det === 'string') { try { det = JSON.parse(det || '{}'); } catch { det = {}; } }
+      const desc = (det && det.description) ? String(det.description) : '(no description)';
       lines.push(`${emoji} *${i + 1}. ${escapeMarkdown(t.event_type || 'event')}* \(${t.severity}\)`);
       lines.push(`   ${escapeMarkdown(desc.substring(0, 80))}`);
       lines.push(`   ${new Date(t.created_at).toLocaleString('en-SG')} – actor: ${escapeMarkdown(String(t.actor || '?'))}`);
