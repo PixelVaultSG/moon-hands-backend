@@ -998,6 +998,51 @@ function buildResumeOffer(suspended) {
 }
 
 /**
+ * Find services from THIS clinic's menu mentioned in a message (v2.2.1).
+ * Patients rarely type the full service name — "spinal decompression" must
+ * match "Spinal Decompression Therapy". Match on the full name first, then
+ * on progressively shorter word-prefixes (minimum 2 words, so a bare
+ * "therapy" or "adjustment" never matches). Parenthetical suffixes ignored.
+ */
+function findMentionedServices(message, services) {
+  const lower = (message || '').toLowerCase();
+  const hits = [];
+  for (const s of services || []) {
+    const name = (s.name || '').toLowerCase().replace(/\s*\([^)]*\)/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!name) continue;
+    if (lower.includes(name)) { hits.push(s); continue; }
+    const words = name.split(' ');
+    for (let len = words.length - 1; len >= 2; len--) {
+      if (lower.includes(words.slice(0, len).join(' '))) { hits.push(s); break; }
+    }
+  }
+  return hits;
+}
+
+/**
+ * Deterministic comparison / what-is answer built from THIS clinic's menu
+ * data (v2.2.1). Factual menu comparisons are explicitly allowed — routing
+ * them through the LLM lets the medical red-line sanitizer misfire and
+ * replace a factual answer with a refusal. Name, duration, price and
+ * description only: no diagnosis, no suitability advice.
+ */
+function buildCompareAnswer(matchedServices) {
+  const cards = matchedServices.slice(0, 4).map(s => {
+    const bits = [];
+    const dur = parseInt(s.duration);
+    if (dur) bits.push(`${dur}min`);
+    if (s.price) bits.push(s.price);
+    const head = `*${s.name}*${bits.length ? ` — ${bits.join(' · ')}` : ''}`;
+    return s.description ? `${head}\n${s.description}` : head;
+  });
+  let out = cards.join('\n\n');
+  if (matchedServices.length > 1) {
+    out += `\n\nBoth are available here. Which suits you best is something our doctor can advise on during a consultation.`;
+  }
+  return out;
+}
+
+/**
  * Re-issue the prompt for the state the patient was in when they wandered
  * off to ask a question. Each case mirrors the prompt that state normally
  * shows, prefixed with "Let's pick up where we left off."
@@ -1301,8 +1346,16 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
     // the user providing their treatment choice — don't treat as off-topic inquiry.
     const isTreatmentSelection = currentState.state === BOOKING_STATES.AWAITING_TREATMENT && 
       services.some(s => msgLower.includes(s.name.toLowerCase()));
+    // Comparison / what-is questions ("what's the difference between X and
+    // Y", "what is dry needling") match no intent in the matcher — catch the
+    // phrasing directly. Hoisted ABOVE the selection guard (v2.2.1): a
+    // mid-flow QUESTION that names treatments is still a question — without
+    // this, "what's the difference between dry needling and spinal
+    // decompression" gets swallowed as a treatment selection.
+    const COMPARE_OR_INFO_RE = /\bdifferences?\s+between\b|\bcompar(?:e|ing|ison)\b|\bversus\b|\bvs\.?\s|\bwhich\s+(?:one|treatment|service)\b[^?]*(?:better|best|differ)|^(?:what|what's|whats)\s+(?:is|are)\s|^how\s+does\s+\w+\s+work/i;
+    const compareInfoMatch = COMPARE_OR_INFO_RE.test(message) ? { intent: 'offtopic_question' } : null;
     
-    if (!isBareServiceName && !isTreatmentSelection) {
+    if (!isBareServiceName && (!isTreatmentSelection || compareInfoMatch)) {
       const { matchIntents } = require('./intent-matcher');
       const OFF_TOPIC_INTENTS = [
         'service_list', 'treatment_enquiry', 'pricing_general', 'pricing_specific',
@@ -1316,12 +1369,7 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
       // ("know more about X", "do you offer X") — never for bare names
       const inquiryMatch = !offTopicMatch && (matchIntents(message, conversationHistory, false) || [])
         .find(m => m.intent === 'service_inquiry' && m.confidence >= 0.85 && m.params?.treatment && msgLower !== m.params.treatment);
-      // Comparison / what-is questions ("what's the difference between X and
-      // Y", "what is dry needling") match no intent in the matcher — catch the
-      // phrasing directly so a mid-flow question gets ANSWERED, not trapped
-      // behind "Sorry, I didn't catch the date."
-      const COMPARE_OR_INFO_RE = /\bdifferences?\s+between\b|\bcompar(?:e|ing|ison)\b|\bversus\b|\bvs\.?\s|\bwhich\s+(?:one|treatment|service)\b[^?]*(?:better|best|differ)|^(?:what|what's|whats)\s+(?:is|are)\s|^how\s+does\s+\w+\s+work/i;
-      const compareInfoMatch = COMPARE_OR_INFO_RE.test(message) ? { intent: 'offtopic_question' } : null;
+      // (compareInfoMatch is hoisted above the selection guard — v2.2.1)
       // Symptom statements ("I have back pain", "my neck is stiff") deserve an
       // answered recommendation from the info expert (it holds the menu) —
       // not the category-list fallback. Word boundaries keep "painful" etc.
@@ -1337,7 +1385,21 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
         // the re-entry sees IDLE; only then park the snapshot in AWAITING_RESUME.
         const suspended = { state: currentState.state, data: { ...(currentState.data || {}) } };
         resetIdle(patientPhone);
-        const aiResult = await routeMessage(message, clinicConfig, patientPhone, conversationHistory);
+        // Compare/what-is questions naming services from THIS clinic's menu
+        // get a deterministic menu-data answer — no LLM, so the medical
+        // red-line sanitizer cannot misfire on a factual comparison (v2.2.1).
+        const mentionedServices = compareInfoMatch ? findMentionedServices(message, services) : [];
+        let aiResult;
+        if (compareInfoMatch && mentionedServices.length > 0) {
+          aiResult = {
+            text: buildCompareAnswer(mentionedServices),
+            source: 'hardcoded',
+            cost_saved: 1,
+            latency_ms: Date.now() - startTime
+          };
+        } else {
+          aiResult = await routeMessage(message, clinicConfig, patientPhone, conversationHistory);
+        }
         setState(patientPhone, BOOKING_STATES.AWAITING_RESUME, { suspended });
         const resumeLine = buildResumeOffer(suspended);
         if (aiResult && typeof aiResult === 'object') {
@@ -1793,11 +1855,17 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
         // Multiple treatments selected — show summary
         const { getMultiTreatmentButtons } = require('./whatsapp-interactive');
         const { sumServicePrices, formatPriceTotal } = require('../utils/price');
-        const matchedForPrice = matchedServices.filter(s => allSelected.includes(s.name));
-        const priceSum = sumServicePrices(matchedForPrice);
+        // Resolve ALL selected names back to service objects: line items and
+        // totals must cover previously-selected treatments too, not just the
+        // ones matched in this message (v2.2.1 — totals previously dropped
+        // everything except the latest pick).
+        const selectedSvcs = allSelected
+          .map(n => services.find(s => s.name === n))
+          .filter(Boolean);
+        const priceSum = sumServicePrices(selectedSvcs);
         const priceText = priceSum.hasPrice ? formatPriceTotal(priceSum.min, priceSum.max) : '';
         let totalDuration = 0;
-        for (const svc of matchedForPrice) {
+        for (const svc of selectedSvcs) {
           totalDuration += parseInt(svc.duration) || 60;
         }
         
@@ -1807,7 +1875,7 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
           intents: ['treatment_info'],
           cost_saved: 1,
           latency_ms: Date.now() - startTime,
-          whatsappInteractive: getMultiTreatmentButtons(allSelected, totalDuration, priceText)
+          whatsappInteractive: getMultiTreatmentButtons(selectedSvcs, totalDuration, priceText)
         };
       }
       

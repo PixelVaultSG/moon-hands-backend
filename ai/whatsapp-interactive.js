@@ -247,13 +247,26 @@ function getEditMenuButtons(customBody) {
  * Shows after user picks a treatment — lets them book immediately or add more.
  */
 function getMultiTreatmentButtons(selectedTreatments, totalDuration, totalPrice) {
-  const treatmentText = selectedTreatments.join(' + ');
-  const durText = totalDuration ? ` (${totalDuration}min)` : '';
-  const priceText = totalPrice ? ` • ${totalPrice}` : '';
+  // v2.2.1 (Ash): line-item display — every treatment on its own "+ " line
+  // with duration and price, totals at the bottom, matching the booking
+  // summary style. Accepts service objects ({name, duration, price}); bare
+  // name strings still render (defensive).
+  const lines = selectedTreatments.map(t => {
+    if (typeof t === 'string') return `+ ${t}`;
+    const bits = [];
+    const dur = parseInt(t.duration);
+    if (dur) bits.push(`${dur}min`);
+    if (t.price) bits.push(t.price);
+    return `+ ${t.name}${bits.length ? ` — ${bits.join(' · ')}` : ''}`;
+  });
+  const totalBits = [];
+  if (totalDuration) totalBits.push(`⏱ ${totalDuration}min total`);
+  if (totalPrice) totalBits.push(`💰 ${totalPrice}`);
+  const totalsLine = totalBits.length ? `\n${totalBits.join(' · ')}` : '';
   const isPlural = selectedTreatments.length > 1;
 
   return buildQuickReplyButtons({
-    body: `Selected: ${treatmentText}${durText}${priceText}\n\nWould you like to book ${isPlural ? 'these treatments' : 'this treatment'}, or add more?`,
+    body: `✅ Selected:\n${lines.join('\n')}${totalsLine}\n\nWould you like to book ${isPlural ? 'these treatments' : 'this treatment'}, or add more?`,
     footer: 'Tap an option',
     buttons: [
       { id: 'book_selected', title: `📅 Book ${isPlural ? 'These' : 'This'}` },
