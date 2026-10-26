@@ -179,6 +179,39 @@ async function routeMessage(message, clinicConfig, patientPhone = null, conversa
     }
   }
   
+  // ── STEP 1c: IDLE compare / what-is → deterministic menu-data answer ──
+  // Comparisons aren't only asked mid-booking — patients fire them right
+  // after "Hi" or while browsing the catalog (Ash, v2.2.2). Same builder as
+  // the mid-flow escape: menu data only (name/duration/price/description),
+  // no LLM, so the medical red-line sanitizer cannot misfire on a factual
+  // comparison. Fires only when ≥1 of THIS clinic's services is named —
+  // anything else falls through to normal intent routing untouched.
+  if (!forcedIntents) {
+    const COMPARE_OR_INFO_RE = /\bdifferences?\s+between\b|\bcompar(?:e|ing|ison)\b|\bversus\b|\bvs\.?\s|\bwhich\s+(?:one|treatment|service)\b[^?]*(?:better|best|differ)|^(?:what|what's|whats)\s+(?:is|are)\s|^how\s+does\s+\w+\s+work/i;
+    if (COMPARE_OR_INFO_RE.test(message)) {
+      const menuServices = clinicConfig.config?.services || clinicConfig.services || [];
+      const mentioned = findMentionedServices(message, menuServices);
+      if (mentioned.length > 0) {
+        const text = buildCompareAnswer(mentioned);
+        let footer = null;
+        try {
+          const { withActionFooter } = require('./bot-engine');
+          footer = withActionFooter(text, clinicConfig, [], null);
+        } catch (e) {
+          console.error('[SMART_ROUTER] footer attach failed:', e.message);
+        }
+        return {
+          text,
+          source: 'hardcoded',
+          intents: ['treatment_info'],
+          cost_saved: 1,
+          latency_ms: Date.now() - startTime,
+          whatsappInteractive: footer || undefined
+        };
+      }
+    }
+  }
+
   // ── STEP 1b: Check conversation freshness (1-hour inactivity rule) ──
   // Greeting only fires if: (a) first ever message, OR (b) last message >1hr ago
   const ONE_HOUR_MS = 60 * 60 * 1000;
@@ -989,7 +1022,11 @@ function validateBookingTime(dateStr, timeStr, operatingHours) {
 function buildResumeOffer(suspended) {
   const d = suspended.data || {};
   const bits = [];
-  const names = (d.treatments && d.treatments.length ? d.treatments.join(' + ') : d.treatment) || null;
+  // Prefer the LONGEST of treatments/selectedTreatments — the two lists can
+  // disagree, and the offer must name everything the patient picked (v2.2.2).
+  const lists = [d.treatments, d.selectedTreatments].filter(a => Array.isArray(a) && a.length);
+  lists.sort((a, b) => b.length - a.length);
+  const names = (lists.length ? lists[0].join(' + ') : d.treatment) || null;
   if (names) bits.push(names);
   if (d.date) bits.push(d.date);
   if (d.time) bits.push(d.time);
@@ -1052,6 +1089,20 @@ async function rePromptSuspendedState(clinicConfig, patientPhone, suspended, sta
   const prefix = "Let's pick up where we left off. ";
   const base = { source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
   try {
+    // ── SMART RESUME (v2.2.2): treatment + date + time already known → go
+    // STRAIGHT to the confirmation card. Never re-ask for data we already
+    // hold (Ash: "yes" to pick up must not reconfirm time and date).
+    const pickTreatments = (dd) => {
+      const cands = [dd.treatments, dd.selectedTreatments].filter(a => Array.isArray(a) && a.length);
+      cands.sort((a, b) => b.length - a.length);
+      if (cands.length) return cands[0];
+      return dd.treatment ? [dd.treatment] : [];
+    };
+    const knownTreatments = pickTreatments(d);
+    if (d.date && d.time && knownTreatments.length > 0 && suspended.state !== BOOKING_STATES.EDITING_BOOKING) {
+      setState(patientPhone, BOOKING_STATES.AWAITING_CONFIRMATION, { ...d, treatment: knownTreatments[0], treatments: knownTreatments });
+      return await buildConfirmationResponse(clinicConfig, patientPhone, d.date, d.time, knownTreatments, startTime);
+    }
     switch (suspended.state) {
       case BOOKING_STATES.AWAITING_DATE: {
         const { getNextAvailableDates } = require('./availability-engine');
@@ -1092,14 +1143,53 @@ async function rePromptSuspendedState(clinicConfig, patientPhone, suspended, sta
         catResponse.text = `${prefix}${catResponse.text}`;
         return catResponse;
       }
+      case BOOKING_STATES.TREATMENT_INFO: {
+        // Patient had picked treatment(s) but no date/time yet — re-show the
+        // selection card so one tap continues the booking (v2.2.2).
+        const menuSvcs = clinicConfig.config?.services || [];
+        const names = (d.selectedTreatments && d.selectedTreatments.length
+          ? d.selectedTreatments
+          : (d.selectedTreatment ? [d.selectedTreatment] : (d.treatment ? [d.treatment] : [])));
+        const svcs = names.map(n => menuSvcs.find(s => s.name === n)).filter(Boolean);
+        if (svcs.length > 1) {
+          const { getMultiTreatmentButtons } = require('./whatsapp-interactive');
+          const { sumServicePrices, formatPriceTotal } = require('../utils/price');
+          const priceSum = sumServicePrices(svcs);
+          const priceText = priceSum.hasPrice ? formatPriceTotal(priceSum.min, priceSum.max) : '';
+          let totalDuration = 0;
+          for (const svc of svcs) totalDuration += parseInt(svc.duration) || 60;
+          return { ...base, text: `${prefix}You had selected ${names.join(' + ')}.`, whatsappInteractive: getMultiTreatmentButtons(svcs, totalDuration, priceText) };
+        }
+        if (svcs.length === 1) {
+          const { getTreatmentInfoCard } = require('./whatsapp-interactive');
+          return { ...base, text: `${prefix}You were looking at ${svcs[0].name}.`, whatsappInteractive: getTreatmentInfoCard(svcs[0], 0) };
+        }
+        return { ...base, text: `${prefix}Which treatment would you like?` };
+      }
       case BOOKING_STATES.AWAITING_NAME:
         return { ...base, text: `${prefix}👤 May I have your name for the booking?` };
       case BOOKING_STATES.AWAITING_PHONE:
         return { ...base, text: `${prefix}📞 What's the best phone number for the booking?` };
       case BOOKING_STATES.AWAITING_NAMEPHONE:
         return { ...base, text: `${prefix}Please provide your name and phone number (e.g., "Tom Hands, 81234567"):` };
-      default:
+      default: {
+        // Partial data in an unusual state — resume at the first MISSING
+        // step instead of shrugging (v2.2.2).
+        const tNames = (d.treatments && d.treatments.length ? d.treatments
+          : (d.selectedTreatments && d.selectedTreatments.length ? d.selectedTreatments
+          : (d.treatment ? [d.treatment] : (d.selectedTreatment ? [d.selectedTreatment] : []))));
+        if (tNames.length > 0 && !d.date) {
+          setState(patientPhone, BOOKING_STATES.AWAITING_DATE, { treatment: tNames[0], treatments: tNames });
+          return await rePromptSuspendedState(clinicConfig, patientPhone,
+            { state: BOOKING_STATES.AWAITING_DATE, data: { ...d, treatment: tNames[0], treatments: tNames } }, startTime);
+        }
+        if (d.date && !d.time) {
+          setState(patientPhone, BOOKING_STATES.AWAITING_TIME, { date: d.date });
+          return await rePromptSuspendedState(clinicConfig, patientPhone,
+            { state: BOOKING_STATES.AWAITING_TIME, data: d }, startTime);
+        }
         return { ...base, text: `${prefix}Just tell me the date or treatment and we'll carry on.` };
+      }
     }
   } catch (err) {
     console.error('[RESUME] Re-prompt failed:', err.message);
@@ -1344,8 +1434,10 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
     const isBareServiceName = services.some(s => msgLower === s.name.toLowerCase());
     // NEW: In AWAITING_TREATMENT, any message containing a service name is likely
     // the user providing their treatment choice — don't treat as off-topic inquiry.
+    // Unified matcher (v2.2.2): same prefix-aware matching as compare answers
+    // and treatment selection — one matching rule everywhere.
     const isTreatmentSelection = currentState.state === BOOKING_STATES.AWAITING_TREATMENT && 
-      services.some(s => msgLower.includes(s.name.toLowerCase()));
+      findMentionedServices(message, services).length > 0;
     // Comparison / what-is questions ("what's the difference between X and
     // Y", "what is dry needling") match no intent in the matcher — catch the
     // phrasing directly. Hoisted ABOVE the selection guard (v2.2.1): a
@@ -1806,12 +1898,9 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
       // (services and msgLower already declared at top of handleBookingFlow)
       
       // Find ALL matching treatments from message (supports multi-treatment bookings)
-      let matchedServices = [];
-      for (const s of services) {
-        if (msgLower.includes(s.name.toLowerCase())) {
-          matchedServices.push(s);
-        }
-      }
+      // Unified matcher (v2.2.2): "spinal decompression" now selects
+      // "Spinal Decompression Therapy" — same rule as compare answers.
+      let matchedServices = findMentionedServices(message, services);
       
       // Also check categoryServices from state (treatments in current category)
       if (matchedServices.length === 0 && currentState.data?.categoryServices) {
