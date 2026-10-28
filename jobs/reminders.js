@@ -107,12 +107,11 @@ async function send24hReminders() {
   // Get appointments for tomorrow
   const { data: appointments } = await db.supabase
     .from('appointments')
-    .select('*, clients(whatsapp_api_key)')
+    .select('*')
     .in('client_id', clientIds)
     .eq('appointment_date', dateStr)
     .eq('status', 'confirmed')
     .eq('reminder_24h_sent', false)
-    .not('clients.whatsapp_api_key', 'is', null);
 
   if (!appointments || appointments.length === 0) return;
 
@@ -126,8 +125,7 @@ async function send24hReminders() {
 
     const sent = await sendWhatsAppMessage(
       apt.customer_phone,
-      message,
-      apt.clients?.whatsapp_api_key
+      message
     );
 
     if (sent) {
@@ -161,12 +159,11 @@ async function send1hReminders() {
   // Get appointments ~1 hour from now (within 15 min window)
   const { data: appointments } = await db.supabase
     .from('appointments')
-    .select('*, clients(whatsapp_api_key)')
+    .select('*')
     .in('client_id', clientIds)
     .eq('appointment_date', dateStr)
     .eq('status', 'confirmed')
     .eq('reminder_1h_sent', false)
-    .not('clients.whatsapp_api_key', 'is', null);
 
   if (!appointments) return;
 
@@ -187,8 +184,7 @@ async function send1hReminders() {
 
     const sent = await sendWhatsAppMessage(
       apt.customer_phone,
-      message,
-      apt.clients?.whatsapp_api_key
+      message
     );
 
     if (sent) {
@@ -220,12 +216,11 @@ async function send48hFollowups() {
 
   const { data: appointments } = await db.supabase
     .from('appointments')
-    .select('*, clients(whatsapp_api_key)')
+    .select('*')
     .in('client_id', clientIds)
     .eq('appointment_date', dateStr)
     .eq('status', 'completed')
     .eq('followup_48h_sent', false)
-    .not('clients.whatsapp_api_key', 'is', null);
 
   if (!appointments || appointments.length === 0) return;
 
@@ -237,8 +232,7 @@ async function send48hFollowups() {
 
     const sent = await sendWhatsAppMessage(
       apt.customer_phone,
-      message,
-      apt.clients?.whatsapp_api_key
+      message
     );
 
     if (sent) {
@@ -257,11 +251,11 @@ async function send48hFollowups() {
 async function sendApprovalConfirmation(appointmentId) {
   const { data: apt } = await db.supabase
     .from('appointments')
-    .select('*, clients(whatsapp_api_key)')
+    .select('*')
     .eq('id', appointmentId)
     .single();
 
-  if (!apt || !apt.clients?.whatsapp_api_key) return false;
+  if (!apt) return false;
 
   const message = REMINDER_MESSAGES['approval'](
     apt.customer_name,
@@ -272,8 +266,7 @@ async function sendApprovalConfirmation(appointmentId) {
 
   return await sendWhatsAppMessage(
     apt.customer_phone,
-    message,
-    apt.clients.whatsapp_api_key
+    message
   );
 }
 

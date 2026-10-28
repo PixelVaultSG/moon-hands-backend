@@ -550,7 +550,12 @@ bot.action(/^approve_(.+)$/, safeHandler('approve_btn', async (ctx) => {
   if (result.success) {
     await ctx.answerCbQuery('✅ Approved');
     await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
-    await ctx.reply(`✅ Booking approved for ${result.patientName}\n📅 ${result.date} at ${result.time}\n🩺 ${result.treatment}\n✓ Patient notified\n${result.calendarSynced ? '✓ Google Calendar synced' : ''}`);
+    const notifyLine = result.patientNotified ? '✓ Patient notified' : '⚠️ Patient NOT notified — send confirmation manually';
+    const calLine = result.calendarSynced ? '\n✓ Google Calendar synced' : '';
+    const overlapLines = (result.overlaps && result.overlaps.length > 0)
+      ? '\n\n⚠️ OVERLAP WARNING — this slot now overlaps:\n' + result.overlaps.map(o => `• ${o.time} — ${o.name} (${o.status})`).join('\n') + '\nSuggest an alternative time for this booking.'
+      : '';
+    await ctx.reply(`✅ Booking approved for ${result.patientName}\n📅 ${result.date} at ${result.time}\n🩺 ${result.treatment}\n${notifyLine}${calLine}${overlapLines}`);
   } else {
     console.error(`[TELEGRAM] Approve failed for ${apptId}: ${result.error}`);
     await ctx.answerCbQuery('❌ Approval failed', { show_alert: true });
@@ -568,12 +573,46 @@ bot.action(/^reject_(.+)$/, safeHandler('reject_btn', async (ctx) => {
   if (result.success) {
     await ctx.answerCbQuery('❌ Rejected');
     await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
-    await ctx.reply(`❌ Booking rejected for ${result.patientName}\n📅 ${result.date} at ${result.time}\n🩺 ${result.treatment}\n✓ Patient notified`);
+    const notifyLine = result.patientNotified ? '✓ Patient notified' : '⚠️ Patient NOT notified — inform them manually';
+    await ctx.reply(`❌ Booking rejected for ${result.patientName}\n📅 ${result.date} at ${result.time}\n🩺 ${result.treatment}\n${notifyLine}`);
   } else {
     console.error(`[TELEGRAM] Reject failed for ${apptId}: ${result.error}`);
     await ctx.answerCbQuery('❌ Rejection failed', { show_alert: true });
     await ctx.reply(`❌ Failed to reject booking: ${result.error}`);
   }
+}));
+
+// ─── CLINIC CANCEL CONFIRMED BOOKING ─────────────────────────────
+// Two-step: 🗑 Cancel button asks for confirmation, then executes.
+
+bot.action(/^cancelreq_(.+)$/, safeHandler('cancelreq_btn', async (ctx) => {
+  const apptId = ctx.match[1];
+  await ctx.answerCbQuery();
+  await ctx.reply('⚠️ Cancel this booking? The patient will be notified on WhatsApp.', {
+    reply_markup: { inline_keyboard: [[
+      { text: '✅ Yes, cancel & notify patient', callback_data: `cancelgo_${apptId}` },
+      { text: '↩️ No, keep it', callback_data: `cancelno_${apptId}` }
+    ]] }
+  });
+}));
+
+bot.action(/^cancelgo_(.+)$/, safeHandler('cancelgo_btn', async (ctx) => {
+  const apptId = ctx.match[1];
+  const { handleCancelById } = require('./commands/approvals');
+  const result = await handleCancelById(apptId, ctx.chat.id);
+  if (result.success) {
+    await ctx.answerCbQuery('Cancelled');
+    const notifyLine = result.patientNotified ? '✓ Patient notified on WhatsApp' : '⚠️ Patient NOT notified — inform them manually';
+    const calLine = result.calendarDeleted ? '\n✓ Google Calendar event removed' : '';
+    await ctx.reply(`🗑 Booking cancelled for ${result.patientName}\n📅 ${result.date} at ${result.time}\n🩺 ${result.treatment}\n${notifyLine}${calLine}`);
+  } else {
+    await ctx.answerCbQuery('❌ Cancel failed', { show_alert: true });
+    await ctx.reply(`❌ Failed to cancel booking: ${result.error}`);
+  }
+}));
+
+bot.action(/^cancelno_(.+)$/, safeHandler('cancelno_btn', async (ctx) => {
+  await ctx.answerCbQuery('Cancellation aborted');
 }));
 
 // ─── ONBOARDING APPROVAL INLINE BUTTONS ──────────────────────────
@@ -1367,10 +1406,18 @@ bot.hears('📋 My Bookings', safeHandler('📋 My Bookings', async (ctx) => {
       { text: `✅ Approve ${String(b.appointment_date).slice(5)} ${String(b.appointment_time).slice(0, 5)} ${String(b.customer_name || '').slice(0, 12)}`, callback_data: `approve_${b.id}` },
       { text: '❌ Reject', callback_data: `reject_${b.id}` }
     ]));
+  const confirmedRows = bookings
+    .filter(b => b.status === 'confirmed')
+    .slice(0, 4)
+    .map(b => ([
+      { text: `🗑 Cancel ${String(b.appointment_date).slice(5)} ${String(b.appointment_time).slice(0, 5)} ${String(b.customer_name || '').slice(0, 12)}`, callback_data: `cancelreq_${b.id}` }
+    ]));
   const opts = { parse_mode: 'Markdown' };
-  if (pendingRows.length > 0) {
-    lines.push('', '⏳ *Pending — tap to action:*');
-    opts.reply_markup = { inline_keyboard: pendingRows };
+  if (pendingRows.length > 0) lines.push('', '⏳ *Pending — tap to action:*');
+  if (confirmedRows.length > 0) lines.push('', '🗑 *Confirmed — tap to cancel:*');
+  const allRows = [...pendingRows, ...confirmedRows];
+  if (allRows.length > 0) {
+    opts.reply_markup = { inline_keyboard: allRows };
   }
   await ctx.reply(lines.join('\n'), opts);
 }));

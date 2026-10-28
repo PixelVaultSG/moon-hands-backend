@@ -133,17 +133,23 @@ async function handleApprove(bot, msg, args) {
     try {
       const { createBookingEvent } = require('../../server/calendar-service');
       if (booking.clients?.google_calendar_id) {
-        await createBookingEvent({
-          calendarId: booking.clients.google_calendar_id,
+        const startISO = `${booking.appointment_date}T${String(booking.appointment_time).slice(0, 5)}:00+08:00`;
+        const [sh, sm] = String(booking.appointment_time).split(':').map(Number);
+        const endTotal = sh * 60 + sm + (parseInt(booking.duration) || 60);
+        const endISO = `${booking.appointment_date}T${String(Math.floor(endTotal / 60)).padStart(2, '0')}:${String(endTotal % 60).padStart(2, '0')}:00+08:00`;
+        const ev = await createBookingEvent(booking.clients.google_calendar_id, {
           summary: `${booking.service} - ${booking.customer_name}`,
           description: `Patient: ${booking.customer_name}\nPhone: ${booking.customer_phone}\nTreatment: ${booking.service}\nStatus: Confirmed\nSource: Moon Hands AI`,
-          startDateTime: `${booking.appointment_date}T${booking.appointment_time}:00+08:00`,
-          endDateTime: null, // Let calendar service calculate duration
+          startISO,
+          endISO,
           patientPhone: booking.customer_phone,
           patientName: booking.customer_name,
           clinicName: booking.clients.name || 'Clinic'
         });
-        calendarSynced = true;
+        calendarSynced = !!(ev && ev.id);
+        if (ev && ev.id) {
+          await db.supabase.from('appointments').update({ google_event_id: ev.id }).eq('id', booking.id);
+        }
       }
     } catch (calErr) {
       console.error('[APPROVALS] Calendar sync failed:', calErr.message);
@@ -151,6 +157,12 @@ async function handleApprove(bot, msg, args) {
 
     // Send confirmation to patient
     const sent = await sendApprovalConfirmation(booking.id);
+    if (sent) {
+      await db.supabase.from('appointments').update({ approval_notified: true }).eq('id', booking.id);
+    }
+
+    // Overlap warning — staff can still act, but with eyes open
+    const overlaps = await findBookingOverlaps(db.supabase, booking);
 
     const message = [
       '✅ *BOOKING APPROVED*',
@@ -161,7 +173,8 @@ async function handleApprove(bot, msg, args) {
       `Date: ${booking.appointment_date} at ${booking.appointment_time}`,
       '',
       sent ? '✓ Patient notified via WhatsApp' : '⚠ Failed to notify patient',
-      calendarSynced ? '✓ Synced to Google Calendar' : '⚠ Calendar not synced'
+      calendarSynced ? '✓ Synced to Google Calendar' : '⚠ Calendar not synced',
+      ...(overlaps.length > 0 ? ['', '⚠️ *OVERLAP WARNING* — this slot now overlaps:', ...overlaps.map(o => `• ${o.time} — ${o.name} (${o.status})`), 'Suggest an alternative time for this booking.'] : [])
     ].join('\n');
 
     bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
@@ -235,6 +248,46 @@ async function handleReject(bot, msg, args) {
   }
 }
 
+// ─── OVERLAP DETECTION (approve-time warning) ────────────────────
+// Compares a booking against same-day slot-holding appointments using
+// stored durations + clinic buffer. Powers the ⚠️ overlap warning so
+// staff can suggest an alternative time instead of double-booking.
+async function findBookingOverlaps(supabase, booking) {
+  try {
+    const { data: cfgRow } = await supabase
+      .from('client_configs')
+      .select('config, buffer_time')
+      .eq('client_id', booking.client_id)
+      .single();
+    const bufferMin = cfgRow?.config?.buffer_time ?? cfgRow?.buffer_time ?? 15;
+
+    const { data: sameDay } = await supabase
+      .from('appointments')
+      .select('id, customer_name, service, appointment_time, duration, status')
+      .eq('client_id', booking.client_id)
+      .eq('appointment_date', booking.appointment_date)
+      .in('status', ['confirmed', 'pending', 'booked', 'pending_alternative', 'pending_approval']);
+
+    const toMin = (t) => { const [h, m] = String(t).split(':').map(Number); return h * 60 + m; };
+    const start = toMin(booking.appointment_time);
+    const end = start + (parseInt(booking.duration) || 60) + bufferMin;
+
+    const overlaps = [];
+    for (const b of (sameDay || [])) {
+      if (b.id === booking.id) continue;
+      const bStart = toMin(b.appointment_time);
+      const bEnd = bStart + (parseInt(b.duration) || 60) + bufferMin;
+      if (start < bEnd && end > bStart) {
+        overlaps.push({ time: String(b.appointment_time).slice(0, 5), name: b.customer_name, service: b.service, status: b.status });
+      }
+    }
+    return overlaps;
+  } catch (err) {
+    console.error('[APPROVALS] Overlap check failed (fail-open):', err.message);
+    return [];
+  }
+}
+
 // ─── INLINE BUTTON HANDLERS (by appointment ID) ──────────────────
 // Called by Telegram inline keyboard buttons (Approve/Reject)
 
@@ -279,32 +332,46 @@ async function handleApproveById(appointmentId, adminChatId) {
     try {
       const { createBookingEvent } = require('../../server/calendar-service');
       if (booking.clients?.google_calendar_id) {
-        await createBookingEvent({
-          calendarId: booking.clients.google_calendar_id,
+        const startISO = `${booking.appointment_date}T${String(booking.appointment_time).slice(0, 5)}:00+08:00`;
+        const [sh, sm] = String(booking.appointment_time).split(':').map(Number);
+        const endTotal = sh * 60 + sm + (parseInt(booking.duration) || 60);
+        const endISO = `${booking.appointment_date}T${String(Math.floor(endTotal / 60)).padStart(2, '0')}:${String(endTotal % 60).padStart(2, '0')}:00+08:00`;
+        const ev = await createBookingEvent(booking.clients.google_calendar_id, {
           summary: `${booking.service} - ${booking.customer_name}`,
           description: `Patient: ${booking.customer_name}\nPhone: ${booking.customer_phone}\nTreatment: ${booking.service}\nStatus: Confirmed`,
-          startDateTime: `${booking.appointment_date}T${booking.appointment_time}:00+08:00`,
-          endDateTime: null,
+          startISO,
+          endISO,
           patientPhone: booking.customer_phone,
           patientName: booking.customer_name,
           clinicName: booking.clients.name
         });
-        calendarSynced = true;
-        console.log(`[APPROVALS] Calendar synced for ${appointmentId}`);
+        calendarSynced = !!(ev && ev.id);
+        if (ev && ev.id) {
+          await db.supabase.from('appointments').update({ google_event_id: ev.id }).eq('id', appointmentId);
+        }
+        console.log(`[APPROVALS] Calendar synced for ${appointmentId}: ${calendarSynced}`);
       }
     } catch (calErr) {
       console.error('[APPROVALS] Calendar sync failed:', calErr.message);
     }
 
-    // Notify patient
+    // Notify patient — the result is REAL (no more unconditional ✓)
+    let patientNotified = false;
     try {
       console.log(`[APPROVALS] Sending patient notification for ${appointmentId}...`);
       const { sendApprovalConfirmation } = require('../../jobs/reminders');
-      await sendApprovalConfirmation(appointmentId);
-      console.log(`[APPROVALS] Patient notification sent for ${appointmentId}`);
+      patientNotified = (await sendApprovalConfirmation(appointmentId)) === true;
+      console.log(`[APPROVALS] Patient notification for ${appointmentId}: ${patientNotified ? 'sent' : 'FAILED'}`);
     } catch (notifyErr) {
       console.error('[APPROVALS] Patient notification failed:', notifyErr.message);
     }
+    if (patientNotified) {
+      await db.supabase.from('appointments').update({ approval_notified: true }).eq('id', appointmentId);
+    }
+
+    // Overlap warning — staff can suggest an alternative for THIS booking
+    // (the already-confirmed one keeps its slot; it was confirmed first)
+    const overlaps = await findBookingOverlaps(db.supabase, booking);
 
     return {
       success: true,
@@ -312,7 +379,9 @@ async function handleApproveById(appointmentId, adminChatId) {
       date: booking.appointment_date,
       time: booking.appointment_time,
       treatment: booking.service,
-      calendarSynced
+      calendarSynced,
+      patientNotified,
+      overlaps
     };
 
   } catch (err) {
@@ -358,12 +427,13 @@ async function handleRejectById(appointmentId, adminChatId) {
     console.log(`[APPROVALS] Booking ${appointmentId} updated to cancelled`);
 
     // Notify patient and enable reschedule flow
+    let patientNotified = false;
     try {
       const { sendWhatsAppMessage } = require('../../jobs/reminders');
-      await sendWhatsAppMessage(
+      patientNotified = (await sendWhatsAppMessage(
         booking.customer_phone,
         `Hi ${booking.customer_name}, we regret to inform you that your ${booking.service} appointment for ${booking.appointment_date} at ${booking.appointment_time} cannot be confirmed.\n\nWould you like to reschedule? Reply here with your preferred date and time.`
-      );
+      )) === true;
 
       // Set patient state to AWAITING_DATE with treatment preserved for reschedule
       const { setState, BOOKING_STATES } = require('../../ai/conversation-state');
@@ -383,11 +453,94 @@ async function handleRejectById(appointmentId, adminChatId) {
       patientName: booking.customer_name,
       date: booking.appointment_date,
       time: booking.appointment_time,
-      treatment: booking.service
+      treatment: booking.service,
+      patientNotified
     };
 
   } catch (err) {
     console.error('[APPROVALS] handleRejectById error:', err.message, err.stack);
+    return { success: false, error: err.message };
+  }
+}
+
+// ─── CLINIC CANCEL (confirmed bookings) ──────────────────────────
+// Cancels a confirmed/pending booking by ID: status update, Google
+// Calendar event removal, patient WhatsApp notification, staff notice.
+async function handleCancelById(appointmentId, adminChatId, reason = '') {
+  console.log(`[APPROVALS] handleCancelById called for appt=${appointmentId} chat=${adminChatId}`);
+  try {
+    const { data: booking, error } = await db.supabase
+      .from('appointments')
+      .select('*, clients(id, slug, google_calendar_id, name)')
+      .eq('id', appointmentId)
+      .single();
+
+    if (error || !booking) {
+      return { success: false, error: 'Booking not found' };
+    }
+
+    // SECURITY: same authorization model as approve/reject
+    const authorized = await isAuthorizedForBooking(adminChatId, booking.client_id);
+    if (!authorized) {
+      console.warn(`[APPROVALS] UNAUTHORIZED cancel attempt: chat ${adminChatId} clinic ${booking.client_id}`);
+      return { success: false, error: 'Not authorized for this clinic' };
+    }
+
+    if (!['confirmed', 'pending', 'booked', 'pending_approval'].includes(booking.status)) {
+      return { success: false, error: `Cannot cancel a booking with status "${booking.status}"` };
+    }
+
+    const cancelNote = `Cancelled by clinic via Telegram.${reason ? ' Reason: ' + reason : ''}`;
+    const { error: updateErr } = await db.supabase
+      .from('appointments')
+      .update({ status: 'cancelled', notes: (booking.notes ? booking.notes + ' | ' : '') + cancelNote })
+      .eq('id', appointmentId);
+    if (updateErr) {
+      return { success: false, error: `Update failed: ${updateErr.message}` };
+    }
+
+    // Remove the Google Calendar event if we created one at approve time
+    let calendarDeleted = false;
+    try {
+      if (booking.google_event_id && booking.clients?.google_calendar_id) {
+        const { deleteBookingEvent } = require('../../server/calendar-service');
+        calendarDeleted = (await deleteBookingEvent(booking.clients.google_calendar_id, booking.google_event_id)) === true;
+      }
+    } catch (calErr) {
+      console.error('[APPROVALS] Calendar delete failed:', calErr.message);
+    }
+
+    // Notify patient on WhatsApp — result is REAL
+    let patientNotified = false;
+    try {
+      const { sendWhatsAppMessage } = require('../../jobs/reminders');
+      patientNotified = (await sendWhatsAppMessage(
+        booking.customer_phone,
+        `Hi ${booking.customer_name}, we're very sorry — your ${booking.service} appointment on ${booking.appointment_date} at ${String(booking.appointment_time).slice(0, 5)} has been cancelled by the clinic.${reason ? ' Reason: ' + reason + '.' : ''}\n\nReply here and we'll help you find a new time.`
+      )) === true;
+    } catch (notifyErr) {
+      console.error('[APPROVALS] Cancel patient notification failed:', notifyErr.message);
+    }
+
+    // Notify all staff channels (Telegram) so everyone sees the cancellation
+    try {
+      const { notifyBookingCancelled } = require('../booking-notifications');
+      await notifyBookingCancelled(booking, { id: booking.client_id, client_id: booking.client_id }, reason || 'Cancelled by clinic');
+    } catch (staffErr) {
+      console.error('[APPROVALS] Staff cancel notification failed:', staffErr.message);
+    }
+
+    return {
+      success: true,
+      patientName: booking.customer_name,
+      date: booking.appointment_date,
+      time: booking.appointment_time,
+      treatment: booking.service,
+      patientNotified,
+      calendarDeleted
+    };
+  } catch (err) {
+    console.error('[APPROVALS] handleCancelById error:', err.message, err.stack);
     return { success: false, error: err.message };
   }
 }
@@ -399,5 +552,7 @@ module.exports = {
   handleApprove,
   handleReject,
   handleApproveById,
-  handleRejectById
+  handleRejectById,
+  handleCancelById,
+  findBookingOverlaps
 };

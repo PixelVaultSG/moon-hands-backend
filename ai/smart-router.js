@@ -2574,6 +2574,7 @@ async function attemptBooking(clinicConfig, patientPhone, fields, conversationHi
       service_name: serviceNames,
       appointment_date: fields.date,
       appointment_time: fields.time,
+      duration: totalDuration,
       notes: `Total duration: ${totalDuration}mins.${priceText ? ` Est. total: ${priceText}${priceSum.isRange ? ' (range — final price confirmed at clinic)' : ''}.` : ''} ${notFound.length > 0 ? 'Not found: ' + notFound.join(', ') : ''}`
     });
     

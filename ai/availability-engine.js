@@ -54,7 +54,7 @@ async function getAvailableSlots(clientId, dateStr, treatmentNames, clientConfig
   // If no treatments matched, default to 60 min
   if (totalDuration === 0) totalDuration = 60;
   
-  const bufferMin = clientConfig.config?.buffer_time || 15;
+  const bufferMin = clientConfig.config?.buffer_time ?? clientConfig.buffer_time ?? 15;
   const slotDuration = totalDuration + bufferMin;
   
   // 3. Get existing bookings for this date from Supabase
@@ -74,11 +74,25 @@ async function getAvailableSlots(clientId, dateStr, treatmentNames, clientConfig
     console.error(`[AVAILABILITY] Supabase error: ${error.message}`);
   }
   
-  // 4. Convert to busy periods
+  // 4. Convert to busy periods (duration + turnover buffer per booking)
   const busyPeriods = (existingBookings || []).map(b => ({
     start: minutesFromTime(b.appointment_time),
-    end: minutesFromTime(b.appointment_time) + (b.duration || 60)
+    end: minutesFromTime(b.appointment_time) + (b.duration || 60) + bufferMin
   }));
+
+  // 4b. Merge Google Calendar busy blocks — appointments the clinic typed
+  // straight into their calendar (offline/walk-ins) must also block slots.
+  // Fail-open: a GCal outage must never take booking down.
+  const calendarId = clientConfig.config?.google_calendar_id || clientConfig.google_calendar_id;
+  if (calendarId) {
+    try {
+      const { getBusyTimes } = require('../server/calendar-service');
+      const gcalBusy = await getBusyTimes(calendarId, dateStr);
+      for (const ev of (gcalBusy || [])) busyPeriods.push(gcalEventToPeriod(ev));
+    } catch (gcalErr) {
+      console.warn('[AVAILABILITY] GCal busy-merge failed (fail-open):', gcalErr.message);
+    }
+  }
   
   // 5. Calculate free slots
   const openMin = minutesFromTime(hours.open_time);
@@ -222,6 +236,24 @@ async function findNextSlotsOnDate(clientId, dateStr, treatmentNames, clientConf
 
 // ─── HELPERS ──────────────────────────────────────────────────────
 
+/**
+ * Convert a Google Calendar busy block ({start,end} ISO datetime, or
+ * date-only for all-day events) into a busy period in Singapore
+ * minutes-since-midnight. All-day events block the whole day.
+ */
+function gcalEventToPeriod(ev) {
+  if (!ev || !ev.start || !ev.end) return { start: 0, end: 1440 };
+  if (String(ev.start).length <= 10) return { start: 0, end: 1440 }; // all-day
+  const toSgMin = (iso) => {
+    const parts = new Date(iso).toLocaleString('en-US', {
+      timeZone: 'Asia/Singapore', hour12: false, hour: '2-digit', minute: '2-digit'
+    });
+    const [h, m] = parts.split(':').map(Number);
+    return h * 60 + m;
+  };
+  return { start: toSgMin(ev.start), end: toSgMin(ev.end) };
+}
+
 function minutesFromTime(timeStr) {
   const [h, m] = timeStr.split(':').map(Number);
   return h * 60 + m;
@@ -304,7 +336,7 @@ async function isTimeAvailable(clientId, dateStr, timeStr, treatmentNames, clien
   }
   if (totalDuration === 0) totalDuration = 60;
 
-  const bufferMin = clientConfig.config?.buffer_time || 15;
+  const bufferMin = clientConfig.config?.buffer_time ?? clientConfig.buffer_time ?? 15;
   const slotDuration = totalDuration + bufferMin;
 
   // 3. Check overlap with existing bookings
@@ -313,7 +345,7 @@ async function isTimeAvailable(clientId, dateStr, timeStr, treatmentNames, clien
 
   const busyPeriods = (existingBookings || []).map(b => ({
     start: minutesFromTime(b.appointment_time),
-    end: minutesFromTime(b.appointment_time) + (b.duration || 60)
+    end: minutesFromTime(b.appointment_time) + (b.duration || 60) + bufferMin
   }));
 
   const mergedBusy = mergeBusyPeriods(busyPeriods);
@@ -346,6 +378,7 @@ async function isTimeAvailable(clientId, dateStr, timeStr, treatmentNames, clien
 async function validateBookingSlot(clientId, dateStr, timeStr, durationMin, clientConfig, excludeBookingId = null) {
   const hours = clientConfig?.config?.operating_hours || clientConfig?.operating_hours || [];
   const dur = parseInt(durationMin) || 60;
+  const bufferMin = clientConfig?.config?.buffer_time ?? clientConfig?.buffer_time ?? 15;
 
   // 1–3. Opening-hours checks (only when hours are configured)
   if (Array.isArray(hours) && hours.length > 0 && dateStr) {
@@ -383,12 +416,28 @@ async function validateBookingSlot(clientId, dateStr, timeStr, durationMin, clie
       // fail-open here matches existing behavior, hours checks above still ran
     }
     const start = minutesFromTime(timeStr);
-    const end = start + dur;
-    for (const b of (existing || [])) {
-      if (excludeBookingId && b.id === excludeBookingId) continue;
-      const bStart = minutesFromTime(b.appointment_time);
-      const bEnd = bStart + (b.duration || 60);
-      if (start < bEnd && end > bStart) {
+    const end = start + dur + bufferMin;
+    const busyPeriods = (existing || [])
+      .filter(b => !(excludeBookingId && b.id === excludeBookingId))
+      .map(b => ({
+        start: minutesFromTime(b.appointment_time),
+        end: minutesFromTime(b.appointment_time) + (b.duration || 60) + bufferMin
+      }));
+
+    // Google Calendar busy-merge (offline/walk-in appointments) — fail-open
+    const calendarId = clientConfig?.config?.google_calendar_id || clientConfig?.google_calendar_id;
+    if (calendarId) {
+      try {
+        const { getBusyTimes } = require('../server/calendar-service');
+        const gcalBusy = await getBusyTimes(calendarId, dateStr);
+        for (const ev of (gcalBusy || [])) busyPeriods.push(gcalEventToPeriod(ev));
+      } catch (gcalErr) {
+        console.warn('[AVAILABILITY] GCal busy-merge failed (fail-open):', gcalErr.message);
+      }
+    }
+
+    for (const b of busyPeriods) {
+      if (start < b.end && end > b.start) {
         return { ok: false, reason: 'That time overlaps an existing booking', openTime: null, closeTime: null };
       }
     }

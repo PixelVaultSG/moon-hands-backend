@@ -697,7 +697,7 @@ async function handleSecurity(ctx) {
     const topTypes = Object.entries(byType).sort((a, b) => b[1] - a[1]).slice(0, 5);
     if (topTypes.length) {
       lines.push('*Top event types:*');
-      for (const [t, n] of topTypes) lines.push(`  • ${t}: ${n}`);
+      for (const [t, n] of topTypes) lines.push(`  • ${escapeMarkdown(t)}: ${n}`);
       lines.push('');
     }
     lines.push((bySeverity.critical || bySeverity.high)
