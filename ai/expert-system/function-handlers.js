@@ -95,10 +95,14 @@ async function checkAvailability({ client_id, date, service, preferred_time, tre
       console.error('[FUNCTION] checkAvailability query error:', existingErr.message);
     }
     
-    const bookedTimes = (existing || []).map(a => a.appointment_time);
+    const bufferMin = clinic.config?.buffer_time ?? clinic.buffer_time ?? 15;
+    const bookedPeriods = (existing || []).map(a => ({
+      start: a.appointment_time,
+      duration: a.duration || 30
+    }));
     
-    // Generate available slots (30-min intervals)
-    const slots = generateTimeSlots(openTime, closeTime, bookedTimes, service, clinic.services);
+    // Generate available slots (30-min intervals, duration+buffer aware)
+    const slots = generateTimeSlots(openTime, closeTime, bookedPeriods, service, clinic.services, bufferMin);
     
     return {
       success: true,
@@ -119,12 +123,12 @@ async function checkAvailability({ client_id, date, service, preferred_time, tre
   }
 }
 
-function generateTimeSlots(openTime, closeTime, bookedTimes, serviceName, services) {
+function generateTimeSlots(openTime, closeTime, bookedPeriods, serviceName, services, bufferMin = 15) {
   const slots = [];
   
   // Get service duration
   const service = (services || []).find(s => s.name.toLowerCase() === (serviceName || '').toLowerCase());
-  const duration = parseInt(service?.duration) || 30; // default 30 min
+  const duration = (parseInt(service?.duration) || 30) + bufferMin; // appointment + turnover buffer
   
   // Parse times
   const parseTime = (t) => {
@@ -148,12 +152,12 @@ function generateTimeSlots(openTime, closeTime, bookedTimes, serviceName, servic
     const minute = mins % 60;
     const timeStr = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
     
-    // Check if this slot conflicts with existing bookings
-    const conflicts = bookedTimes.some(bt => {
-      const [bh, bm] = bt.split(':').map(Number);
-      const btMins = bh * 60 + bm;
-      // Simple conflict: overlapping 30-min windows
-      return Math.abs(btMins - mins) < duration;
+    // Check if this slot conflicts with existing bookings (interval overlap, buffer-aware)
+    const conflicts = (bookedPeriods || []).some(bp => {
+      const [bh, bm] = String(bp.start).split(':').map(Number);
+      const bStart = bh * 60 + bm;
+      const bEnd = bStart + (parseInt(bp.duration) || 30) + bufferMin;
+      return mins < bEnd && (mins + duration) > bStart;
     });
     
     if (!conflicts) {
