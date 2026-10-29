@@ -87,12 +87,49 @@ async function sendWhatsAppMessage(phoneNumber, message, apiKey) {
   return false;
 }
 
+// ─── SG TIME HELPERS (v2.2.6) ────────────────────────────────────
+// The Render server runs in UTC; appointments live in Asia/Singapore.
+// All reminder math MUST be SG — UTC math fired the 1h reminder 7 hours
+// LATE in prod (2026-10-29: "in 1 hour at 13:00" arrived 19:51 SG) and
+// the 24h reminder at 00:06 SG on the appointment day itself.
+function sgNowParts() {
+  const now = Date.now();
+  const SG = 8 * 60 * 60 * 1000;
+  const fmt = (ms) => {
+    const d = new Date(ms);
+    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+  };
+  const sgNow = now + SG;
+  return {
+    tomorrowStr: fmt(sgNow + 24 * 60 * 60 * 1000),
+    oneHourDateStr: fmt(sgNow + 60 * 60 * 1000),
+    twoDaysAgoStr: fmt(sgNow - 2 * 24 * 60 * 60 * 1000),
+    nowMinutes: new Date(sgNow).getUTCHours() * 60 + new Date(sgNow).getUTCMinutes(),
+    nowHour: new Date(sgNow).getUTCHours(),
+  };
+}
+
+// 45–75 minute lookahead that survives midnight (00:15 appointment at
+// 23:15 is +60 min, not −1380).
+function inOneHourWindow(aptTime, nowMinutes) {
+  const aptMinutes = minutesFromTime(aptTime);
+  if (aptMinutes === null || isNaN(aptMinutes)) return false;
+  const diff = (((aptMinutes - nowMinutes) % 1440) + 1440) % 1440;
+  return diff >= 45 && diff <= 75;
+}
+
+// Never WhatsApp patients in the middle of the night.
+const SEND_WINDOW = { startHour: 8, endHour: 21 }; // SG
+function inSendWindow(nowHour) {
+  return nowHour >= SEND_WINDOW.startHour && nowHour < SEND_WINDOW.endHour;
+}
+
 // ─── 24-HOUR REMINDERS ────────────────────────────────────────────
 
 async function send24hReminders() {
-  const tomorrow = new Date();
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  const dateStr = tomorrow.toISOString().split('T')[0];
+  const sg = sgNowParts();
+  if (!inSendWindow(sg.nowHour)) return; // business hours only (SG)
+  const dateStr = sg.tomorrowStr;
 
   // Get all clients with reminder_24h enabled
   const { data: configs } = await db.supabase
@@ -142,10 +179,8 @@ async function send24hReminders() {
 // ─── 1-HOUR REMINDERS ─────────────────────────────────────────────
 
 async function send1hReminders() {
-  const now = new Date();
-  const oneHourFromNow = new Date(now.getTime() + 60 * 60 * 1000);
-  const dateStr = oneHourFromNow.toISOString().split('T')[0];
-  const timeStr = oneHourFromNow.toTimeString().slice(0, 5);
+  const sg = sgNowParts();
+  const dateStr = sg.oneHourDateStr;
 
   const { data: configs } = await db.supabase
     .from('client_configs')
@@ -167,13 +202,8 @@ async function send1hReminders() {
 
   if (!appointments) return;
 
-  // Filter to appointments within 45-75 minutes from now
-  const targetApts = appointments.filter(apt => {
-    const aptMinutes = minutesFromTime(apt.appointment_time);
-    const nowMinutes = now.getHours() * 60 + now.getMinutes();
-    const diff = aptMinutes - nowMinutes;
-    return diff >= 45 && diff <= 75;
-  });
+  // Filter to appointments within 45-75 minutes from now (SG clock)
+  const targetApts = appointments.filter(apt => inOneHourWindow(apt.appointment_time, sg.nowMinutes));
 
   for (const apt of targetApts) {
     const message = REMINDER_MESSAGES['1h'](
@@ -201,9 +231,9 @@ async function send1hReminders() {
 // ─── 48-HOUR FOLLOW-UP ────────────────────────────────────────────
 
 async function send48hFollowups() {
-  const twoDaysAgo = new Date();
-  twoDaysAgo.setDate(twoDaysAgo.getDate() - 2);
-  const dateStr = twoDaysAgo.toISOString().split('T')[0];
+  const sg = sgNowParts();
+  if (!inSendWindow(sg.nowHour)) return; // business hours only (SG)
+  const dateStr = sg.twoDaysAgoStr;
 
   const { data: configs } = await db.supabase
     .from('client_configs')
@@ -295,5 +325,9 @@ module.exports = {
   send1hReminders,
   send48hFollowups,
   sendApprovalConfirmation,
-  sendWhatsAppMessage
+  sendWhatsAppMessage,
+  sgNowParts,
+  inOneHourWindow,
+  inSendWindow,
+  SEND_WINDOW
 };
