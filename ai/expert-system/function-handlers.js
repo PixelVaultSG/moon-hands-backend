@@ -41,8 +41,9 @@ async function checkAvailability({ client_id, date, service, preferred_time, tre
     const requestedDate = new Date(date);
     const daysDiff = Math.ceil((requestedDate - today) / (1000 * 60 * 60 * 24));
     
-    const maxAdvance = clinic.booking_max_advance_days || 30;
-    const minNotice = clinic.booking_min_notice_hours || 2;
+    // v2.2.5: these settings also live in config jsonb if set — flat columns never existed
+    const maxAdvance = clinic.booking_max_advance_days || clinic.config?.booking_max_advance_days || 30;
+    const minNotice = clinic.booking_min_notice_hours || clinic.config?.booking_min_notice_hours || 2;
     
     if (daysDiff < 0) {
       return { success: false, error: 'Cannot book in the past', slots: [] };
@@ -59,10 +60,20 @@ async function checkAvailability({ client_id, date, service, preferred_time, tre
     
     // Check if clinic is open on this day
     const dayName = requestedDate.toLocaleDateString('en-US', { weekday: 'long' });
-    const hours = clinic.operating_hours;
+    // v2.2.5: operating_hours lives in the config jsonb as an ARRAY of
+    // {day, isOpen, open_time, close_time} — the flat column never existed,
+    // so this crashed (swallowed by the catch below) on every single call.
+    const hours = clinic.operating_hours || clinic.config?.operating_hours;
     let openTime, closeTime;
     
-    if (typeof hours === 'object') {
+    if (Array.isArray(hours)) {
+      const dayRow = hours.find(h => (h.day || '').toLowerCase() === dayName.toLowerCase());
+      if (!dayRow || dayRow.isOpen === false || !dayRow.open_time || !dayRow.close_time) {
+        return { success: false, error: `Clinic closed on ${dayName}`, slots: [] };
+      }
+      openTime = String(dayRow.open_time);
+      closeTime = String(dayRow.close_time);
+    } else if (typeof hours === 'object' && hours) {
       const dayHours = hours[dayName] || hours[dayName.substring(0, 3)];
       if (!dayHours || dayHours.toLowerCase().includes('closed')) {
         return { success: false, error: `Clinic closed on ${dayName}`, slots: [] };
@@ -86,7 +97,7 @@ async function checkAvailability({ client_id, date, service, preferred_time, tre
     // Get existing appointments for this date
     const { data: existing, error: existingErr } = await supabase
       .from('appointments')
-      .select('appointment_time')
+      .select('appointment_time, duration')
       .eq('client_id', client_id)
       .eq('appointment_date', date)
       .in('status', ['confirmed', 'pending']);
@@ -102,7 +113,9 @@ async function checkAvailability({ client_id, date, service, preferred_time, tre
     }));
     
     // Generate available slots (30-min intervals, duration+buffer aware)
-    const slots = generateTimeSlots(openTime, closeTime, bookedPeriods, service, clinic.services, bufferMin);
+    // v2.2.5: services live in config jsonb — the flat column never existed.
+    const services = clinic.services || clinic.config?.services || [];
+    const slots = generateTimeSlots(openTime, closeTime, bookedPeriods, service, services, bufferMin);
     
     return {
       success: true,
@@ -111,7 +124,7 @@ async function checkAvailability({ client_id, date, service, preferred_time, tre
       openTime,
       closeTime,
       slots,
-      bookedCount: bookedTimes.length,
+      bookedCount: bookedPeriods.length, // v2.2.5: was `bookedTimes` (undefined) — that ReferenceError alone made every call fail
       message: slots.length > 0 
         ? `We have ${slots.length} slots available on ${date}.` 
         : `Fully booked on ${date}. Would you like to join the waitlist?`
@@ -174,7 +187,7 @@ function generateTimeSlots(openTime, closeTime, bookedPeriods, serviceName, serv
  * Accepts both old param names (patient_name, patient_phone, treatment, date, time) 
  * and new (customer_name, customer_phone, service_name, appointment_date, appointment_time).
  */
-async function createBooking({ client_id, customer_name, customer_phone, service_name, appointment_date, appointment_time, notes, patient_name, patient_phone, treatment, date, time, duration: callerDuration }) {
+async function createBooking({ client_id, customer_name, customer_phone, service_name, appointment_date, appointment_time, notes, patient_name, patient_phone, treatment, date, time, duration: callerDuration, suppressNotification }) {
   const supabase = getSupabase();
   
   // Normalize parameter names (backward compatible)
@@ -290,6 +303,9 @@ async function createBooking({ client_id, customer_name, customer_phone, service
     await notifyAdmin(supabase, client_id, 'new_pending_booking', appointment);
     
     // Send instant Telegram notification to clinic (real-time booking alert)
+    // suppressNotification: rescheduleBooking sends its own richer FROM→TO
+    // alert — a generic "new booking" on top would double-notify staff.
+    if (!suppressNotification) {
     try {
       await notifyBookingCreated({
         id: appointment.id,
@@ -303,6 +319,7 @@ async function createBooking({ client_id, customer_name, customer_phone, service
       }, clinic);
     } catch (notifyErr) {
       console.error('[FUNCTION] Telegram booking notification failed:', notifyErr.message);
+    }
     }
     
     return {
@@ -500,6 +517,11 @@ async function rescheduleBooking({ client_id, customer_phone, new_date, new_time
       return { success: false, error: 'Phone number, new date, and new time are required' };
     }
     
+    // Normalize LLM time formats ("13:00:00" → "13:00") before slot matching —
+    // strict string equality against HH:MM slots was a silent-failure trap.
+    const { normalizeTimeStr } = require('../../utils/date-helpers');
+    const normalizedTime = normalizeTimeStr(new_time);
+    
     // Find existing appointment
     const { data: appointments, error: findErr } = await supabase
       .from('appointments')
@@ -516,11 +538,19 @@ async function rescheduleBooking({ client_id, customer_phone, new_date, new_time
     
     const old = appointments[0];
     
-    // Check new slot availability
+    // Check new slot availability (normalize slot list too — belt and braces)
     const availability = await checkAvailability({ client_id, date: new_date, service: old.service });
-    if (!availability.success || !availability.slots.includes(new_time)) {
-      return { success: false, error: `The new slot ${new_date} at ${new_time} is not available.` };
+    const availSlots = (availability.slots || []).map(normalizeTimeStr);
+    if (!availability.success || !availSlots.includes(normalizedTime)) {
+      return { success: false, error: `The new slot ${new_date} at ${normalizedTime} is not available.` };
     }
+    
+    // Clinic config for the reschedule notification
+    const { data: clinicCfg } = await supabase
+      .from('client_configs')
+      .select('*')
+      .eq('client_id', client_id)
+      .single();
     
     // Cancel old
     await supabase
@@ -528,15 +558,19 @@ async function rescheduleBooking({ client_id, customer_phone, new_date, new_time
       .update({ status: 'cancelled', updated_at: new Date().toISOString() })
       .eq('id', old.id);
     
-    // Create new
+    // Create new — keep the original duration (v2.2.4 made duration real;
+    // rescheduling must not regress it to the 30-min default), and suppress
+    // the generic new-booking alert (replaced by the FROM→TO notice below).
     const result = await createBooking({
       client_id,
       customer_name: old.customer_name,
       customer_phone: old.customer_phone,
       service_name: old.service,
       appointment_date: new_date,
-      appointment_time: new_time,
+      appointment_time: normalizedTime,
+      duration: old.duration || undefined,
       notes: old.notes || '',
+      suppressNotification: true,
     });
     
     if (!result.success) {
@@ -548,11 +582,19 @@ async function rescheduleBooking({ client_id, customer_phone, new_date, new_time
       return { success: false, error: 'Unable to reschedule. Your original booking is still active.' };
     }
     
+    // Notify clinic: FROM → TO (v2.2.5 — this path used to be completely
+    // silent; the clinic only found out when the patient didn't show up).
+    try {
+      await notifyBookingRescheduled(old, result.appointment, clinicCfg || { id: client_id, client_id });
+    } catch (notifyErr) {
+      console.error('[FUNCTION] reschedule notify failed:', notifyErr.message);
+    }
+    
     return {
       success: true,
       oldAppointment: old,
       newAppointment: result.appointment,
-      message: `✅ Rescheduled! From ${old.appointment_date} ${old.appointment_time} → ${new_date} ${new_time}.`
+      message: `✅ Rescheduled! From ${old.appointment_date} ${old.appointment_time} → ${new_date} ${normalizedTime}. The clinic has been notified.`
     };
     
   } catch (err) {

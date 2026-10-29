@@ -659,10 +659,57 @@ async function handlePatientCounterProposal(bookingId, patientMessage, parsedFie
 
 // ─── EXPORTS ─────────────────────────────────────────────────────
 
+// ─── BOOKING STALL ALARM (v2.2.5) ────────────────────────────────
+// Fired when an AI path implies a booking action (reschedule/cancel/book)
+// but completes with no function execution, or a failed one. Without this,
+// the bot says "I'll get back to you shortly!" and nobody ever does —
+// the clinic only finds out when the patient doesn't show up.
+const stallAlertLog = new Map(); // `${clinicId}:${phone}` → last alert ts
+const STALL_DEDUP_MS = 30 * 60 * 1000; // one alarm per patient per 30 min
+
+async function notifyBookingStall(clinicConfig, patientPhone, messageText, reason) {
+  const clinicId = clinicConfig?.client_id || clinicConfig?.id || null;
+  const phone = String(patientPhone || 'unknown');
+  const key = `${clinicId || 'unknown'}:${phone}`;
+  const now = Date.now();
+  if (stallAlertLog.has(key) && now - stallAlertLog.get(key) < STALL_DEDUP_MS) {
+    console.log(`[BOOKING_NOTIFY] Stall alarm deduped for ${phone.slice(-4)} (${Math.round((now - stallAlertLog.get(key)) / 60000)}m since last)`);
+    return false;
+  }
+  stallAlertLog.set(key, now);
+  if (stallAlertLog.size > 1000) {
+    const oldest = stallAlertLog.keys().next().value;
+    stallAlertLog.delete(oldest);
+  }
+
+  const masked = phone.length > 4 ? `•••${phone.slice(-4)}` : phone;
+  const snippet = escapeMarkdown(String(messageText || '').substring(0, 120));
+  const message = [
+    `⚠️ *BOT STALL — patient needs follow-up*`,
+    ``,
+    `👤 ${masked}`,
+    `💬 "${snippet}"`,
+    `🤖 ${escapeMarkdown(String(reason || 'no action taken'))}`,
+    ``,
+    `The bot replied but completed no booking action. Please follow up with the patient directly.`,
+  ].join('\n');
+
+  if (clinicId) {
+    await sendClinicNotification(clinicId, message);
+  } else {
+    await sendAdminOnly(message);
+  }
+  return true;
+}
+
+function resetStallAlertsForTest() { stallAlertLog.clear(); }
+
 module.exports = {
   notifyBookingCreated,
   notifyBookingCancelled,
   notifyBookingRescheduled,
+  notifyBookingStall,
+  resetStallAlertsForTest,
   sendWeeklyRoundup,
   sendDailyClosingSummary,
   isSlotAvailable,

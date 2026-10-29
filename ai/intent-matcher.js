@@ -164,8 +164,11 @@ const INTENT_PATTERNS = {
   reschedule_request: {
     // Handles: "reschedule my appointment", "change my booking", "shift my appt"
     // "appt" is common abbreviation for appointment. "change my slot" also included.
-    regex: /(?:reschedule|change|move|shift)\s+(?:my\s+)?(?:appointment|booking|appt|slot)|(?:can\s+i|i\s+want\s+to)\s+(?:change|move)\s+(?:my\s+)?(?:appointment|booking|date|time|slot)|different\s+(?:date|time|day)/i,
-    keywords: ['reschedule', 'change appointment', 'change my slot', 'move booking', 'shift my'],
+    // v2.2.5: bare "reschedule" with no object ("I need to reschedule") and the
+    // "cannot make it" family — both used to fall through to the expert LLM,
+    // which chatted and did nothing (prod black hole, 2026-10-29).
+    regex: /\breschedule\b|(?:change|move|shift)\s+(?:my\s+)?(?:appointment|booking|appt|slot)|(?:can\s+i|i\s+(?:want|need)\s+to)\s+(?:change|move)\s+(?:my\s+)?(?:appointment|booking|date|time|slot)|different\s+(?:date|time|day)|can\s*(?:not|'t)\s+make\s+it|won'?t\s+be\s+able\s+to\s+make\s+it|unable\s+to\s+make\s+(?:it|my\s+appointment)/i,
+    keywords: ['reschedule', 'change appointment', 'change my slot', 'move booking', 'shift my', 'cannot make it', "can't make it"],
     weight: 0.95,
   },
   

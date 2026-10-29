@@ -36,6 +36,23 @@ const { detectRedFlag, PATH_A_RESPONSE } = require('./red-flag-detector');
 const { classifyMedicalSafety } = require('./medical-classifier');
 const convState = require('./conversation-state');
 const { getNowSG } = require('../utils/date-helpers');
+const { notifyBookingStall } = require('../telegram/booking-notifications');
+
+// ─── Booking-stall alarm (v2.2.5) ────────────────────────────────
+// The LLM paths can promise an action ("I'll get back to you shortly!")
+// without executing anything — the single-function-call architecture
+// cannot chain, and the expert path drops its functionCall entirely.
+// When the patient asked for a booking change/cancel and nothing ran
+// (or it failed), alert the clinic on Telegram so a human follows up.
+const STALL_RE = /\breschedule\b|can\s*(?:not|'t)\s+make\s+it|won'?t\s+be\s+able\s+to\s+make\s+it|unable\s+to\s+make\s+(?:it|my)|(?:cancel|delete)\s+(?:my\s+)?(?:appointment|booking)|i\s+(?:want|need|would\s+like)\s+to\s+cancel|(?:change|move|shift)\s+(?:my\s+)?(?:appointment|booking|appt|slot)/i;
+const STALL_ACTION_FUNCS = new Set(['reschedule_booking', 'cancel_booking', 'create_booking']);
+function maybeAlertStall(clientConfig, patientPhone, messageText, reason, force = false) {
+  try {
+    if (!force && !STALL_RE.test(messageText || '')) return;
+    notifyBookingStall(clientConfig, patientPhone, messageText, reason)
+      .catch(err => console.error('[BOT_ENGINE] Stall alarm send failed:', err.message));
+  } catch (e) { console.error('[BOT_ENGINE] Stall alarm error:', e.message); }
+}
 
 // ─── Action footer (v2.2.0) ───────────────────────────────────────
 // Informational AI answers used to arrive as plain-text walls while the
@@ -1065,6 +1082,16 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
           messageText, expertResult.text, `experts:${expertsUsed.join(',')}`);
         
         console.log(`[BOT_ENGINE] Experts: [${expertsUsed.join(', ')}] — cost: $${expertResult.totalCost.toFixed(4)}`);
+
+        // STALL ALARM (v2.2.5): this path returns text without ever executing
+        // the expert's functionCall — a booking action requested here either
+        // silently died (functionCall dropped) or was only talked about.
+        if (expertResult.functionCall) {
+          maybeAlertStall(clientConfig, patientPhone, messageText,
+            `expert requested function "${expertResult.functionCall.name}" but it was not executed`, true);
+        } else {
+          maybeAlertStall(clientConfig, patientPhone, messageText, 'expert replied without taking any action');
+        }
         
         // If the reply ends by offering to arrange/book ("Would you like me to
         // arrange that?"), park the conversation in BOOKING_OFFERED so a bare
@@ -1224,6 +1251,13 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
         functionResult = { success: false, error: "I had trouble with that request. Let me try a different approach." };
       }
 
+      // STALL ALARM (v2.2.5): the booking action the patient asked for
+      // FAILED — the bot will apologize vaguely; the clinic needs to know.
+      if (functionResult && functionResult.success === false && STALL_ACTION_FUNCS.has(funcName)) {
+        maybeAlertStall(clientConfig, patientPhone, messageText,
+          `function "${funcName}" failed: ${functionResult.error || 'unknown error'}`, true);
+      }
+
       // Send function result back to OpenAI for natural language response
       const secondCompletion = await openai.chat.completions.create({
         model: 'gpt-4o-mini',
@@ -1254,6 +1288,8 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
     }
 
     // Direct response (no function call needed)
+    // STALL ALARM (v2.2.5): booking action requested, none executed.
+    maybeAlertStall(clientConfig, patientPhone, messageText, 'generalist replied without taking any action');
     const directText = response.message?.content || "I'm sorry, I didn't understand that. How can I help you today?";
     await logConversation(clientConfig.id, 'whatsapp', patientPhone, null,
       messageText, directText, 'generalist:direct');
