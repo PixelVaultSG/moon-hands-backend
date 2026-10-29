@@ -27,7 +27,7 @@ const ALL_FUNCTIONS = [
       type: 'object',
       properties: {
         customer_name: { type: 'string', description: 'Patient full name' },
-        customer_phone: { type: 'string', description: 'Patient phone number with country code (+65...)' },
+        customer_phone: { type: 'string', description: 'Auto-filled from the verified sender — never ask the patient for it' },
         service_name: { type: 'string', description: 'Treatment/service name' },
         appointment_date: { type: 'string', description: 'Date in YYYY-MM-DD format' },
         appointment_time: { type: 'string', description: 'Time in HH:MM format (24-hour)' },
@@ -39,11 +39,11 @@ const ALL_FUNCTIONS = [
   },
   {
     name: 'cancel_booking',
-    description: 'Cancel an existing appointment. Must verify identity with phone number first. Cancels the soonest upcoming appointment for that phone number.',
+    description: 'Cancel an existing appointment. Cancels the soonest upcoming appointment for the verified sender.',
     parameters: {
       type: 'object',
       properties: {
-        customer_phone: { type: 'string', description: 'Patient phone number for identity verification' },
+        customer_phone: { type: 'string', description: 'Auto-filled from the verified sender' },
         appointment_id: { type: 'string', description: 'Optional: specific appointment ID if multiple exist' }
       },
       required: ['customer_phone']
@@ -52,13 +52,13 @@ const ALL_FUNCTIONS = [
   },
   {
     name: 'reschedule_booking',
-    description: 'Reschedule an existing appointment. Cancels old booking and creates new one. Checks new slot availability first. Must provide phone number for identity verification.',
+    description: 'Reschedule an existing appointment to a new date and time. Cancels the old booking, creates the new one, and notifies the clinic. Phone is auto-filled from the verified sender — never ask the patient.',
     parameters: {
       type: 'object',
       properties: {
-        customer_phone: { type: 'string', description: 'Patient phone number' },
+        customer_phone: { type: 'string', description: 'Auto-filled from the verified sender' },
         new_date: { type: 'string', description: 'New date in YYYY-MM-DD format' },
-        new_time: { type: 'string', description: 'New time in HH:MM format' }
+        new_time: { type: 'string', description: 'New time in 24-hour HH:MM format (e.g. 13:00 for 1pm)' }
       },
       required: ['customer_phone', 'new_date', 'new_time']
     },
