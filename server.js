@@ -160,7 +160,7 @@ const server = http.createServer(async (req, res) => {
     res.end(JSON.stringify({
       status: 'ok',
       service: 'moon-hands',
-      version: '2.2.6',
+      version: '2.2.7',
       webhook: !!webhookHandler,
       telegram: telegramOk,
       uptime: process.uptime(),
@@ -639,6 +639,19 @@ setTimeout(() => {
     console.error('  ❌ Billing reminders scheduler failed:', err.message);
   }
 }, 800);
+
+// ─── WEEKLY BOOKING ROUNDUP (v2.2.7) ─────────────────────────────
+// 30 min before closing on the clinic's last open day of the week (SGT).
+
+setTimeout(() => {
+  try {
+    const { startWeeklyRoundupScheduler } = require('./jobs/weekly-roundup');
+    startWeeklyRoundupScheduler();
+    console.log('  ✅ Weekly roundup scheduler started (last open day, close-30m SGT)');
+  } catch (err) {
+    console.error('  ❌ Weekly roundup scheduler failed:', err.message);
+  }
+}, 900);
 
 // ─── APPOINTMENT REMINDERS ───────────────────────────────────────
 // Every 15 minutes: 24h, 1h, and 48h follow-up reminders.

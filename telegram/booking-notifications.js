@@ -8,7 +8,7 @@
  */
 
 require('dotenv').config();
-const { formatDateSG, formatTimeSG, getDayName } = require('../utils/date-helpers');
+const { formatDateSG, formatTimeSG, getDayName, getTodaySG, addDaysToDateStr } = require('../utils/date-helpers');
 const { supabase } = require('../supabase/client');
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
@@ -240,17 +240,16 @@ async function sendWeeklyRoundup(clinicConfig, supabase) {
     return;
   }
   
-  // Get today's date and the end of the week (next 7 days)
-  const today = new Date();
-  const nextWeek = new Date(today);
-  nextWeek.setDate(today.getDate() + 7);
+  // Get today's date and the end of the week (next 7 days) — SG (v2.2.7)
+  const todayStr = getTodaySG();
+  const nextWeekStr = addDaysToDateStr(todayStr, 7);
   
   const { data: appointments, error } = await supabase
     .from('appointments')
     .select('*')
     .eq('client_id', clinicId)
-    .gte('appointment_date', today.toISOString().split('T')[0])
-    .lte('appointment_date', nextWeek.toISOString().split('T')[0])
+    .gte('appointment_date', todayStr)
+    .lte('appointment_date', nextWeekStr)
     .in('status', ['confirmed', 'pending', 'booked'])
     .order('appointment_date', { ascending: true })
     .order('appointment_time', { ascending: true });
@@ -281,7 +280,7 @@ async function sendWeeklyRoundup(clinicConfig, supabase) {
   const lines = [
     `📅 *WEEKLY BOOKING ROUNDUP*`,
     `🏥 ${escapeMarkdown(clinicConfig.clinic_name || 'Your Clinic')}`,
-    `📆 ${formatDateSG(today.toISOString())} — ${formatDateSG(nextWeek.toISOString())}`,
+    `📆 ${formatDateSG(todayStr)} — ${formatDateSG(nextWeekStr)}`,
     ``,
     `*Total: ${appointments.length} appointment${appointments.length !== 1 ? 's' : ''}*`,
     `✅ Confirmed: ${appointments.filter(a => a.status === 'confirmed').length}`,

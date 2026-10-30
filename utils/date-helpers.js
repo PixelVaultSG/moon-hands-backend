@@ -161,7 +161,31 @@ function isClinicOpenNow(operatingHours) {
   return currentMinutes >= openMinutes && currentMinutes < closeMinutes;
 }
 
+// ─── SG CLOCK PARTS (v2.2.7) ─────────────────────────────────────
+// The Render server runs in UTC; every clinic-facing trigger must think in
+// Asia/Singapore. This is THE canonical SG clock for all jobs — v2.2.6
+// proved the cost of UTC math (1h reminder fired 7h late in prod).
+function sgNowParts() {
+  const now = Date.now();
+  const SG = 8 * 60 * 60 * 1000;
+  const fmt = (ms) => {
+    const d = new Date(ms);
+    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+  };
+  const sgNow = now + SG;
+  return {
+    todayStr: fmt(sgNow),
+    tomorrowStr: fmt(sgNow + 24 * 60 * 60 * 1000),
+    oneHourDateStr: fmt(sgNow + 60 * 60 * 1000),
+    twoDaysAgoStr: fmt(sgNow - 2 * 24 * 60 * 60 * 1000),
+    nowMinutes: new Date(sgNow).getUTCHours() * 60 + new Date(sgNow).getUTCMinutes(),
+    nowHour: new Date(sgNow).getUTCHours(),
+    dayIndex: new Date(sgNow).getUTCDay(), // JS convention: Sunday=0
+  };
+}
+
 module.exports = {
+  sgNowParts,
   formatDateSG,
   formatTimeSG,
   getDayName,

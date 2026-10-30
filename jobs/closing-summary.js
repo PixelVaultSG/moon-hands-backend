@@ -15,6 +15,7 @@
 
 require('dotenv').config();
 const { supabase } = require('../supabase/client');
+const { getTodaySG } = require('../utils/date-helpers');
 
 const CHECK_INTERVAL_MS = 15 * 60 * 1000; // Check every 15 minutes
 const ALREADY_SENT_TODAY = new Set(); // Track which clinics got summary today (resets at midnight)
@@ -147,7 +148,7 @@ async function checkAndSendClosingSummaries() {
           .eq('client_id', clinic.id)
           // WhatsApp build writes 'pending'; 'pending_approval' is legacy
           .in('status', ['pending', 'pending_approval'])
-          .gte('appointment_date', new Date().toISOString().split('T')[0]);
+          .gte('appointment_date', getTodaySG()); // v2.2.7: SG date
         
         if (pendingErr) {
           console.error(`[CLOSING_SUMMARY] Pending check failed for ${clinic.name}:`, pendingErr.message);

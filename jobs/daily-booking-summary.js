@@ -11,6 +11,12 @@
 
 require('dotenv').config();
 const { supabase } = require('../supabase/client');
+const { sgNowParts, getTodaySG } = require('../utils/date-helpers');
+
+function minutesFromTimeStr(t) {
+  const m = String(t || '').match(/^(\d{1,2}):(\d{2})/);
+  return m ? (parseInt(m[1], 10) * 60 + parseInt(m[2], 10)) : null;
+}
 
 const CONFIG = {
   // Morning summary time (SGT)
@@ -30,7 +36,7 @@ const CONFIG = {
 async function sendDailySummary() {
   if (!CONFIG.ENABLED) return;
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = getTodaySG(); // v2.2.7: SG date, not server UTC
   console.log(`[DAILY_SUMMARY] Generating summary for ${today}...`);
 
   try {
@@ -135,25 +141,35 @@ async function sendPostAppointmentChecks() {
   if (!CONFIG.ENABLED) return;
 
   try {
+    // v2.2.7: this query compared SG appointment times against the server's
+    // UTC clock — no daytime appointment ever matched, so attendance checks
+    // NEVER fired in prod (and with them, 'completed' + the 48h follow-up).
     const now = new Date();
-    const checkBefore = new Date(now.getTime() - CONFIG.POST_APPT_CHECK_DELAY_MIN * 60000);
-    const today = now.toISOString().split('T')[0];
+    const sg = sgNowParts();
+    const cutoffMinutes = sg.nowMinutes - CONFIG.POST_APPT_CHECK_DELAY_MIN;
 
     // Find appointments that:
-    // - Are today
-    // - Have a time that's in the past (by at least 30 min)
+    // - Are today (SG)
+    // - Started at least POST_APPT_CHECK_DELAY_MIN minutes ago (SG clock)
     // - Still have status 'confirmed' (not yet marked)
     // - Haven't been sent a follow-up yet
     const { data: appointments, error } = await supabase
       .from('appointments')
       .select('id, client_id, customer_name, service, appointment_time, customer_phone')
-      .eq('appointment_date', today)
+      .eq('appointment_date', sg.todayStr)
       .eq('status', 'confirmed')
-      .lte('appointment_time', `${String(checkBefore.getHours()).padStart(2, '0')}:${String(checkBefore.getMinutes()).padStart(2, '0')}`)
       .is('attendance_checked_at', null)
-      .limit(20);
+      .limit(50);
 
-    if (error || !appointments || appointments.length === 0) return;
+    const dueAppointments = (appointments || []).filter(a => {
+      const m = minutesFromTimeStr(a.appointment_time);
+      return m !== null && m <= cutoffMinutes;
+    });
+
+    if (error || dueAppointments.length === 0) return;
+    // keep the destructured binding — mutate in place for the loop below
+    appointments.length = 0;
+    appointments.push(...dueAppointments);
 
     const chatId = process.env.TELEGRAM_ADMIN_CHAT_ID;
     const bot = require('../telegram/bot').bot;
