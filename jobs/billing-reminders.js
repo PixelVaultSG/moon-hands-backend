@@ -13,6 +13,7 @@
 
 require('dotenv').config();
 const { checkAllClinics, GRACE_PERIOD_DAYS, SUSPENSION_THRESHOLD_DAYS } = require('../middleware/billing-monitor');
+const { getTodaySG } = require('../utils/date-helpers');
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const ADMIN_CHAT_ID = process.env.TELEGRAM_ADMIN_CHAT_ID;
@@ -46,7 +47,7 @@ async function run() {
   console.log(`[BILLING_REMINDERS] Starting daily check at ${new Date().toISOString()}`);
 
   const all = await checkAllClinics();
-  const today = new Date().toISOString().split('T')[0];
+  const today = getTodaySG(); // v2.2.7: SG date — billing day-of-month must follow the clinic's calendar
 
   const upcoming = all.filter(r => r.alertLevel === 'upcoming');
   const dueToday = all.filter(r => r.alertLevel === 'due_today');

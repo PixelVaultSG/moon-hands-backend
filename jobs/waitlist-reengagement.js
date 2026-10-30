@@ -13,6 +13,7 @@
 
 require('dotenv').config();
 const { supabase } = require('../supabase/client');
+const { getTodaySG } = require('../utils/date-helpers');
 
 const CONFIG = {
   CHECK_INTERVAL_MS: 15 * 60 * 1000, // 15 minutes
@@ -71,7 +72,7 @@ async function findRecentlyCancelledAppointments() {
 
   // Find appointments cancelled in the last 20 minutes
   // that are for FUTURE dates (don't bother with past appointments)
-  const today = new Date().toISOString().split('T')[0];
+  const today = getTodaySG(); // v2.2.7: SG date
 
   const { data, error } = await supabase
     .from('appointments')

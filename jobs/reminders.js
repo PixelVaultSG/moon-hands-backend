@@ -92,22 +92,9 @@ async function sendWhatsAppMessage(phoneNumber, message, apiKey) {
 // All reminder math MUST be SG — UTC math fired the 1h reminder 7 hours
 // LATE in prod (2026-10-29: "in 1 hour at 13:00" arrived 19:51 SG) and
 // the 24h reminder at 00:06 SG on the appointment day itself.
-function sgNowParts() {
-  const now = Date.now();
-  const SG = 8 * 60 * 60 * 1000;
-  const fmt = (ms) => {
-    const d = new Date(ms);
-    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
-  };
-  const sgNow = now + SG;
-  return {
-    tomorrowStr: fmt(sgNow + 24 * 60 * 60 * 1000),
-    oneHourDateStr: fmt(sgNow + 60 * 60 * 1000),
-    twoDaysAgoStr: fmt(sgNow - 2 * 24 * 60 * 60 * 1000),
-    nowMinutes: new Date(sgNow).getUTCHours() * 60 + new Date(sgNow).getUTCMinutes(),
-    nowHour: new Date(sgNow).getUTCHours(),
-  };
-}
+// Canonical SG clock lives in utils/date-helpers (v2.2.7) — re-exported
+// below so existing callers/tests keep working.
+const { sgNowParts } = require('../utils/date-helpers');
 
 // 45–75 minute lookahead that survives midnight (00:15 appointment at
 // 23:15 is +60 min, not −1380).
