@@ -23,10 +23,17 @@ const REMINDER_MESSAGES = {
     `Hi ${name}! Your ${treatment} appointment is in 1 hour at ${time}. ` +
     `Please make your way to the clinic. See you soon!`,
 
-  'followup': (name, treatment) =>
+  'followup': (name, treatment, aftercare) =>
     `Hi ${name}! Thank you for visiting us for your ${treatment} treatment. ` +
     `We hope you had a great experience. If you have any questions about aftercare, feel free to reply here. ` +
-    `We'd love to see you again soon!`,
+    `We'd love to see you again soon!` +
+    // v2.2.8: clinics write aftercare_instructions at onboarding — patients
+    // actually receive them now (was collected and never sent).
+    (Array.isArray(aftercare) && aftercare.length > 0
+      ? `\n\nAftercare notes from the clinic:\n${aftercare.slice(0, 6).map(a => `• ${a}`).join('\n')}`
+      : (typeof aftercare === 'string' && aftercare.trim()
+        ? `\n\nAftercare notes from the clinic:\n${aftercare.trim().slice(0, 600)}`
+        : '')),
 
   'approval': (name, treatment, date, time) =>
     `Hi ${name}! Your ${treatment} appointment for ${date} at ${time} has been confirmed. ` +
@@ -224,12 +231,14 @@ async function send48hFollowups() {
 
   const { data: configs } = await db.supabase
     .from('client_configs')
-    .select('client_id, booking_followup_48h')
+    .select('client_id, booking_followup_48h, aftercare_instructions')
     .eq('booking_followup_48h', true);
 
   if (!configs || configs.length === 0) return;
 
   const clientIds = configs.map(c => c.client_id);
+  const aftercareByClient = {};
+  for (const c of configs) aftercareByClient[c.client_id] = c.aftercare_instructions;
 
   const { data: appointments } = await db.supabase
     .from('appointments')
@@ -244,7 +253,8 @@ async function send48hFollowups() {
   for (const apt of appointments) {
     const message = REMINDER_MESSAGES['followup'](
       apt.customer_name,
-      apt.service
+      apt.service,
+      aftercareByClient[apt.client_id]
     );
 
     const sent = await sendWhatsAppMessage(
