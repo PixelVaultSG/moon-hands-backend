@@ -74,6 +74,13 @@ async function getAvailableSlots(clientId, dateStr, treatmentNames, clientConfig
     console.error(`[AVAILABILITY] Supabase error: ${error.message}`);
   }
   
+  // 3b. Daily cap (v2.2.8): max_per_day was collected at onboarding but never
+  // enforced — a clinic capping at 12/day was getting unlimited bookings.
+  const maxPerDay = clientConfig.max_per_day ?? clientConfig.config?.max_per_day ?? null;
+  if (maxPerDay && (existingBookings || []).length >= parseInt(maxPerDay)) {
+    return { available: false, slots: [], reason: `Fully booked for ${dayName} — the clinic's daily cap (${maxPerDay}) is reached`, operatingHours: `${hours.open_time}-${hours.close_time}`, totalDuration };
+  }
+  
   // 4. Convert to busy periods (duration + turnover buffer per booking)
   const busyPeriods = (existingBookings || []).map(b => ({
     start: minutesFromTime(b.appointment_time),
@@ -414,6 +421,15 @@ async function validateBookingSlot(clientId, dateStr, timeStr, durationMin, clie
       console.error('[AVAILABILITY] validateBookingSlot conflict check error:', error.message);
       // fail-closed on conflicts would block all bookings on a DB hiccup;
       // fail-open here matches existing behavior, hours checks above still ran
+    }
+    // Daily cap (v2.2.8) — same rule as getAvailableSlots; the booking being
+    // rescheduled (excludeBookingId) doesn't count against the cap.
+    const maxPerDay = clientConfig?.max_per_day ?? clientConfig?.config?.max_per_day ?? null;
+    if (maxPerDay) {
+      const dayCount = (existing || []).filter(b => !(excludeBookingId && b.id === excludeBookingId)).length;
+      if (dayCount >= parseInt(maxPerDay)) {
+        return { ok: false, reason: `Fully booked — the clinic's daily cap (${maxPerDay}) is reached for that day` };
+      }
     }
     const start = minutesFromTime(timeStr);
     const end = start + dur + bufferMin;

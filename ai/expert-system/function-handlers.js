@@ -106,6 +106,13 @@ async function checkAvailability({ client_id, date, service, preferred_time, tre
       console.error('[FUNCTION] checkAvailability query error:', existingErr.message);
     }
     
+    // Daily cap (v2.2.8) — max_per_day collected at onboarding, never enforced
+    const maxPerDay = clinic.max_per_day ?? clinic.config?.max_per_day ?? null;
+    if (maxPerDay && (existing || []).length >= parseInt(maxPerDay)) {
+      return { success: true, date, dayName, openTime, closeTime, slots: [], bookedCount: (existing || []).length,
+        message: `Fully booked on ${date} — the clinic's daily cap is reached. Would you like a different day?` };
+    }
+    
     const bufferMin = clinic.config?.buffer_time ?? clinic.buffer_time ?? 15;
     const bookedPeriods = (existing || []).map(a => ({
       start: a.appointment_time,

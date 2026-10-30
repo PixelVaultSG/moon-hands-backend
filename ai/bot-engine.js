@@ -770,9 +770,55 @@ async function sendApprovalAlert(clientConfig, booking) {
 
 // ─── CONVERSATION LOGGING ─────────────────────────────────────────
 
+// ─── LEAD SIGNALS (v2.2.8) ───────────────────────────────────────
+// Every patient message funnels through logConversation — the single choke
+// point. Price-talk flags the conversation row for analytics; negotiation
+// signals (a patient asking for a discount TODAY is a lead to close TODAY)
+// additionally ping the clinic on Telegram. The conversations columns
+// budget_mentioned / is_high_value / recommended_action / notified existed
+// since day one but nothing ever wrote them.
+const PRICE_TALK_RE = /\b(how much|price|pricing|cost|costs|fee|fees|charge|charges|rates?)\b/i;
+const NEGOTIATION_RE = /\b(expensive|too pricey|cheaper|cheap|discount|promo(?:tion)?s?|promo code|deals?|budget|afford|instal+ments?|payment plan|any offers?|best price|lower price)\b/i;
+const hotLeadAlerts = new Map(); // clientId:phone → last alert ts
+const HOT_LEAD_DEDUP_MS = 24 * 60 * 60 * 1000;
+function resetHotLeadAlertsForTest() { hotLeadAlerts.clear(); }
+
+async function maybeAlertHotLead(clientId, phone, msg) {
+  try {
+    const key = `${clientId}:${String(phone || 'unknown')}`;
+    const now = Date.now();
+    if (hotLeadAlerts.has(key) && now - hotLeadAlerts.get(key) < HOT_LEAD_DEDUP_MS) return false;
+    hotLeadAlerts.set(key, now);
+    if (hotLeadAlerts.size > 1000) hotLeadAlerts.delete(hotLeadAlerts.keys().next().value);
+    const digits = String(phone || 'unknown').replace(/\D/g, '');
+    const masked = digits.length > 4 ? `•••${digits.slice(-4)}` : digits;
+    const snippet = String(msg).replace(/[*_\[\]`]/g, '').slice(0, 140);
+    await sendClinicNotification(clientId,
+      `🔥 *HOT LEAD — price-sensitive patient*
+
+` +
+      `Patient: +${masked}
+` +
+      `Message: "${snippet}"
+
+` +
+      `They're negotiating on price. A personal follow-up now could close this booking.`);
+    return true;
+  } catch (e) {
+    console.error('[LEAD] hot-lead alert failed:', e.message);
+    return false;
+  }
+}
+
 async function logConversation(clientId, channel, customerPhone, customerName, message, aiResponse, intent) {
   try {
-    await db.supabase.from('conversations').insert({
+    const msg = String(message || '');
+    const isPatientMsg = channel === 'whatsapp';
+    const budget = isPatientMsg && (PRICE_TALK_RE.test(msg) || NEGOTIATION_RE.test(msg));
+    const hot = isPatientMsg && NEGOTIATION_RE.test(msg);
+    let notified = false;
+    if (hot) notified = await maybeAlertHotLead(clientId, customerPhone, msg);
+    const row = {
       client_id: clientId,
       channel,
       customer_phone: customerPhone,
@@ -780,7 +826,14 @@ async function logConversation(clientId, channel, customerPhone, customerName, m
       message,
       ai_response: aiResponse,
       intent
-    });
+    };
+    if (budget) row.budget_mentioned = true;
+    if (hot) {
+      row.is_high_value = true;
+      row.recommended_action = 'Price-sensitive lead — personal follow-up recommended';
+      if (notified) row.notified = true;
+    }
+    await db.supabase.from('conversations').insert(row);
   } catch (err) {
     console.error('[CONVERSATION_LOG] Failed:', err.message);
   }
@@ -863,13 +916,17 @@ async function handleCallbackChoice(interactiveId, clientConfig, patientPhone, m
 // Returns a response object if MADS intercepted the message, else null.
 async function madsGate(messageText, clientConfig, patientPhone, startTime) {
   const startLabel = Date.now();
+  // v2.2.8: escalation_phone (collected at onboarding, never used) rides on
+  // the CLINIC alert. Deliberately NOT in the patient-facing red-flag reply —
+  // an emergency must go to A&E/GP, not to the clinic's phone line.
+  const escLine = clientConfig?.escalation_phone ? `\n📞 Escalation contact on file: ${clientConfig.escalation_phone}` : '';
 
   // Pre-layer: regex red-flag detector — free, instant, always first
   const redFlag = detectRedFlag(messageText);
   if (redFlag.isRedFlag) {
     console.log(`[MADS] RED FLAG (regex) for phone=...${String(patientPhone || '').slice(-4)}: ${redFlag.matchedPattern}`);
     await sendClinicNotification(clientConfig.id,
-      `🚨 *Red flag detected*\n\nPatient: +${String(patientPhone).replace(/\D/g, '')}\nMessage: "${String(messageText).slice(0, 200)}"\n\nNo booking offered. Patient advised to visit A&E/GP.`
+      `🚨 *Red flag detected*\n\nPatient: +${String(patientPhone).replace(/\D/g, '')}\nMessage: "${String(messageText).slice(0, 200)}"\n\nNo booking offered. Patient advised to visit A&E/GP.${escLine}`
     ).catch(e => console.error('[MADS] red-flag alert failed:', e.message));
     await logConversation(clientConfig.id, 'whatsapp', patientPhone, null, messageText, PATH_A_RESPONSE, 'mads:red_flag');
     return { text: PATH_A_RESPONSE, function_called: null, model: 'mads-red-flag', latency_ms: Date.now() - startLabel };
@@ -881,7 +938,7 @@ async function madsGate(messageText, clientConfig, patientPhone, startTime) {
 
   if (classification.isRedFlag) {
     await sendClinicNotification(clientConfig.id,
-      `🚨 *Red flag detected (classifier)*\n\nPatient: +${String(patientPhone).replace(/\D/g, '')}\nMessage: "${String(messageText).slice(0, 200)}"\n\nNo booking offered. Patient advised to visit A&E/GP.`
+      `🚨 *Red flag detected (classifier)*\n\nPatient: +${String(patientPhone).replace(/\D/g, '')}\nMessage: "${String(messageText).slice(0, 200)}"\n\nNo booking offered. Patient advised to visit A&E/GP.${escLine}`
     ).catch(e => console.error('[MADS] red-flag alert failed:', e.message));
     await logConversation(clientConfig.id, 'whatsapp', patientPhone, null, messageText, PATH_A_RESPONSE, 'mads:red_flag_llm');
     return { text: PATH_A_RESPONSE, function_called: null, model: 'mads-red-flag', latency_ms: Date.now() - startLabel };
@@ -1359,6 +1416,7 @@ module.exports = {
   withActionFooter,
   processMessage,
   logConversation,
+  resetHotLeadAlertsForTest,
   // Exported for testing (MADS gate + callback flow are exercised in
   // scripts/mads-test.js without touching the live OpenAI budget)
   madsGate,
