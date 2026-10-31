@@ -1084,8 +1084,52 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
         forcedIntents = ['service_selected'];
         console.log(`[BOT_ENGINE] Interactive service ID "${interactiveId}" → service: ${svcName}`);
       }
+      // ── DYNAMIC MAP: Waitlist Auto-Fill buttons (v2.3.0) ──────────
+      // Format: wl_yes_<entryId> / wl_no_<entryId>. Fully deterministic —
+      // bypasses router AND LLM. YES creates a PENDING booking (the clinic
+      // still approves); NO removes the patient from the waitlist.
+      else if (interactiveId.startsWith('wl_yes_') || interactiveId.startsWith('wl_no_')) {
+        const wlAccepted = interactiveId.startsWith('wl_yes_');
+        const wlEntryId = interactiveId.replace(/^wl_(yes|no)_/, '');
+        console.log(`[BOT_ENGINE] Waitlist button: ${wlAccepted ? 'YES' : 'NO'} entry=${wlEntryId}`);
+        const { handleWaitlistReply } = require('../jobs/waitlist-reengagement');
+        const wlResult = await handleWaitlistReply(wlEntryId, wlAccepted, patientPhone);
+        await logConversation(clientConfig.id, 'whatsapp', patientPhone, null,
+          messageText || `[waitlist ${wlAccepted ? 'YES' : 'NO'} tap]`, wlResult.text,
+          `waitlist:${wlAccepted ? 'accept' : 'decline'}`);
+        return {
+          text: wlResult.text,
+          function_called: null,
+          model: 'waitlist-reply',
+          latency_ms: Date.now() - startTime
+        };
+      }
     }
     
+    // ─── WAITLIST TEXT FALLBACK (v2.3.0): patient typed yes/no instead of
+    // tapping. Guarded tight: bare word + outstanding waitlist offer (<48h,
+    // future slot, phone match) — otherwise conversational yes/no is untouched.
+    if (!interactiveId && /^(yes|yeah|yep|no|nope)\.?$/i.test((messageText || '').trim())) {
+      try {
+        const { findPendingWaitlistReply, handleWaitlistReply } = require('../jobs/waitlist-reengagement');
+        const pendingWl = await findPendingWaitlistReply(patientPhone);
+        if (pendingWl) {
+          const wlAccepted = /^y/i.test(messageText.trim());
+          const wlResult = await handleWaitlistReply(pendingWl.id, wlAccepted, patientPhone);
+          await logConversation(clientConfig.id, 'whatsapp', patientPhone, null,
+            messageText, wlResult.text, `waitlist:${wlAccepted ? 'accept' : 'decline'}:text`);
+          return {
+            text: wlResult.text,
+            function_called: null,
+            model: 'waitlist-reply-text',
+            latency_ms: Date.now() - startTime
+          };
+        }
+      } catch (wlErr) {
+        console.error('[BOT_ENGINE] waitlist text fallback error:', wlErr.message);
+      }
+    }
+
     // ─── STATE HYDRATION: restore persisted conversation state (survives
     // deploys/restarts) before any routing decision reads it ───────────
     try { await convState.hydrateState(patientPhone); } catch (e) { console.error('[BOT_ENGINE] hydrateState failed:', e.message); }

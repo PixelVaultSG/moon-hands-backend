@@ -481,6 +481,68 @@ Estimated AI cost: ~$9.40
 _Internal Moon Hands cost protection. Clinics are NOT notified._`,
   },
 
+  // ─── v2.2.5–v2.2.9 additions ──────────────────────────────────
+  {
+    name: 'BOT STALL ALARM (v2.2.5)',
+    text: `⚠️ *BOT STALL — no booking action completed*
+
+📱 Patient: ••••2297
+🏥 ${clinic.name}
+
+The patient asked to reschedule/cancel, but the AI completed no action.
+
+Last message: "I need to reschedule to next week"
+
+_Check the conversation — the patient may be waiting._`,
+  },
+  {
+    name: 'HOT LEAD — price-sensitive patient (v2.2.8)',
+    text: `🔥 *HOT LEAD — price-sensitive patient*
+
+🏥 ${clinic.name}
+📱 Patient: ••••5555
+
+They asked about price AND signalled hesitation ("too expensive, any discount?").
+
+_Personal follow-up recommended — this lead is warm and negotiating._`,
+  },
+  {
+    name: 'MADS RED FLAG (with escalation contact, v2.2.8)',
+    text: `🚨 *RED FLAG detected — possible medical emergency*
+
+🏥 ${clinic.name}
+📱 Patient: ••••2297
+
+Patient wrote: "I have severe chest pain and cannot breathe"
+
+_Patient was directed to seek immediate medical care (A&E/GP). Bot did NOT give medical advice._
+📞 Escalation contact on file: +6561112222`,
+  },
+  {
+    name: 'ATTENDANCE CHECK (v2.2.7 — delivery fixed v2.2.9)',
+    text: `📋 *Attendance Check*
+
+Did *Thomas* show up for their 1:00 PM appointment (Botox + Microneedling)?`,
+    reply_markup: {
+      inline_keyboard: [[
+        { text: '✅ Yes, showed up', callback_data: `appt_yes_${apptId}` },
+        { text: '❌ No-show', callback_data: `appt_no_${apptId}` }
+      ]]
+    }
+  },
+  {
+    name: 'WEEKLY ROUNDUP (v2.2.7 — 30min before last close of week)',
+    text: `📊 *WEEKLY ROUNDUP — ${clinic.name}*
+
+_Week of Mon 26 Oct – Sun 1 Nov_
+
+📅 This week: *14 appointments* (12 completed, 1 cancelled, 1 no-show)
+📆 Next week so far: *9 booked*
+
+💰 Est. revenue this week: ~S$2,340
+
+_Full detail in the daily summaries. Have a good close!_`,
+  },
 ];
 
 module.exports = { SAMPLES };
