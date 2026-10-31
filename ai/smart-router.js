@@ -953,7 +953,10 @@ function slotRejectReason(dateStr, timeStr, v) {
     return `Sorry, we're closed on ${dayName}s.`;
   }
   if (timeStr && v?.openTime && v?.closeTime) {
-    return `Sorry, our hours on ${displayDate} are ${v.openTime}–${v.closeTime} — ${timeStr} won't work.`;
+    const baseMsg = `Sorry, our hours on ${displayDate} are ${v.openTime}–${v.closeTime} — ${timeStr} won't work.`;
+    // v2.3.2: duration overrun — name the actual latest start, not just failure
+    if (v.latestStart) return `${baseMsg} A ${v.durationMin}-min session would need to start by ${v.latestStart}.`;
+    return baseMsg;
   }
   if (timeStr && displayDate) {
     return `Sorry, ${timeStr} on ${displayDate} won't work.`;
@@ -961,7 +964,27 @@ function slotRejectReason(dateStr, timeStr, v) {
   return null;
 }
 
-function validateBookingTime(dateStr, timeStr, operatingHours) {
+/**
+ * Sum service durations for a list of treatment names (multi-treatment aware).
+ * Returns 0 when the list is empty — callers treat 0 as "duration unknown"
+ * and fall back to start-only validation (the hard gate in
+ * availability-engine.validateBookingSlot still protects every write).
+ */
+function totalDurationFor(treatmentNames, services) {
+  if (!treatmentNames || treatmentNames.length === 0) return 0;
+  let sum = 0;
+  for (const t of treatmentNames) {
+    const tl = String(t).toLowerCase();
+    const svc = (services || []).find(s => {
+      const sl = (s.name || '').toLowerCase();
+      return sl === tl || sl.includes(tl) || tl.includes(sl);
+    });
+    sum += parseInt(svc?.duration) || 60;
+  }
+  return sum;
+}
+
+function validateBookingTime(dateStr, timeStr, operatingHours, durationMin = 0) {
   if (!operatingHours || !Array.isArray(operatingHours) || !dateStr) {
     return { isOpen: true }; // No hours configured = allow all
   }
@@ -997,12 +1020,21 @@ function validateBookingTime(dateStr, timeStr, operatingHours) {
     const reqMin = toMin(timeStr);
     const openMin = toMin(dayEntry.open_time);
     const closeMin = toMin(dayEntry.close_time);
-    const isOpen = reqMin >= openMin && reqMin < closeMin;
+    // v2.3.2: when duration is known, the END of the session must fit inside
+    // opening hours, not just the start (Ash's UVT Feedback 2: 75-min combo
+    // typed at 6pm with 19:00 close passed validation, then failed at Confirm).
+    const dur = parseInt(durationMin) || 0;
+    const fitsBeforeClose = dur > 0 ? (reqMin + dur <= closeMin) : (reqMin < closeMin);
+    const isOpen = reqMin >= openMin && fitsBeforeClose;
+    const toHHMM = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+    const overrun = dur > 0 && reqMin >= openMin && reqMin < closeMin && reqMin + dur > closeMin;
     return {
       isOpen,
       openTime: dayEntry.open_time,
       closeTime: dayEntry.close_time,
-      reason: isOpen ? null : (reqMin < openMin ? `We open at ${dayEntry.open_time}` : `We close at ${dayEntry.close_time}`)
+      durationMin: dur || undefined,
+      latestStart: overrun ? toHHMM(closeMin - dur) : undefined,
+      reason: isOpen ? null : (reqMin < openMin ? `We open at ${dayEntry.open_time}` : (overrun ? `A ${dur}-min session would need to start by ${toHHMM(closeMin - dur)} — we close at ${dayEntry.close_time}` : `We close at ${dayEntry.close_time}`))
     };
   } catch {
     return { isOpen: true, openTime: dayEntry.open_time, closeTime: dayEntry.close_time };
@@ -1579,8 +1611,10 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
         };
       }
       if (data.time) {
-        // Validate time against opening hours
-        const v = validateBookingTime(data.date, data.time, hours);
+        // Validate time against opening hours — duration-aware (v2.3.2): the
+        // session must END before closing, not just start before it.
+        const durTx1 = currentState.data?.treatments || (currentState.data?.treatment ? [currentState.data.treatment] : []);
+        const v = validateBookingTime(data.date, data.time, hours, totalDurationFor(durTx1, clinicConfig.config?.services || clinicConfig.services));
         if (!v.isOpen) {
           // Time is invalid — find next available times on the same date, or next available dates
           const { findNextSlotsOnDate, findNextAvailableAfter } = require('./availability-engine');
@@ -1698,8 +1732,10 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
         return { text: `Got it, ${data.time}. What date would you like?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
       }
       
-      // Validate time against opening hours
-      const v = validateBookingTime(date, data.time, hours);
+      // Validate time against opening hours — duration-aware (v2.3.2): the
+      // session must END before closing, not just start before it.
+      const durTx2 = currentState.data?.treatments || (currentState.data?.treatment ? [currentState.data.treatment] : []);
+      const v = validateBookingTime(date, data.time, hours, totalDurationFor(durTx2, clinicConfig.config?.services || clinicConfig.services));
       if (!v.isOpen) {
         // Time outside hours — find next available slots on same date, or next dates
         const existingTreatment2 = currentState.data?.treatment || currentState.data?.treatments?.[0];
@@ -2630,8 +2666,8 @@ async function attemptBooking(clinicConfig, patientPhone, fields, conversationHi
       setState(patientPhone, BOOKING_STATES.AWAITING_CONFIRMATION, {
         date: fields.date,
         time: fields.time,
-        treatment: primaryTreatment,
-        treatments: treatmentNames,
+        treatment: matchedServices[0]?.name || fields.treatment,
+        treatments: matchedServices.length > 0 ? matchedServices.map(s => s.name) : (fields.treatments || [fields.treatment]),
         name: patientName
       });
       return {
@@ -2647,8 +2683,8 @@ async function attemptBooking(clinicConfig, patientPhone, fields, conversationHi
     setState(patientPhone, BOOKING_STATES.AWAITING_CONFIRMATION, {
       date: fields.date,
       time: fields.time,
-      treatment: primaryTreatment,
-      treatments: treatmentNames,
+      treatment: matchedServices[0]?.name || fields.treatment,
+      treatments: matchedServices.length > 0 ? matchedServices.map(s => s.name) : (fields.treatments || [fields.treatment]),
       name: patientName
     });
     return {
