@@ -160,7 +160,7 @@ const server = http.createServer(async (req, res) => {
     res.end(JSON.stringify({
       status: 'ok',
       service: 'moon-hands',
-      version: '2.3.1',
+      version: '2.3.2',
       webhook: !!webhookHandler,
       telegram: telegramOk,
       uptime: process.uptime(),
