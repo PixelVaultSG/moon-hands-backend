@@ -160,17 +160,32 @@ async function sendWaitlistNotification(freedSlot, waitlistEntry) {
     const clinicName = clinic?.name || 'our clinic';
     const patientName = waitlistEntry.customer_name || 'there';
 
-    // Build message
+    // v2.3.0: Ash's spec — auto-fill must CONFIRM with the patient first.
+    // Buttons: YES → pending booking (clinic still approves); NO → removed
+    // from waitlist. Plain text remains as fallback for old clients.
     const message = `Hi ${patientName}! 🎉\n\n` +
       `A slot has just opened up at ${clinicName}:\n` +
       `• Service: ${freedSlot.service}\n` +
       `• Date: ${formatDate(freedSlot.appointment_date)}\n` +
       `• Time: ${formatTime(freedSlot.appointment_time)}\n\n` +
-      `Would you like to book this slot?\n\n` +
-      `Reply *YES* to confirm, or *NO* to stay on the waitlist for other openings.`;
+      `Are you available for this slot? Tap a button below (or reply YES / NO).`;
 
-    // Send via WhatsApp
-    const sent = await sendWhatsAppMessage(waitlistEntry.customer_phone, message);
+    const { buildQuickReplyButtons } = require('../ai/whatsapp-interactive');
+    const buttons = buildQuickReplyButtons({
+      body: message,
+      footer: 'Yes books a request — the clinic still confirms it',
+      buttons: [
+        { id: `wl_yes_${waitlistEntry.id}`, title: '✅ Yes, book it' },
+        { id: `wl_no_${waitlistEntry.id}`, title: '❌ Not now' },
+      ],
+    });
+
+    let sent = await sendWhatsAppInteractive(waitlistEntry.customer_phone, buttons);
+    if (!sent) {
+      const textFallback = message.replace('Tap a button below (or reply YES / NO).',
+        'Reply *YES* to book this slot, or *NO* to leave the waitlist.');
+      sent = await sendWhatsAppMessage(waitlistEntry.customer_phone, textFallback);
+    }
 
     if (sent) {
       // Mark as notified
@@ -332,7 +347,9 @@ function minutesToTime(mins) {
 
 function formatDate(dateStr) {
   const d = new Date(dateStr + 'T00:00:00+08:00');
-  return d.toLocaleDateString('en-SG', { weekday: 'long', month: 'short', day: 'numeric' });
+  // v2.3.0: pin SG timezone — without it the server TZ (UTC on Render)
+  // renders the weekday one day early.
+  return d.toLocaleDateString('en-SG', { weekday: 'long', month: 'short', day: 'numeric', timeZone: 'Asia/Singapore' });
 }
 
 function formatTime(timeStr) {
@@ -347,6 +364,32 @@ function maskPhone(phone) {
 }
 
 // ─── SEND WHATSAPP MESSAGE ───────────────────────────────────────
+
+// v2.3.0: interactive (button) sender — same D360 endpoint, type interactive
+async function sendWhatsAppInteractive(to, interactivePayload) {
+  const d360Key = process.env.D360_API_KEY;
+  if (!d360Key) {
+    console.warn('[WAITLIST] D360_API_KEY not set');
+    return false;
+  }
+  const D360_API_URL = process.env.D360_API_URL || 'https://waba.360dialog.io/v1/messages';
+  try {
+    const result = await fetch(D360_API_URL, {
+      method: 'POST',
+      headers: { 'D360-API-KEY': d360Key, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        to,
+        type: 'interactive',
+        interactive: interactivePayload.interactive
+      })
+    });
+    return result.ok;
+  } catch (err) {
+    console.error('[WAITLIST] Interactive send error:', err.message);
+    return false;
+  }
+}
 
 async function sendWhatsAppMessage(to, text) {
   const d360Key = process.env.D360_API_KEY;
@@ -403,9 +446,122 @@ function startWaitlistScheduler() {
 
 // ─── EXPORTS ─────────────────────────────────────────────────────
 
+// ─── PATIENT REPLY HANDLING (v2.3.0) ─────────────────────────────
+// Deterministic, no LLM. Buttons wl_yes_/wl_no_ route here via bot-engine;
+// typed YES/NO lands here via the guarded text fallback.
+
+const digitsOnly = (p) => String(p || '').replace(/\D/g, '');
+const samePhone = (a, b) => {
+  const da = digitsOnly(a), db = digitsOnly(b);
+  return da.length >= 8 && db.length >= 8 && (da.endsWith(db.slice(-8)) || db.endsWith(da.slice(-8)));
+};
+
+/**
+ * A waitlist offer is outstanding for this phone: active entry, notified
+ * in the last 48h, slot still in the future (SG date).
+ */
+async function findPendingWaitlistReply(patientPhone) {
+  try {
+    const cutoff = new Date(Date.now() - 48 * 3600 * 1000).toISOString();
+    const { data, error } = await supabase
+      .from('waitlist')
+      .select('*')
+      .eq('status', 'active')
+      .gte('last_notified_at', cutoff)
+      .order('last_notified_at', { ascending: false })
+      .limit(20);
+    if (error || !data) return null;
+    const today = getTodaySG();
+    return data.find(e =>
+      samePhone(e.customer_phone, patientPhone) &&
+      e.notified_slot_date && e.notified_slot_date >= today
+    ) || null;
+  } catch (err) {
+    console.error('[WAITLIST] findPendingWaitlistReply error:', err.message);
+    return null;
+  }
+}
+
+/**
+ * YES → create PENDING booking for the notified slot (clinic still
+ * approves via Telegram) and mark the entry fulfilled.
+ * NO  → remove the patient from the waitlist.
+ */
+async function handleWaitlistReply(entryId, accepted, patientPhone) {
+  try {
+    const { data: entry, error } = await supabase
+      .from('waitlist')
+      .select('*')
+      .eq('id', entryId)
+      .single();
+
+    if (error || !entry) {
+      return { success: false, text: "That waitlist offer has expired — but I'd be happy to book you an appointment. What day works for you?" };
+    }
+    if (!samePhone(entry.customer_phone, patientPhone)) {
+      console.warn(`[WAITLIST] phone mismatch on reply: entry=${entryId}`);
+      return { success: false, text: "Sorry, that waitlist offer isn't linked to your number." };
+    }
+    if (entry.status !== 'active') {
+      return { success: false, text: "That slot is no longer available — it may have just been taken. Would you like me to check other times for you?" };
+    }
+
+    if (!accepted) {
+      await supabase
+        .from('waitlist')
+        .update({ status: 'removed', updated_at: new Date().toISOString() })
+        .eq('id', entryId);
+      console.log(`[WAITLIST] ${maskPhone(patientPhone)} declined — removed from waitlist (entry ${entryId})`);
+      return { success: true, text: "No problem at all — I've taken you off the waitlist. If you'd like to book a different time slot instead, just tell me a day that suits you! 😊" };
+    }
+
+    const slotDate = entry.notified_slot_date || entry.preferred_date;
+    const slotTime = entry.notified_slot_time;
+    const service = entry.notified_service || entry.preferred_service;
+    if (!slotDate || !slotTime || !service) {
+      return { success: false, text: "I'm missing some details for that slot — let me book you manually. What day and time would you like?" };
+    }
+    if (slotDate < getTodaySG()) {
+      return { success: false, text: "That slot has already passed — sorry about the late notice! Can I find you a new time?" };
+    }
+
+    // Pending booking → clinic approval flow (Ash: "clinic to still approve")
+    const { createBooking } = require('../ai/expert-system/function-handlers');
+    const result = await createBooking({
+      client_id: entry.client_id,
+      customer_name: entry.customer_name,
+      customer_phone: entry.customer_phone,
+      service_name: service,
+      appointment_date: slotDate,
+      appointment_time: slotTime,
+      notes: 'Booked via Waitlist Auto-Fill (patient accepted offer)',
+    });
+
+    if (!result.success) {
+      console.warn(`[WAITLIST] accept failed for entry ${entryId}: ${result.error}`);
+      return { success: false, text: `Ah — that slot looks like it was just taken. Would you like me to find you the next available time instead?` };
+    }
+
+    await supabase
+      .from('waitlist')
+      .update({ status: 'fulfilled', updated_at: new Date().toISOString() })
+      .eq('id', entryId);
+    console.log(`[WAITLIST] ${maskPhone(patientPhone)} accepted — pending booking created, entry ${entryId} fulfilled`);
+    return {
+      success: true,
+      text: `✅ Lovely! I've requested *${service}* on ${formatDate(slotDate)} at ${formatTime(slotTime)} for you.\n\nThe clinic will confirm it shortly — you'll get a message here the moment it's approved.`
+    };
+  } catch (err) {
+    console.error('[WAITLIST] handleWaitlistReply error:', err.message);
+    return { success: false, text: "Sorry, something hiccuped on my end. Please try again in a moment!" };
+  }
+}
+
 module.exports = {
   runWaitlistCheck,
   startWaitlistScheduler,
   findAlternativeSlots, // Used by bot-engine
+  findPendingWaitlistReply, // v2.3.0 — bot-engine text fallback
+  handleWaitlistReply,      // v2.3.0 — bot-engine button routing
   CONFIG,
 };
