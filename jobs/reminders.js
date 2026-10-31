@@ -101,7 +101,7 @@ async function sendWhatsAppMessage(phoneNumber, message, apiKey) {
 // the 24h reminder at 00:06 SG on the appointment day itself.
 // Canonical SG clock lives in utils/date-helpers (v2.2.7) — re-exported
 // below so existing callers/tests keep working.
-const { sgNowParts } = require('../utils/date-helpers');
+const { sgNowParts, formatDateStrDisplay, normalizeTimeStr } = require('../utils/date-helpers');
 
 // 45–75 minute lookahead that survives midnight (00:15 appointment at
 // 23:15 is +60 min, not −1380).
@@ -203,7 +203,7 @@ async function send1hReminders() {
     const message = REMINDER_MESSAGES['1h'](
       apt.customer_name,
       apt.service,
-      apt.appointment_time
+      normalizeTimeStr(apt.appointment_time)
     );
 
     const sent = await sendWhatsAppMessage(
@@ -287,8 +287,8 @@ async function sendApprovalConfirmation(appointmentId) {
   const message = REMINDER_MESSAGES['approval'](
     apt.customer_name,
     apt.service,
-    apt.appointment_date,
-    apt.appointment_time
+    formatDateStrDisplay(apt.appointment_date),
+    normalizeTimeStr(apt.appointment_time)
   );
 
   return await sendWhatsAppMessage(
