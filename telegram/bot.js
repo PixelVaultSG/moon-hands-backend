@@ -29,6 +29,11 @@ const { RateLimiter, sanitizeInput, processIncomingMessage } = require('../middl
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 const ADMIN_CHAT_ID = process.env.TELEGRAM_ADMIN_CHAT_ID;
 
+// v2.2.9: this module previously exported NOTHING — jobs doing
+// require('../telegram/bot').bot got undefined and crashed at send time
+// (daily summary, attendance checks, weekly-loop reports never sent).
+module.exports = { bot };
+
 // ─── SECURITY LAYER ──────────────────────────────────────────────
 
 const rateLimiter = new RateLimiter();
@@ -1404,7 +1409,12 @@ bot.hears('📋 My Bookings', safeHandler('📋 My Bookings', async (ctx) => {
     .slice(0, 8)
     .map(b => ([
       { text: `✅ Approve ${String(b.appointment_date).slice(5)} ${String(b.appointment_time).slice(0, 5)} ${String(b.customer_name || '').slice(0, 12)}`, callback_data: `approve_${b.id}` },
-      { text: '❌ Reject', callback_data: `reject_${b.id}` }
+      { text: '❌ Reject', callback_data: `reject_${b.id}` },
+      // v2.2.9: suggest-alternative reachable even when the original
+      // notification was missed — the suggest_alt_ callback handler and
+      // handleClinicSuggestAlternative work off the pendingAlternatives
+      // map, not the notification message.
+      { text: '🔄 Alt time', callback_data: `suggest_alt_${b.id}` }
     ]));
   const confirmedRows = bookings
     .filter(b => b.status === 'confirmed')
@@ -1413,7 +1423,7 @@ bot.hears('📋 My Bookings', safeHandler('📋 My Bookings', async (ctx) => {
       { text: `🗑 Cancel ${String(b.appointment_date).slice(5)} ${String(b.appointment_time).slice(0, 5)} ${String(b.customer_name || '').slice(0, 12)}`, callback_data: `cancelreq_${b.id}` }
     ]));
   const opts = { parse_mode: 'Markdown' };
-  if (pendingRows.length > 0) lines.push('', '⏳ *Pending — tap to action:*');
+  if (pendingRows.length > 0) lines.push('', '⏳ *Pending — approve, reject, or offer another time:*');
   if (confirmedRows.length > 0) lines.push('', '🗑 *Confirmed — tap to cancel:*');
   const allRows = [...pendingRows, ...confirmedRows];
   if (allRows.length > 0) {

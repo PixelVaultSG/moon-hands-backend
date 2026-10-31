@@ -24,6 +24,7 @@
 
 require('dotenv').config();
 const { supabase } = require('../supabase/client');
+const { isPremium } = require('../utils/plan-gate');
 const { getTodaySG } = require('../utils/date-helpers');
 
 // ─── CONFIGURATION ───────────────────────────────────────────────
@@ -69,7 +70,7 @@ async function runWeeklyOptimizationLoop() {
     // Get all active clinics on Premium plan (operating_hours is in client_configs)
     const { data: clinics, error } = await supabase
       .from('clients')
-      .select('id, slug, name, plan, telegram_chat_ids, status, client_configs(operating_hours)')
+      .select('id, slug, name, plan, payment_status, telegram_chat_ids, status, client_configs(operating_hours)')
       .eq('status', 'active')
       .eq('plan', 'premium');
     
@@ -78,10 +79,18 @@ async function runWeeklyOptimizationLoop() {
       return;
     }
     
-    if (!clinics || clinics.length === 0) {
+    // v2.2.9: central plan gate adds the payment_status guard on top of
+    // the DB filter — a premium clinic flagged past_due is skipped here.
+    const entitled = (clinics || []).filter(isPremium);
+    if (entitled.length === 0) {
       console.log('[WEEKLY_LOOP] No Premium clinics found — skipping');
       return;
     }
+    if (entitled.length < clinics.length) {
+      console.log(`[WEEKLY_LOOP] Plan gate: skipped ${clinics.length - entitled.length} clinic(s) with billing flags`);
+    }
+    clinics.length = 0;
+    clinics.push(...entitled);
     
     console.log(`[WEEKLY_LOOP] Analyzing ${clinics.length} Premium clinic(s)`);
     
