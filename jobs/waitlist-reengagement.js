@@ -14,6 +14,7 @@
 require('dotenv').config();
 const { supabase } = require('../supabase/client');
 const { getTodaySG } = require('../utils/date-helpers');
+const { getPremiumClientIds } = require('../utils/plan-gate');
 
 const CONFIG = {
   CHECK_INTERVAL_MS: 15 * 60 * 1000, // 15 minutes
@@ -47,9 +48,22 @@ async function runWaitlistCheck() {
     }
     console.log(`[WAITLIST] Found ${freedSlots.length} freed slot(s)`);
 
+    // v2.2.9: Waitlist Auto-Fill is a Premium-tier feature. Filter freed
+    // slots to entitled clinics BEFORE any patient is notified — a
+    // downgrade (plan flip) stops outreach on the very next tick.
+    const premiumIds = await getPremiumClientIds(supabase);
+    const gatedSlots = freedSlots.filter(s => premiumIds.has(s.client_id));
+    if (gatedSlots.length < freedSlots.length) {
+      console.log(`[WAITLIST] Plan gate: skipped ${freedSlots.length - gatedSlots.length} freed slot(s) from non-Premium clinic(s)`);
+    }
+    if (gatedSlots.length === 0) {
+      console.log('[WAITLIST] All freed slots gated out (non-Premium clinics)');
+      return;
+    }
+
     // Step 2: For each freed slot, find matching waitlist entries
     let notificationsSent = 0;
-    for (const slot of freedSlots) {
+    for (const slot of gatedSlots) {
       const matches = await findMatchingWaitlistEntries(slot);
       for (const entry of matches.slice(0, 3)) { // Max 3 per slot
         const sent = await sendWaitlistNotification(slot, entry);
