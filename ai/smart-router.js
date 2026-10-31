@@ -390,7 +390,12 @@ async function routeMessage(message, clinicConfig, patientPhone = null, conversa
     const categoryServices = services.filter(s => getCategory(s) === catId);
     
     if (categoryServices.length > 0) {
+      // v2.3.1: preserve any date/time already collected — browsing a
+      // category mid-flow must not wipe them.
+      const { getState: _getStateCat } = require('./conversation-state');
+      const priorCat = _getStateCat(patientPhone)?.data || {};
       setState(patientPhone, BOOKING_STATES.AWAITING_TREATMENT, {
+        ...priorCat,
         category: catId,
         categoryServices: categoryServices.map(s => s.name)
       });
@@ -864,7 +869,8 @@ async function startBookingFlow(message, clinicConfig, patientPhone, conversatio
         return await buildConfirmationResponse(clinicConfig, patientPhone, fields.date, fields.time, treatmentNames, startTime);
       }
       setState(patientPhone, BOOKING_STATES.AWAITING_TREATMENT, { date: fields.date, time: fields.time });
-      return { text: `Great, ${fields.date} at ${fields.time} works. Which treatment are you looking for?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+      const { formatDateStrDisplay: _fmtD1 } = require('../utils/date-helpers');
+      return { text: `Great, ${_fmtD1(fields.date)} at ${fields.time} works. Which treatment are you looking for?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
     }
     if (primaryTreatment) {
       setState(patientPhone, BOOKING_STATES.AWAITING_TIME, { date: fields.date, treatment: primaryTreatment, treatments: treatmentNames });
@@ -885,10 +891,10 @@ async function startBookingFlow(message, clinicConfig, patientPhone, conversatio
       } catch (availErr) {
         console.error(`[START_BOOKING] getAvailableSlots error: ${availErr.message}`);
       }
-      return { text: `${fields.date} noted ✓ What time would you prefer?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+      return { text: `${require('../utils/date-helpers').formatDateStrDisplay(fields.date)} noted ✓ What time would you prefer?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
     }
     setState(patientPhone, BOOKING_STATES.AWAITING_TIME, { date: fields.date });
-    return { text: `${fields.date} noted ✓ What time would you prefer?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+    return { text: `${require('../utils/date-helpers').formatDateStrDisplay(fields.date)} noted ✓ What time would you prefer?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
   }
 
   if (fields.time) {
@@ -922,25 +928,12 @@ async function startBookingFlow(message, clinicConfig, patientPhone, conversatio
     return { text: `${treatmentNames.length > 1 ? treatmentNames.join(' + ') : primaryTreatment} — lovely choice! Which date works for you? (e.g., 'next Tuesday' or 'July 15')`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
   }
 
-  // No fields extracted — ask for date with button options
-  setState(patientPhone, BOOKING_STATES.AWAITING_DATE, {});
-  try {
-    const { getNextAvailableDates } = require('./availability-engine');
-    const { getDateButtonOptions } = require('./whatsapp-interactive');
-    const dateOptions = await getNextAvailableDates(clinicConfig.id, [], clinicConfig, 3);
-    if (dateOptions.length > 0) {
-      return {
-        text: 'Sure! When would you like to come in?',
-        source: 'hardcoded',
-        cost_saved: 1,
-        latency_ms: Date.now() - startTime,
-        whatsappInteractive: getDateButtonOptions(dateOptions)
-      };
-    }
-  } catch (availErr) {
-    console.error(`[START_BOOKING] getNextAvailableDates error (no treatment): ${availErr.message}`);
-  }
-  return { text: "Sure! What date works for you? (e.g., 'next Tuesday' or 'July 15')", source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+  // No fields extracted — v2.3.1: SERVICE FIRST, then date, then time.
+  // (Previously date-first: duration was unknown at date selection, so time
+  // slots couldn't be offered as buttons and the flow felt disjointed.)
+  setState(patientPhone, BOOKING_STATES.SELECTING_CATEGORY, {});
+  const catEntry = showCategorySelection(clinicConfig, startTime);
+  return { ...catEntry, intents: ['booking_request'] };
 }
 
 // ─── OPENING HOURS VALIDATION ────────────────────────────────────
@@ -2303,10 +2296,35 @@ async function startConsultQuickBook(clinicConfig, patientPhone, conversationHis
   const svc = findConsultService(clinicConfig.config);
   if (!svc) return showCategorySelection(clinicConfig, startTime);
   const treatmentNames = [svc.name];
-  setState(patientPhone, BOOKING_STATES.AWAITING_DATE, {
-    treatment: svc.name, treatments: treatmentNames, selectedTreatments: treatmentNames
-  });
+  // v2.3.1: NEVER discard what the patient already told us. Previously this
+  // overwrote state with treatment-only — a patient who had given date+time
+  // was asked for the date again (Ash's UVT Feedback 1).
+  const { getState: _getStateQC } = require('./conversation-state');
+  const prior = _getStateQC(patientPhone)?.data || {};
+  const merged = { ...prior, treatment: svc.name, treatments: treatmentNames, selectedTreatments: treatmentNames };
   const base = { source: 'hardcoded', intents: ['quick_book_consultation'], cost_saved: 1, latency_ms: Date.now() - startTime };
+  if (merged.date && merged.time) {
+    setState(patientPhone, BOOKING_STATES.AWAITING_CONFIRMATION, merged);
+    const conf = await buildConfirmationResponse(clinicConfig, patientPhone, merged.date, merged.time, treatmentNames, startTime);
+    return { ...conf, intents: ['quick_book_consultation'] };
+  }
+  if (merged.date && !merged.time) {
+    setState(patientPhone, BOOKING_STATES.AWAITING_TIME, merged);
+    try {
+      const { getAvailableSlots } = require('./availability-engine');
+      const { getTimeSlotButtons } = require('./whatsapp-interactive');
+      const avail = await getAvailableSlots(clinicConfig.id, merged.date, treatmentNames, clinicConfig);
+      if (avail.available && avail.slots.length > 0) {
+        return { ...base,
+          text: `Great — ${svc.name} it is. Here are available times on ${merged.date}:\n🕐 ${avail.operatingHours}`,
+          whatsappInteractive: getTimeSlotButtons(avail.slots, avail.operatingHours) };
+      }
+    } catch (e) {
+      console.error(`[QUICK_CONSULT] getAvailableSlots error: ${e.message}`);
+    }
+    return { ...base, text: `Great — ${svc.name} it is. What time on ${merged.date} works for you?` };
+  }
+  setState(patientPhone, BOOKING_STATES.AWAITING_DATE, merged);
   const priceBit = [svc.price, svc.duration ? `${svc.duration} min` : null].filter(Boolean).join(', ');
   try {
     const { getNextAvailableDates } = require('./availability-engine');
