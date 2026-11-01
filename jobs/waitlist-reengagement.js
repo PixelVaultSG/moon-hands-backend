@@ -160,20 +160,20 @@ async function sendWaitlistNotification(freedSlot, waitlistEntry) {
     const clinicName = clinic?.name || 'our clinic';
     const patientName = waitlistEntry.customer_name || 'there';
 
-    // v2.3.0: Ash's spec — auto-fill must CONFIRM with the patient first.
-    // Buttons: YES → pending booking (clinic still approves); NO → removed
-    // from waitlist. Plain text remains as fallback for old clients.
-    const message = `Hi ${patientName}! 🎉\n\n` +
-      `A slot has just opened up at ${clinicName}:\n` +
-      `• Service: ${freedSlot.service}\n` +
-      `• Date: ${formatDate(freedSlot.appointment_date)}\n` +
-      `• Time: ${formatTime(freedSlot.appointment_time)}\n\n` +
-      `Are you available for this slot? Tap a button below (or reply YES / NO).`;
+    // v2.3.3: reformatted template (Ash — "it looks ugly"). Emoji-led rows,
+    // bold clinic name, urgency line. Buttons: YES → pending booking (clinic
+    // still approves); NO → removed from waitlist. Plain-text fallback kept.
+    const message = `🎉 Good news, ${patientName}!\n\n` +
+      `A slot just opened at *${clinicName}*:\n\n` +
+      `💆 ${freedSlot.service}\n` +
+      `📅 ${formatDate(freedSlot.appointment_date)}\n` +
+      `🕐 ${formatTime(freedSlot.appointment_time)}\n\n` +
+      `Want me to grab it for you? First come, first served — tap below (or reply YES / NO).`;
 
     const { buildQuickReplyButtons } = require('../ai/whatsapp-interactive');
     const buttons = buildQuickReplyButtons({
       body: message,
-      footer: 'Yes books a request — the clinic still confirms it',
+      footer: '✅ Yes = booking request — the clinic still confirms',
       buttons: [
         { id: `wl_yes_${waitlistEntry.id}`, title: '✅ Yes, book it' },
         { id: `wl_no_${waitlistEntry.id}`, title: '❌ Not now' },
@@ -182,8 +182,8 @@ async function sendWaitlistNotification(freedSlot, waitlistEntry) {
 
     let sent = await sendWhatsAppInteractive(waitlistEntry.customer_phone, buttons);
     if (!sent) {
-      const textFallback = message.replace('Tap a button below (or reply YES / NO).',
-        'Reply *YES* to book this slot, or *NO* to leave the waitlist.');
+      const textFallback = message.replace('tap below (or reply YES / NO).',
+        'reply *YES* to book this slot, or *NO* to leave the waitlist.');
       sent = await sendWhatsAppMessage(waitlistEntry.customer_phone, textFallback);
     }
 

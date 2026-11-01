@@ -880,12 +880,13 @@ async function startBookingFlow(message, clinicConfig, patientPhone, conversatio
         const avail = await getAvailableSlots(clinicConfig.id, fields.date, treatmentNames, clinicConfig);
         if (avail.available && avail.slots.length > 0) {
           const { getTimeSlotButtons } = require('./whatsapp-interactive');
+          const bodyTxt = `Here are available times on ${fields.date}:${windowsLineFor(avail.slots, treatmentNames, clinicConfig.config?.services || clinicConfig.services) || `\n🕐 ${avail.operatingHours}`}`;
           return {
-            text: `Here are available times on ${fields.date}:\n🕐 ${avail.operatingHours}`,
+            text: bodyTxt,
             source: 'hardcoded',
             cost_saved: 1,
             latency_ms: Date.now() - startTime,
-            whatsappInteractive: getTimeSlotButtons(avail.slots, avail.operatingHours)
+            whatsappInteractive: getTimeSlotButtons(avail.slots, avail.operatingHours, bodyTxt)
           };
         }
       } catch (availErr) {
@@ -982,6 +983,41 @@ function totalDurationFor(treatmentNames, services) {
     sum += parseInt(svc?.duration) || 60;
   }
   return sum;
+}
+
+/**
+ * One-line, duration-aware summary of the day's bookable windows (v2.3.3,
+ * [BOTH]). getAvailableSlots slots are already duration-aware, so the windows
+ * only cover starts where the FULL session fits — replacing the old bare
+ * "🕐 09:00 – 19:00" header that showed clinic hours, not real openings.
+ */
+function windowsLineFor(slots, treatmentNames, services) {
+  const { compactSlotWindows } = require('./availability-engine');
+  const wins = compactSlotWindows(slots, 4);
+  if (wins.length === 0) return '';
+  const dur = totalDurationFor(treatmentNames, services);
+  const durTxt = dur > 0 ? ` (${dur} min)` : '';
+  return `\n🕐 Openings${durTxt}: ${wins.join(' · ')}`;
+}
+
+/** True when the waitlist feature is on for this clinic (config flag wins, column fallback). */
+function waitlistEnabledFor(clinicConfig) {
+  return !!(clinicConfig?.config?.booking_waitlist_enabled ?? clinicConfig?.booking_waitlist_enabled);
+}
+
+/** Waitlist escape hatch appended to dead-end availability messages (v2.3.3, [BOTH]). */
+function waitlistHintFor(clinicConfig) {
+  return waitlistEnabledFor(clinicConfig)
+    ? `\n\n💡 Rather wait for this slot? Reply *waitlist me* and I'll WhatsApp you if it opens.`
+    : '';
+}
+
+/** 'HH:MM' → 'h:MM AM/PM' (matches the time-button labels). */
+function fmtSlot12(t) {
+  const [h, m] = String(t).split(':').map(Number);
+  const ap = h >= 12 ? 'PM' : 'AM';
+  const dh = h > 12 ? h - 12 : (h === 0 ? 12 : h);
+  return `${dh}:${String(m).padStart(2, '0')} ${ap}`;
 }
 
 function validateBookingTime(dateStr, timeStr, operatingHours, durationMin = 0) {
@@ -1145,7 +1181,8 @@ async function rePromptSuspendedState(clinicConfig, patientPhone, suspended, sta
         const treatmentNames = d.treatments || (d.treatment ? [d.treatment] : []);
         const avail = await getAvailableSlots(clinicConfig.id, d.date, treatmentNames, clinicConfig);
         if (avail.available && avail.slots.length > 0) {
-          return { ...base, text: `${prefix}Here are available times on ${d.date}:\n🕐 ${avail.operatingHours}`, whatsappInteractive: getTimeSlotButtons(avail.slots, avail.operatingHours) };
+          const wlBody = `${prefix}Here are available times on ${d.date}:${windowsLineFor(avail.slots, treatmentNames, clinicConfig.config?.services || clinicConfig.services) || `\n🕐 ${avail.operatingHours}`}`;
+          return { ...base, text: wlBody, whatsappInteractive: getTimeSlotButtons(avail.slots, avail.operatingHours, wlBody) };
         }
         // Slots disappeared meanwhile — step back to date pick
         setState(patientPhone, BOOKING_STATES.AWAITING_DATE, { date: undefined, time: undefined });
@@ -1494,6 +1531,65 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
       const SYMPTOM_RE = /\b(pain|ache|aching|hurts?|hurting|sore(?:ness)?|stiff(?:ness)?|numb(?:ness)?|tingl(?:e|es|ing)|cramp(?:s|ing)?|spasms?|strain(?:ed)?|sprain(?:ed)?|injur(?:y|ies|ed)|sciatica|migraines?|headaches?|discomfort)\b/i;
       const symptomMatch = SYMPTOM_RE.test(message) ? { intent: 'offtopic_question' } : null;
       const escapeIntent = offTopicMatch || inquiryMatch || compareInfoMatch || symptomMatch;
+      // Waitlist request mid-booking (v2.3.3, Feedback: "replied yes to the
+      // waitlist but conversation seems to break"). Handle DETERMINISTICALLY
+      // with the booking context we already hold: insert the row now (the old
+      // LLM path said "I'll add you!" but re-asked for date/treatment and
+      // never inserted), then offer to resume the parked booking — so a "yes"
+      // reply unambiguously continues the booking. Checked BEFORE the generic
+      // off-topic escape: waitlist phrasing double-fires service_inquiry at
+      // 0.85, which used to steal the message into the LLM + resume-prompt
+      // collision this fix exists to kill.
+      const waitlistMatch = (matchIntents(message, conversationHistory, false) || [])
+        .find(m => m.intent === 'waitlist_request' && m.confidence >= 0.7);
+      if (waitlistMatch) {
+        const suspended = { state: currentState.state, data: { ...(currentState.data || {}) } };
+        const d = suspended.data;
+        const svcNames = (Array.isArray(d.treatments) && d.treatments.length ? d.treatments : (d.treatment ? [d.treatment] : [])).join(' + ');
+        let wlText;
+        if (!waitlistEnabledFor(clinicConfig)) {
+          wlText = `Our waitlist isn't open right now — let's find you a slot instead.`;
+        } else {
+          try {
+            const { supabase } = require('../supabase/client');
+            const { formatDateStrDisplay } = require('../utils/date-helpers');
+            const { data: existing } = await supabase.from('waitlist').select('id, preferred_date')
+              .eq('client_id', clinicConfig.id).eq('customer_phone', patientPhone).eq('status', 'active');
+            const dupe = (existing || []).find(e => (e.preferred_date || null) === (d.date || null));
+            if (!dupe) {
+              const { error: wlErr } = await supabase.from('waitlist').insert({
+                client_id: clinicConfig.id,
+                customer_name: d.name || null,
+                customer_phone: patientPhone,
+                preferred_service: svcNames || null,
+                preferred_date: d.date || null,
+                preferred_time_range: d.time || 'any',
+                status: 'active'
+              });
+              if (wlErr) throw new Error(wlErr.message);
+            }
+            const bits = [];
+            if (d.date) bits.push(formatDateStrDisplay(d.date));
+            if (d.time) bits.push(`around ${d.time}`);
+            if (svcNames) bits.push(svcNames);
+            const forWhat = bits.length ? ` for ${bits.join(' · ')}` : '';
+            wlText = dupe
+              ? `You're already on our waitlist${forWhat} — I'll WhatsApp you the moment a slot opens. 🙌`
+              : `Done — you're on our waitlist${forWhat}. I'll WhatsApp you the moment a slot opens. 🙌`;
+          } catch (wlEx) {
+            console.error(`[BOOKING_FLOW] Waitlist insert failed: ${wlEx.message}`);
+            wlText = `I couldn't add you to the waitlist just now — please try again in a moment.`;
+          }
+        }
+        resetIdle(patientPhone);
+        setState(patientPhone, BOOKING_STATES.AWAITING_RESUME, { suspended });
+        return {
+          text: wlText + buildResumeOffer(suspended),
+          source: 'hardcoded',
+          cost_saved: 1,
+          latency_ms: Date.now() - startTime
+        };
+      }
       if (escapeIntent) {
         console.log(`[BOOKING_FLOW] Off-topic '${escapeIntent.intent}' in state ${currentState.state} — suspending booking, answering, will offer resume`);
         // SUSPEND, don't destroy: answer the question, then offer to pick the
@@ -1549,12 +1645,13 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
             const avail = await getAvailableSlots(clinicConfig.id, offerData.date, offerTreatments, clinicConfig);
             if (avail.available && avail.slots.length > 0) {
               const { getTimeSlotButtons } = require('./whatsapp-interactive');
+              const bodyTxt = `Great! Here are available times on ${offerData.date}:${windowsLineFor(avail.slots, offerTreatments, clinicConfig.config?.services || clinicConfig.services) || `\n🕐 ${avail.operatingHours}`}`;
               return {
-                text: `Great! Here are available times on ${offerData.date}:\n🕐 ${avail.operatingHours}`,
+                text: bodyTxt,
                 source: 'hardcoded',
                 cost_saved: 1,
                 latency_ms: Date.now() - startTime,
-                whatsappInteractive: getTimeSlotButtons(avail.slots, avail.operatingHours)
+                whatsappInteractive: getTimeSlotButtons(avail.slots, avail.operatingHours, bodyTxt)
               };
             }
           } catch (e) {
@@ -1629,7 +1726,7 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
             setState(patientPhone, BOOKING_STATES.AWAITING_TIME, { date: data.date, treatment: existingTreatment, treatments: existingTreatments });
             const { getTimeSlotButtons } = require('./whatsapp-interactive');
             const reasonText = slotRejectReason(data.date, data.time, v) || `Sorry, we're not open at ${data.time} on that day.`;
-            const bodyText = `${reasonText} Here are times that work:`;
+            const bodyText = `${reasonText} Here are times that work:${windowsLineFor(sameDay.slots, existingTreatments, clinicConfig.config?.services || clinicConfig.services)}`;
             return {
               text: bodyText,
               source: 'hardcoded',
@@ -1645,7 +1742,7 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
             setState(patientPhone, BOOKING_STATES.AWAITING_DATE, { treatment: existingTreatment, treatments: existingTreatments });
             const { getDateButtonOptions } = require('./whatsapp-interactive');
             const { formatDateStrDisplay } = require('../utils/date-helpers');
-            const bodyText = `${slotRejectReason(data.date, data.time, v) || `${formatDateStrDisplay(data.date)} is fully booked.`} Here are the next available dates:`;
+            const bodyText = `${slotRejectReason(data.date, data.time, v) || `${formatDateStrDisplay(data.date)} is fully booked.`} Here are the next available dates:${waitlistHintFor(clinicConfig)}`;
             return {
               text: bodyText,
               source: 'hardcoded',
@@ -1686,7 +1783,7 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
         if (avail.available && avail.slots.length > 0) {
           setState(patientPhone, BOOKING_STATES.AWAITING_TIME, { date: data.date, treatment: existingTreatment, treatments: existingTreatments });
           const { getTimeSlotButtons } = require('./whatsapp-interactive');
-          const bodyText = `Here are available times on ${formatDateStrDisplay(data.date)}:\n🕐 ${avail.operatingHours}`;
+          const bodyText = `Here are available times on ${formatDateStrDisplay(data.date)}:${windowsLineFor(avail.slots, existingTreatments, clinicConfig.config?.services || clinicConfig.services) || `\n🕐 ${avail.operatingHours}`}`;
           return {
             text: bodyText,
             source: 'hardcoded',
@@ -1704,7 +1801,7 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
           const { getDateButtonOptions } = require('./whatsapp-interactive');
           const bodyText = isClosedDay
             ? `Sorry, ${avail.reason}. Here are the next available dates:`
-            : `${formatDateStrDisplay(data.date)} is fully booked. Here are the next available dates:`;
+            : `${formatDateStrDisplay(data.date)} is fully booked. Here are the next available dates:${waitlistHintFor(clinicConfig)}`;
           return {
             text: bodyText,
             source: 'hardcoded',
@@ -1714,7 +1811,7 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
           };
         }
         
-        return { text: isClosedDay ? `Sorry, ${avail.reason}.` : `${formatDateStrDisplay(data.date)} is fully booked. Please try another date.`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+        return { text: isClosedDay ? `Sorry, ${avail.reason}.` : `${formatDateStrDisplay(data.date)} is fully booked. Please try another date.${waitlistHintFor(clinicConfig)}`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
       }
       
       setState(patientPhone, BOOKING_STATES.AWAITING_TIME, { date: data.date });
@@ -1753,7 +1850,7 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
             setState(patientPhone, BOOKING_STATES.AWAITING_TIME, { date, treatment: existingTreatment2, treatments: existingTreatments2 });
             const { getTimeSlotButtons } = require('./whatsapp-interactive');
             const reasonText = slotRejectReason(date, data.time, v) || `Sorry, we're not open at ${data.time} on that day.`;
-            const bodyText = `${reasonText} Here are times that work:`;
+            const bodyText = `${reasonText} Here are times that work:${windowsLineFor(sameDay.slots, existingTreatments2, clinicConfig.config?.services || clinicConfig.services)}`;
             return {
               text: bodyText,
               source: 'hardcoded',
@@ -1770,7 +1867,7 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
             setState(patientPhone, BOOKING_STATES.AWAITING_DATE, { treatment: existingTreatment2, treatments: existingTreatments2 });
             const { getDateButtonOptions } = require('./whatsapp-interactive');
             const { formatDateStrDisplay } = require('../utils/date-helpers');
-            const bodyText = `${slotRejectReason(date, data.time, v) || `${formatDateStrDisplay(date)} is fully booked.`} Here are the next available dates:`;
+            const bodyText = `${slotRejectReason(date, data.time, v) || `${formatDateStrDisplay(date)} is fully booked.`} Here are the next available dates:${waitlistHintFor(clinicConfig)}`;
             return {
               text: bodyText,
               source: 'hardcoded',
@@ -1806,7 +1903,7 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
             const closedDay = availCheck?.reason && /closed/i.test(availCheck.reason);
             const bodyText = closedDay
               ? `Sorry, ${availCheck.reason}. Here are the next available dates:`
-              : `${formatDateStrDisplay(date)} is fully booked. Here are the next available dates:`;
+              : `${formatDateStrDisplay(date)} is fully booked. Here are the next available dates:${waitlistHintFor(clinicConfig)}`;
             return {
               text: bodyText,
               source: 'hardcoded',
@@ -1817,7 +1914,7 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
             };
           }
           return {
-            text: `Sorry, ${date} is fully booked. Please choose a different date.`,
+            text: `Sorry, ${date} is fully booked. Please choose a different date.${waitlistHintFor(clinicConfig)}`,
             source: 'hardcoded',
             cost_saved: 1,
             latency_ms: Date.now() - startTime
@@ -1832,7 +1929,10 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
           const sameDay = await findNextSlotsOnDate(clinicConfig.id, date, existingTreatments2, clinicConfig, data.time);
           if (sameDay.found && sameDay.slots.length > 0) {
             const { getTimeSlotButtons } = require('./whatsapp-interactive');
-            const bodyText = `${data.time} is already taken on ${formatDateStrDisplay(date)}. Here are the next available times:`;
+            // v2.3.3: show the FULL day's duration-aware windows (availCheck.slots),
+            // not just the 3 button starts after the requested time — the patient
+            // sees every block that fits before choosing (Ash, item 4).
+            const bodyText = `${data.time} is already taken on ${formatDateStrDisplay(date)}. Here are the next available times:${windowsLineFor(availCheck.slots, existingTreatments2, clinicConfig.config?.services || clinicConfig.services)}${waitlistHintFor(clinicConfig)}`;
             return {
               text: bodyText,
               source: 'hardcoded',
@@ -1848,7 +1948,12 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
           if (nextAvail.found) {
             setState(patientPhone, BOOKING_STATES.AWAITING_DATE, { treatment: existingTreatment2, treatments: existingTreatments2 });
             const { getDateButtonOptions } = require('./whatsapp-interactive');
-            const bodyText = `${formatDateStrDisplay(date)} is fully booked after ${data.time}. Here are the next available dates:`;
+            // v2.3.3: name the last start that still fits TODAY (Ash: "I asked
+            // 5pm, no later slots — what does the bot recommend?") + waitlist out.
+            const lastFit = (availCheck.slots && availCheck.slots.length > 0)
+              ? `\nLast start today that fits: *${fmtSlot12(availCheck.slots[availCheck.slots.length - 1])}*.`
+              : '';
+            const bodyText = `${formatDateStrDisplay(date)} is fully booked after ${data.time}.${lastFit} Here are the next available dates:${waitlistHintFor(clinicConfig)}`;
             return {
               text: bodyText,
               source: 'hardcoded',
@@ -1861,7 +1966,7 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
 
           // Fallback if no alternatives found
           return {
-            text: `Sorry, ${data.time} on ${date} is no longer available. Please choose a different time.`,
+            text: `Sorry, ${data.time} on ${date} is no longer available. Please choose a different time.${waitlistHintFor(clinicConfig)}`,
             source: 'hardcoded',
             cost_saved: 1,
             latency_ms: Date.now() - startTime
@@ -2141,13 +2246,14 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
           const avail = await getAvailableSlots(clinicConfig.id, date, [editData.treatment], clinicConfig);
           const slots = avail.slots || [];
           const label = avail.operatingHours || '';
+          const editBody = `What time works better for you?${windowsLineFor(slots, [editData.treatment], clinicConfig.config?.services || clinicConfig.services)}`;
           return {
-            text: `What time works better for you?`,
+            text: editBody,
             source: 'hardcoded',
             intents: ['time_change'],
             cost_saved: 1,
             latency_ms: Date.now() - startTime,
-            whatsappInteractive: getTimeSlotButtons(slots, label)
+            whatsappInteractive: getTimeSlotButtons(slots, label, editBody)
           };
         } catch (err) {
           console.error(`[EDITING_BOOKING] getAvailableSlots error: ${err.message}`);
@@ -2351,9 +2457,10 @@ async function startConsultQuickBook(clinicConfig, patientPhone, conversationHis
       const { getTimeSlotButtons } = require('./whatsapp-interactive');
       const avail = await getAvailableSlots(clinicConfig.id, merged.date, treatmentNames, clinicConfig);
       if (avail.available && avail.slots.length > 0) {
+        const qcBody = `Great — ${svc.name} it is. Here are available times on ${merged.date}:${windowsLineFor(avail.slots, treatmentNames, clinicConfig.config?.services || clinicConfig.services) || `\n🕐 ${avail.operatingHours}`}`;
         return { ...base,
-          text: `Great — ${svc.name} it is. Here are available times on ${merged.date}:\n🕐 ${avail.operatingHours}`,
-          whatsappInteractive: getTimeSlotButtons(avail.slots, avail.operatingHours) };
+          text: qcBody,
+          whatsappInteractive: getTimeSlotButtons(avail.slots, avail.operatingHours, qcBody) };
       }
     } catch (e) {
       console.error(`[QUICK_CONSULT] getAvailableSlots error: ${e.message}`);
@@ -2635,27 +2742,18 @@ async function attemptBooking(clinicConfig, patientPhone, fields, conversationHi
     if (result.success) {
       resetIdle(patientPhone);
       const multiNote = matchedServices.length > 1 ? ` (${totalDuration}mins total)` : '';
-      const calendarId = clinicConfig.config?.google_calendar_id || clinicConfig.google_calendar_id;
-      const clinicId = clinicConfig.id || 'unknown';
-      const hasCalendar = !!(calendarId && isCalendarHealthy(clinicId));
-      const confirmationMsg = hasCalendar 
-        ? `The clinic will confirm within 30 minutes.` 
-        : `This is subject to clinic confirmation and they'll get back to you shortly.`;
-      
-      // Generate booking reference for calendar CTA
+      // v2.3.3 (Ash, calendar-sync feedback): the booking is still PENDING
+      // clinic approval here — say so honestly, and do NOT attach the
+      // "Add to Calendar" button. The calendar CTA now goes out with the
+      // post-approval confirmation (sendApprovalConfirmation), so an
+      // unapproved booking never lands in the patient's calendar.
       const bookingRef = result.bookingId || result.id || `PX-${Date.now().toString(36).toUpperCase()}`;
-      const baseUrl = process.env.WEBHOOK_BASE_URL || 'https://moon-hands-backend.onrender.com';
-      const icsUrl = `${baseUrl}/calendar-event/${bookingRef}?date=${fields.date}&time=${fields.time}&treatment=${encodeURIComponent(serviceNames)}&clinic=${encodeURIComponent(clinicConfig.name)}&duration=${totalDuration}`;
-      
-      const { getCalendarCTAButtons } = require('./whatsapp-interactive');
-      
       const priceLine = priceText ? `\n💰 ${priceText}${priceSum.isRange ? ' (final price confirmed at the clinic)' : ''}` : '';
       return {
-        text: `✅ Booking confirmed!\n\n👤 ${patientName}\n📱 +${String(patientPhone).replace(/^\+/, '')}\n💆 ${serviceNames}${multiNote}\n📅 ${fields.date}\n🕐 ${fields.time}${priceLine}\n\n${confirmationMsg}\n\nRef: ${bookingRef}`,
+        text: `✅ Booking request received!\n\n👤 ${patientName}\n📱 +${String(patientPhone).replace(/^\+/, '')}\n💆 ${serviceNames}${multiNote}\n📅 ${fields.date}\n🕐 ${fields.time}${priceLine}\n\n⏳ The clinic will confirm within 30 minutes — your calendar invite arrives with the confirmation.\n\nRef: ${bookingRef}`,
         source: 'hardcoded',
         cost_saved: 0.5,
         latency_ms: Date.now() - startTime,
-        whatsappInteractive: getCalendarCTAButtons(bookingRef, icsUrl),
         followUp: {
           text: `Need to reschedule? Just let us know. We recommend arriving 10 minutes early.`,
           delayMs: 2000
