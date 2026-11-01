@@ -11,6 +11,7 @@
 
 const db = require('../../supabase/client');
 const { sendApprovalConfirmation } = require('../../jobs/reminders');
+const { formatDateStrDisplay, normalizeTimeStr } = require('../../utils/date-helpers');
 
 // ─── AUTHORIZATION HELPERS ───────────────────────────────────────
 // Every approval command MUST verify the user is authorized for
@@ -314,6 +315,20 @@ async function handleApproveById(appointmentId, adminChatId) {
       return { success: false, error: 'Not authorized for this clinic' };
     }
 
+    // Idempotency guard (v2.3.3, Feedback 3): a double-tap or Telegram webhook
+    // redelivery must not re-sync the calendar or re-notify the patient. Only
+    // pending-ish bookings are approvable — anything else was already handled.
+    if (!['pending', 'pending_approval', 'pending_alternative', 'booked'].includes(booking.status)) {
+      console.log(`[APPROVALS] Approve ignored — booking ${appointmentId} is already '${booking.status}'`);
+      return {
+        success: false, alreadyProcessed: true, status: booking.status,
+        error: `Booking is already ${booking.status}`,
+        patientName: booking.customer_name,
+        displayDate: formatDateStrDisplay(booking.appointment_date),
+        displayTime: normalizeTimeStr(booking.appointment_time)
+      };
+    }
+
     // Update to confirmed
     console.log(`[APPROVALS] Updating booking ${appointmentId} to confirmed...`);
     const { error: updateErr } = await db.supabase
@@ -378,6 +393,8 @@ async function handleApproveById(appointmentId, adminChatId) {
       patientName: booking.customer_name,
       date: booking.appointment_date,
       time: booking.appointment_time,
+      displayDate: formatDateStrDisplay(booking.appointment_date),
+      displayTime: normalizeTimeStr(booking.appointment_time),
       treatment: booking.service,
       calendarSynced,
       patientNotified,
@@ -413,6 +430,22 @@ async function handleRejectById(appointmentId, adminChatId) {
       return { success: false, error: 'Not authorized for this clinic' };
     }
 
+    // Idempotency guard (v2.3.3, Feedback 3): a double-tap or Telegram webhook
+    // redelivery must not re-notify the patient. Only pending-ish bookings are
+    // rejectable — a confirmed booking needs 🗑 Cancel instead.
+    if (!['pending', 'pending_approval', 'pending_alternative', 'booked'].includes(booking.status)) {
+      console.log(`[APPROVALS] Reject ignored — booking ${appointmentId} is already '${booking.status}'`);
+      return {
+        success: false, alreadyProcessed: true, status: booking.status,
+        error: booking.status === 'confirmed'
+          ? 'Booking is already confirmed — use 🗑 Cancel instead'
+          : `Booking is already ${booking.status}`,
+        patientName: booking.customer_name,
+        displayDate: formatDateStrDisplay(booking.appointment_date),
+        displayTime: normalizeTimeStr(booking.appointment_time)
+      };
+    }
+
     // Update to cancelled
     console.log(`[APPROVALS] Updating booking ${appointmentId} to cancelled...`);
     const { error: updateErr } = await db.supabase
@@ -430,9 +463,11 @@ async function handleRejectById(appointmentId, adminChatId) {
     let patientNotified = false;
     try {
       const { sendWhatsAppMessage } = require('../../jobs/reminders');
+      // v2.3.3: patient-facing date/time formatted ("Wed, 4 Nov 2026 at
+      // 6:00 PM") — raw DB values ("2026-11-04 at 18:00:00") leaked before.
       patientNotified = (await sendWhatsAppMessage(
         booking.customer_phone,
-        `Hi ${booking.customer_name}, we regret to inform you that your ${booking.service} appointment for ${booking.appointment_date} at ${booking.appointment_time} cannot be confirmed.\n\nWould you like to reschedule? Reply here with your preferred date and time.`
+        `Hi ${booking.customer_name}, unfortunately your ${booking.service} appointment on ${formatDateStrDisplay(booking.appointment_date)} at ${normalizeTimeStr(booking.appointment_time)} cannot be confirmed.\n\nWould you like to reschedule? Reply here with your preferred date and time.`
       )) === true;
 
       // Set patient state to AWAITING_DATE with treatment preserved for reschedule
@@ -453,6 +488,8 @@ async function handleRejectById(appointmentId, adminChatId) {
       patientName: booking.customer_name,
       date: booking.appointment_date,
       time: booking.appointment_time,
+      displayDate: formatDateStrDisplay(booking.appointment_date),
+      displayTime: normalizeTimeStr(booking.appointment_time),
       treatment: booking.service,
       patientNotified
     };

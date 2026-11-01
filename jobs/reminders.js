@@ -94,6 +94,50 @@ async function sendWhatsAppMessage(phoneNumber, message, apiKey) {
   return false;
 }
 
+// v2.3.3: interactive (button/CTA) sender — same multi-endpoint D360 pattern.
+// Used for the post-approval "Add to Calendar" CTA.
+async function sendWhatsAppInteractive(phoneNumber, interactivePayload, apiKey) {
+  const key = apiKey || process.env.D360_API_KEY;
+  if (!key) {
+    console.error('[REMINDER] No D360_API_KEY available');
+    return false;
+  }
+
+  const payload = {
+    messaging_product: 'whatsapp',
+    recipient_type: 'individual',
+    to: phoneNumber,
+    type: 'interactive',
+    interactive: interactivePayload.interactive
+  };
+
+  for (const endpoint of D360_ENDPOINTS) {
+    try {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'D360-Api-Key': key
+        },
+        body: JSON.stringify(payload)
+      });
+
+      if (response.ok) {
+        console.log(`[REMINDER] Interactive sent via ${endpoint.split('/')[2]}`);
+        return true;
+      }
+
+      const errorText = await response.text();
+      console.warn(`[REMINDER] ${endpoint} interactive failed: ${response.status} ${errorText.substring(0, 100)}`);
+    } catch (err) {
+      console.warn(`[REMINDER] ${endpoint} interactive error: ${err.message}`);
+    }
+  }
+
+  console.error('[REMINDER] All endpoints failed (interactive)');
+  return false;
+}
+
 // ─── SG TIME HELPERS (v2.2.6) ────────────────────────────────────
 // The Render server runs in UTC; appointments live in Asia/Singapore.
 // All reminder math MUST be SG — UTC math fired the 1h reminder 7 hours
@@ -278,7 +322,7 @@ async function send48hFollowups() {
 async function sendApprovalConfirmation(appointmentId) {
   const { data: apt } = await db.supabase
     .from('appointments')
-    .select('*')
+    .select('*, clients(name)')
     .eq('id', appointmentId)
     .single();
 
@@ -291,10 +335,27 @@ async function sendApprovalConfirmation(appointmentId) {
     normalizeTimeStr(apt.appointment_time)
   );
 
-  return await sendWhatsAppMessage(
+  const sent = await sendWhatsAppMessage(
     apt.customer_phone,
     message
   );
+
+  // v2.3.3 (Ash): the "Add to Calendar" CTA fires ONLY now — at clinic
+  // approval — never at patient-request time. Both calendars (patient +
+  // clinic GCal) converge on the same confirmed booking.
+  if (sent) {
+    try {
+      const baseUrl = process.env.WEBHOOK_BASE_URL || 'https://moon-hands-backend.onrender.com';
+      const ref = String(apt.id);
+      const icsUrl = `${baseUrl}/calendar-event/${ref}?date=${apt.appointment_date}&time=${String(apt.appointment_time).slice(0, 5)}&treatment=${encodeURIComponent(apt.service || 'Appointment')}&clinic=${encodeURIComponent(apt.clients?.name || 'Pixel Vault')}&duration=${parseInt(apt.duration) || 60}`;
+      const { getCalendarCTAButtons } = require('../ai/whatsapp-interactive');
+      await sendWhatsAppInteractive(apt.customer_phone, getCalendarCTAButtons(ref, icsUrl));
+    } catch (ctaErr) {
+      console.error('[REMINDER] Calendar CTA send failed (confirmation already sent):', ctaErr.message);
+    }
+  }
+
+  return sent;
 }
 
 // ─── HELPERS ──────────────────────────────────────────────────────

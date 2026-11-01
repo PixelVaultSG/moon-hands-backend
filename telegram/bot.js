@@ -548,22 +548,29 @@ bot.action('menu_resume', safeHandler('menu_resume', async (ctx) => {
 bot.action(/^approve_(.+)$/, safeHandler('approve_btn', async (ctx) => {
   const apptId = ctx.match[1];
   console.log(`[TELEGRAM] Approve button clicked for appointment ${apptId} by user ${ctx.from.id} in chat ${ctx.chat.id}`);
-  
+
+  // v2.3.3 (Feedback 3): ack FIRST — the DB+GCal+WhatsApp work below can
+  // exceed Telegram's callback timeout, and an unacked callback is what
+  // triggers the webhook redelivery that double-fired the patient message.
+  await ctx.answerCbQuery('⏳ Processing…').catch(() => {});
+
   const { handleApproveById } = require('./commands/approvals');
   const result = await handleApproveById(apptId, ctx.chat.id);
-  
+
   if (result.success) {
-    await ctx.answerCbQuery('✅ Approved');
-    await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
+    // Markup removal may fail on redelivery (already edited) — never throw.
+    await ctx.editMessageReplyMarkup({ inline_keyboard: [] }).catch(() => {});
     const notifyLine = result.patientNotified ? '✓ Patient notified' : '⚠️ Patient NOT notified — send confirmation manually';
     const calLine = result.calendarSynced ? '\n✓ Google Calendar synced' : '';
     const overlapLines = (result.overlaps && result.overlaps.length > 0)
       ? '\n\n⚠️ OVERLAP WARNING — this slot now overlaps:\n' + result.overlaps.map(o => `• ${o.time} — ${o.name} (${o.status})`).join('\n') + '\nSuggest an alternative time for this booking.'
       : '';
-    await ctx.reply(`✅ Booking approved for ${result.patientName}\n📅 ${result.date} at ${result.time}\n🩺 ${result.treatment}\n${notifyLine}${calLine}${overlapLines}`);
+    await ctx.reply(`✅ Booking approved for ${result.patientName}\n📅 ${result.displayDate || result.date} at ${result.displayTime || result.time}\n🩺 ${result.treatment}\n${notifyLine}${calLine}${overlapLines}`);
+  } else if (result.alreadyProcessed) {
+    await ctx.editMessageReplyMarkup({ inline_keyboard: [] }).catch(() => {});
+    await ctx.reply(`ℹ️ ${result.patientName ? `${result.patientName} — ` : ''}${result.error}. No action taken.`);
   } else {
     console.error(`[TELEGRAM] Approve failed for ${apptId}: ${result.error}`);
-    await ctx.answerCbQuery('❌ Approval failed', { show_alert: true });
     await ctx.reply(`❌ Failed to approve booking: ${result.error}`);
   }
 }));
@@ -571,18 +578,22 @@ bot.action(/^approve_(.+)$/, safeHandler('approve_btn', async (ctx) => {
 bot.action(/^reject_(.+)$/, safeHandler('reject_btn', async (ctx) => {
   const apptId = ctx.match[1];
   console.log(`[TELEGRAM] Reject button clicked for appointment ${apptId} by user ${ctx.from.id} in chat ${ctx.chat.id}`);
-  
+
+  // v2.3.3 (Feedback 3): ack FIRST — see approve handler.
+  await ctx.answerCbQuery('⏳ Processing…').catch(() => {});
+
   const { handleRejectById } = require('./commands/approvals');
   const result = await handleRejectById(apptId, ctx.chat.id);
-  
+
   if (result.success) {
-    await ctx.answerCbQuery('❌ Rejected');
-    await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
+    await ctx.editMessageReplyMarkup({ inline_keyboard: [] }).catch(() => {});
     const notifyLine = result.patientNotified ? '✓ Patient notified' : '⚠️ Patient NOT notified — inform them manually';
-    await ctx.reply(`❌ Booking rejected for ${result.patientName}\n📅 ${result.date} at ${result.time}\n🩺 ${result.treatment}\n${notifyLine}`);
+    await ctx.reply(`❌ Booking rejected for ${result.patientName}\n📅 ${result.displayDate || result.date} at ${result.displayTime || result.time}\n🩺 ${result.treatment}\n${notifyLine}`);
+  } else if (result.alreadyProcessed) {
+    await ctx.editMessageReplyMarkup({ inline_keyboard: [] }).catch(() => {});
+    await ctx.reply(`ℹ️ ${result.patientName ? `${result.patientName} — ` : ''}${result.error}. No action taken.`);
   } else {
     console.error(`[TELEGRAM] Reject failed for ${apptId}: ${result.error}`);
-    await ctx.answerCbQuery('❌ Rejection failed', { show_alert: true });
     await ctx.reply(`❌ Failed to reject booking: ${result.error}`);
   }
 }));
@@ -603,15 +614,17 @@ bot.action(/^cancelreq_(.+)$/, safeHandler('cancelreq_btn', async (ctx) => {
 
 bot.action(/^cancelgo_(.+)$/, safeHandler('cancelgo_btn', async (ctx) => {
   const apptId = ctx.match[1];
+  // v2.3.3: ack first, and clear the Yes/No confirm buttons afterwards so a
+  // redelivery or second tap can't re-fire the cancel.
+  await ctx.answerCbQuery('⏳ Processing…').catch(() => {});
   const { handleCancelById } = require('./commands/approvals');
   const result = await handleCancelById(apptId, ctx.chat.id);
   if (result.success) {
-    await ctx.answerCbQuery('Cancelled');
+    await ctx.editMessageReplyMarkup({ inline_keyboard: [] }).catch(() => {});
     const notifyLine = result.patientNotified ? '✓ Patient notified on WhatsApp' : '⚠️ Patient NOT notified — inform them manually';
     const calLine = result.calendarDeleted ? '\n✓ Google Calendar event removed' : '';
     await ctx.reply(`🗑 Booking cancelled for ${result.patientName}\n📅 ${result.date} at ${result.time}\n🩺 ${result.treatment}\n${notifyLine}${calLine}`);
   } else {
-    await ctx.answerCbQuery('❌ Cancel failed', { show_alert: true });
     await ctx.reply(`❌ Failed to cancel booking: ${result.error}`);
   }
 }));

@@ -146,7 +146,12 @@ async function getAvailableSlots(clientId, dateStr, treatmentNames, clientConfig
   
   return {
     available: slots.length > 0,
-    slots: slots.slice(0, 8), // Max 8 slots for button display
+    // v2.3.3: no more slice(0,8) here — the cap hid real afternoon/evening
+    // openings from findNextSlotsOnDate and the windows line whenever the
+    // morning was light (a free morning + taken 2pm read as "fully booked
+    // after 2pm"). Presentation layers cap themselves: buttons take 3,
+    // findNextSlotsOnDate takes 6, windows compact to 4.
+    slots,
     reason: slots.length > 0 ? null : `Fully booked on ${dateStr}`,
     operatingHours: `${hours.open_time} – ${hours.close_time}`,
     totalDuration
@@ -462,6 +467,42 @@ async function validateBookingSlot(clientId, dateStr, timeStr, durationMin, clie
   return { ok: true, reason: null, openTime: null, closeTime: null };
 }
 
+/**
+ * Compact a list of 'HH:MM' start slots into human-readable windows
+ * (v2.3.3): ['09:00','09:30','10:00','11:30'] → ['9:00 – 10:00 AM', '11:30 AM'].
+ * A window is a maximal run of consecutive grid starts; the END label is the
+ * LAST VALID START, not the session end. Callers pass duration-aware slots
+ * from getAvailableSlots, so windows only cover starts where the full
+ * session fits. WhatsApp can't list ~20 slots (3 buttons / 10 list rows) —
+ * windows show the whole day at a glance.
+ */
+function compactSlotWindows(slots, maxWindows = 4) {
+  if (!slots || slots.length === 0) return [];
+  const mins = [...new Set(slots.map(minutesFromTime))].sort((a, b) => a - b);
+  // Infer the grid step from the smallest positive gap (default 30 min)
+  let step = 30;
+  for (let i = 1; i < mins.length; i++) {
+    const gap = mins[i] - mins[i - 1];
+    if (gap > 0 && gap < step) step = gap;
+  }
+  const windows = [];
+  let start = mins[0], prev = mins[0];
+  for (let i = 1; i <= mins.length; i++) {
+    if (i === mins.length || mins[i] - prev > step) {
+      windows.push([start, prev]);
+      if (i < mins.length) start = mins[i];
+    }
+    if (i < mins.length) prev = mins[i];
+  }
+  const fmt = (m) => {
+    const h = Math.floor(m / 60), mm = m % 60;
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    const dh = h > 12 ? h - 12 : (h === 0 ? 12 : h);
+    return `${dh}:${String(mm).padStart(2, '0')} ${ampm}`;
+  };
+  return windows.slice(0, maxWindows).map(([a, b]) => (a === b ? fmt(a) : `${fmt(a)} – ${fmt(b)}`));
+}
+
 module.exports = {
   getAvailableSlots,
   getNextAvailableDates,
@@ -469,6 +510,7 @@ module.exports = {
   findNextSlotsOnDate,
   isTimeAvailable,
   validateBookingSlot,
+  compactSlotWindows,
   formatTime,
   formatDate
 };
