@@ -118,31 +118,63 @@ async function sendClinicNotification(clinicId, message, options = {}) {
 
   const sentTo = [];
 
-  // Hardened sender: fetch does NOT throw on HTTP errors, so check
+  // Hardened sender (v2.3.4): fetch does NOT throw on HTTP errors, so check
   // response.ok explicitly — Telegram rejections (bad chat, parse error,
-  // blocked bot) must never be counted as delivered. One retry on failure.
+  // blocked bot) must never be counted as delivered. Up to 3 attempts:
+  //  • 429 → honor Telegram's retry_after (capped 8s — this sender is
+  //    awaited inline in the WhatsApp webhook path, so waits must stay
+  //    bounded). The old fixed 1s retry was exactly wrong for rate limits.
+  //  • 400 "can't parse entities" → retry as PLAIN TEXT (drop parse_mode).
+  //    Patient names are user-controlled: markdown metachars (_, *, [)
+  //    in a name break parsing and used to silently kill the notification.
+  //  • other errors → 1s backoff.
+  const MAX_ATTEMPTS = 3;
+  const RETRY_AFTER_CAP_MS = 8000;
   const sendToChat = async (chatId, text, markup) => {
-    const body = {
-      chat_id: chatId,
-      text,
-      parse_mode: parseMode,
-      disable_web_page_preview: true
+    let plainTextOnly = false;
+    const buildBody = () => {
+      const body = {
+        chat_id: chatId,
+        text,
+        disable_web_page_preview: true
+      };
+      if (!plainTextOnly) body.parse_mode = parseMode;
+      if (markup) body.reply_markup = markup;
+      return body;
     };
-    if (markup) body.reply_markup = markup;
-    for (let attempt = 1; attempt <= 2; attempt++) {
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       try {
         const resp = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body)
+          body: JSON.stringify(buildBody())
         });
-        if (resp.ok) return { ok: true };
+        if (resp.ok) {
+          if (plainTextOnly) console.warn(`[MULTI_CLINIC] ⚠ Sent to ${chatId} as PLAIN TEXT after markdown rejection — check message for metachars`);
+          return { ok: true, plainText: plainTextOnly };
+        }
         const errBody = await resp.text().catch(() => '');
         console.error(`[MULTI_CLINIC] ✗ Telegram rejected send to ${chatId} (HTTP ${resp.status}, attempt ${attempt}):`, errBody.substring(0, 300));
+
+        if (resp.status === 400 && /can'?t parse/i.test(errBody) && !plainTextOnly) {
+          plainTextOnly = true;
+          continue; // retry immediately as plain text
+        }
+        if (resp.status === 429 && attempt < MAX_ATTEMPTS) {
+          let waitMs = 1000;
+          try {
+            const parsed = JSON.parse(errBody);
+            const ra = parsed && parsed.parameters && parsed.parameters.retry_after;
+            if (typeof ra === 'number' && ra > 0) waitMs = Math.min(ra * 1000, RETRY_AFTER_CAP_MS);
+          } catch (_) { /* keep default */ }
+          await new Promise(r => setTimeout(r, waitMs));
+          continue;
+        }
+        if (attempt < MAX_ATTEMPTS) await new Promise(r => setTimeout(r, 1000));
       } catch (err) {
         console.error(`[MULTI_CLINIC] ✗ Send to ${chatId} failed (attempt ${attempt}):`, err.message);
+        if (attempt < MAX_ATTEMPTS) await new Promise(r => setTimeout(r, 1000));
       }
-      if (attempt === 1) await new Promise(r => setTimeout(r, 1000));
     }
     return { ok: false };
   };
