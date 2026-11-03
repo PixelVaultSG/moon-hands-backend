@@ -429,6 +429,19 @@ async function updateBooking({ client_id, appointment_id, date, time, service, d
       } catch (notifyErr) {
         console.error('[FUNCTION] Reschedule notification failed:', notifyErr.message);
       }
+    } else {
+      // v2.3.5: details-only change (name/phone) — schedule untouched, status
+      // stays as-is, but the clinic must SEE it (was a silent write before).
+      const detailsChanged = (name && name !== existing.customer_name)
+        || (phone && phone !== existing.customer_phone);
+      if (detailsChanged) {
+        try {
+          const { notifyBookingDetailsUpdated } = require('../../telegram/booking-notifications');
+          await notifyBookingDetailsUpdated(existing, updated, clinic);
+        } catch (notifyErr) {
+          console.error('[FUNCTION] Details-updated notification failed:', notifyErr.message);
+        }
+      }
     }
 
     return {

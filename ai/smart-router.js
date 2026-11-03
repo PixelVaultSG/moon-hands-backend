@@ -442,6 +442,14 @@ async function routeMessage(message, clinicConfig, patientPhone = null, conversa
     // No editable booking found — fall through to normal handlers
   }
 
+  // v2.3.5: typed detail edits ("edit my handphone number") skip the menu
+  // and go straight to the name/phone prompt, with booking context intact.
+  if (primaryIntent.intent === 'edit_details_request') {
+    const editResponse = await startEditBookingFlow(message, clinicConfig, patientPhone, conversationHistory, startTime, { directNamePhone: true });
+    if (editResponse) return editResponse;
+    // No editable booking found — fall through to normal handlers
+  }
+
   // ── STEP 5: Hardcoded handler ───────────────────────────────────
   try {
     const response = await executeHandler(primaryIntent.intent, {
@@ -512,7 +520,7 @@ async function routeMessage(message, clinicConfig, patientPhone = null, conversa
 // through EDITING_BOOKING → the normal booking states, and attemptBooking
 // UPDATES the row in place when data.editBookingId is present (setState
 // merges, so the edit context survives every state transition).
-async function startEditBookingFlow(message, clinicConfig, patientPhone, conversationHistory, startTime) {
+async function startEditBookingFlow(message, clinicConfig, patientPhone, conversationHistory, startTime, opts = {}) {
   if (!patientPhone) return null;
   try {
     const { supabase } = require('../supabase/client');
@@ -533,7 +541,7 @@ async function startEditBookingFlow(message, clinicConfig, patientPhone, convers
 
     const appt = appts[0];
     const treatments = (appt.service || '').split(' + ').filter(Boolean);
-    setState(patientPhone, BOOKING_STATES.EDITING_BOOKING, {
+    const editStateData = {
       editBookingId: appt.id,
       editOriginal: { date: appt.appointment_date, time: appt.appointment_time, service: appt.service },
       date: appt.appointment_date,
@@ -541,9 +549,26 @@ async function startEditBookingFlow(message, clinicConfig, patientPhone, convers
       treatment: treatments[0] || appt.service,
       treatments: treatments.length > 0 ? treatments : [appt.service],
       name: appt.customer_name,
-    });
+      phone: appt.customer_phone,
+    };
+    const contextLine = `Your next booking is ${formatDateStrDisplay(appt.appointment_date)} at ${normalizeTimeStr(appt.appointment_time)}hrs — ${treatments.join(' + ') || appt.service}.`;
+
+    // v2.3.5: detail-edit phrases ("edit my handphone number") skip the menu —
+    // the patient already told us WHAT they want to change.
+    if (opts.directNamePhone) {
+      setState(patientPhone, BOOKING_STATES.AWAITING_NAMEPHONE, editStateData);
+      return {
+        text: `${contextLine}\n\nPlease provide your updated name and phone number (e.g., "Tom Hands, 81234567") — if only one is changing, just give me that one.`,
+        source: 'hardcoded',
+        intents: ['edit_booking'],
+        cost_saved: 1,
+        latency_ms: Date.now() - startTime
+      };
+    }
+
+    setState(patientPhone, BOOKING_STATES.EDITING_BOOKING, editStateData);
     const { getEditMenuButtons } = require('./whatsapp-interactive');
-    const body = `No problem! Your next booking is ${formatDateStrDisplay(appt.appointment_date)} at ${normalizeTimeStr(appt.appointment_time)}hrs — ${treatments.join(' + ') || appt.service}.\n\nWhat would you like to change?`;
+    const body = `No problem! ${contextLine}\n\nWhat would you like to change?`;
     return {
       text: body,
       source: 'hardcoded',
@@ -2353,6 +2378,16 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
         }
       }
 
+      // v2.3.5: bare single-value replies — the prompt says "if only one is
+      // changing, just give me that one", so a lone phone or lone name must
+      // parse; the untouched field is preserved from booking context below.
+      if (!newPhone && /^\+?\d[\d\s\-().]{5,}\d$/.test(cleanText)) {
+        newPhone = cleanText.replace(/[\s\-().]/g, '');
+      }
+      if (!newName && !newPhone && cleanText.length >= 2 && cleanText.length < 60 && !/^\d+$/.test(cleanText)) {
+        newName = cleanText;
+      }
+
       // If only phone found (no name), preserve existing name
       if (!newName && newPhone && currentState.data?.name) {
         newName = currentState.data.name;
@@ -2676,6 +2711,12 @@ async function attemptBooking(clinicConfig, patientPhone, fields, conversationHi
   if (fields.editBookingId) {
     try {
       const { updateBooking } = require('./expert-system/function-handlers');
+      // v2.3.5: a phone entered in AWAITING_NAMEPHONE is a REAL change request
+      // (approved rule: allow with warning) — previously the sender's own
+      // number was always written back, silently discarding the new one.
+      const senderDigits = String(patientPhone).replace(/\D/g, '');
+      const enteredDigits = fields.phone ? String(fields.phone).replace(/\D/g, '') : '';
+      const phoneChanged = enteredDigits && enteredDigits !== senderDigits;
       const editResult = await updateBooking({
         client_id: clinicConfig.id,
         appointment_id: fields.editBookingId,
@@ -2684,15 +2725,18 @@ async function attemptBooking(clinicConfig, patientPhone, fields, conversationHi
         service: serviceNames,
         duration: totalDuration,
         name: patientName,
-        phone: String(patientPhone).replace(/\D/g, ''),
+        phone: phoneChanged ? enteredDigits : senderDigits,
       });
       if (editResult.success) {
         resetIdle(patientPhone);
         const reconfirm = editResult.changed
           ? `The clinic will review and re-confirm the updated details shortly.`
           : `Your booking details are up to date.`;
+        const phoneWarning = phoneChanged
+          ? `\n\n📱 Heads up: once the clinic verifies it, future confirmations and reminders will go to your new number (${enteredDigits}) — this chat stays on the current one.`
+          : '';
         return {
-          text: `✅ Done — your booking has been updated:\n\n👤 ${patientName}\n💆 ${serviceNames}\n📅 ${fields.date}\n🕐 ${fields.time}\n\n${reconfirm}`,
+          text: `✅ Done — your booking has been updated:\n\n👤 ${patientName}\n💆 ${serviceNames}\n📅 ${fields.date}\n🕐 ${fields.time}\n\n${reconfirm}${phoneWarning}`,
           source: 'hardcoded',
           intents: ['booking_updated'],
           cost_saved: 0.5,

@@ -104,7 +104,48 @@ function normalizeAppointment(a = {}) {
   };
 }
 
-// ─── REAL-TIME BOOKING NOTIFICATIONS ─────────────────────────────
+/**
+ * v2.3.5: clinic heads-up when a patient edits their OWN details
+ * (name / phone) via the WhatsApp edit flow. Schedule/service changes
+ * already notify via notifyBookingRescheduled; details-only changes used
+ * to write silently. The clinic verifies the change — the booking stays
+ * in its current status.
+ */
+async function notifyBookingDetailsUpdated(oldApptRaw, newApptRaw, clinicConfig) {
+  const oldAppt = normalizeAppointment(oldApptRaw);
+  const newAppt = normalizeAppointment(newApptRaw);
+  const clinicId = clinicConfig?.client_id || clinicConfig?.id || clinicConfig?.clinic_id || newAppt.clientId || null;
+
+  const changes = [];
+  if (oldAppt.name !== newAppt.name) changes.push(`👤 Name: ${escapeMarkdown(oldAppt.name)} → *${escapeMarkdown(newAppt.name)}*`);
+  if (oldAppt.phone !== newAppt.phone) changes.push(`📱 Phone: ${escapeMarkdown(oldAppt.phone)} → *${escapeMarkdown(newAppt.phone)}*`);
+  if (changes.length === 0) return; // nothing detail-level changed
+
+  const message = [
+    `✏️ *BOOKING DETAILS UPDATED*`,
+    ``,
+    `🩺 ${escapeMarkdown(newAppt.service)}`,
+    `📅 ${formatDateSG(newAppt.date)} at ${formatTimeSG(newAppt.time)}`,
+    ``,
+    ...changes,
+    ``,
+    newAppt.phone !== oldAppt.phone
+      ? `⚠️ Future patient messages will go to the NEW number. Reply here if this looks wrong.`
+      : `_No schedule change — booking status unchanged._`,
+    ``,
+    `_Updated: ${formatTimeSG(new Date())}_`,
+  ].join('\n');
+
+  // SECURITY: Always use multi-clinic sender
+  if (clinicId) {
+    await sendClinicNotification(clinicId, message);
+  } else {
+    console.warn('[BOOKING_NOTIFY] notifyBookingDetailsUpdated called without clinicId — sending admin-only');
+    await sendAdminOnly(message);
+  }
+}
+
+
 
 /**
  * Send instant notification when a booking is created.
@@ -707,6 +748,7 @@ module.exports = {
   notifyBookingCreated,
   notifyBookingCancelled,
   notifyBookingRescheduled,
+  notifyBookingDetailsUpdated,
   notifyBookingStall,
   resetStallAlertsForTest,
   sendWeeklyRoundup,
