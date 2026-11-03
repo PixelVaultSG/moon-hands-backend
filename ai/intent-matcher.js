@@ -167,8 +167,24 @@ const INTENT_PATTERNS = {
     // v2.2.5: bare "reschedule" with no object ("I need to reschedule") and the
     // "cannot make it" family — both used to fall through to the expert LLM,
     // which chatted and did nothing (prod black hole, 2026-10-29).
-    regex: /\breschedule\b|(?:change|move|shift)\s+(?:my\s+)?(?:appointment|booking|appt|slot)|(?:can\s+i|i\s+(?:want|need)\s+to)\s+(?:change|move)\s+(?:my\s+)?(?:appointment|booking|date|time|slot)|different\s+(?:date|time|day)|can\s*(?:not|'t)\s+make\s+it|won'?t\s+be\s+able\s+to\s+make\s+it|unable\s+to\s+make\s+(?:it|my\s+appointment)/i,
-    keywords: ['reschedule', 'change appointment', 'change my slot', 'move booking', 'shift my', 'cannot make it', "can't make it"],
+    // v2.3.5: tolerate articles ("change THE time and date of my appointment")
+    // and bare date/time/session objects ("change my time") — the most natural
+    // phrasings were slipping to the LLM, which invented a phone-verification
+    // ritual and stalled (prod, 2026-11-02).
+    regex: /\breschedule\b|(?:change|move|shift)\s+(?:(?:my|the|this)\s+)?(?:appointment|booking|appt|slot|date|time|session)|(?:can\s+i|i\s+(?:want|need|would\s+like)\s+to)\s+(?:change|move|shift)\s+(?:(?:my|the|this)\s+)?(?:appointment|booking|date|time|slot|session)|different\s+(?:date|time|day)|can\s*(?:not|'t)\s+make\s+it|won'?t\s+be\s+able\s+to\s+make\s+it|unable\s+to\s+make\s+(?:it|my\s+appointment)/i,
+    keywords: ['reschedule', 'change appointment', 'change my slot', 'move booking', 'shift my', 'cannot make it', "can't make it", 'change the time', 'change the date', 'change my time', 'change my date'],
+    weight: 0.95,
+  },
+
+  edit_details_request: {
+    // "I want to edit my Handphone number", "change my name", "update my contact details"
+    // v2.3.5: typed detail-edit requests used to fall through to the expert LLM,
+    // which punted patients to the clinic's phone number — the same WABA line
+    // they were already texting (prod, 2026-11-02). Routes into the
+    // deterministic edit flow (startEditBookingFlow) instead.
+    // Objects are identity fields ONLY — date/time/slot belong to reschedule_request.
+    regex: /(?:edit|chang\w+|updat\w+|correct\w*)\s+(?:my|the)\s+(?:name|phone|handphone|hp|mobile|contact|number|email|e-mail|address|details?|particulars)\b/i,
+    keywords: ['edit my details', 'change my details', 'update my details', 'change my name', 'change my number', 'edit my number', 'change my phone'],
     weight: 0.95,
   },
   
