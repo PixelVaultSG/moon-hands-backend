@@ -107,11 +107,15 @@ async function sendClinicSummary(clinic, today) {
     );
 
     // Add YES/NO buttons for this appointment
+    // v2.3.6: callback_data is just the appointment UUID. Telegram hard-limits
+    // callback_data to 64 bytes — `appt_yes:{slug|uuid}:{uuid}` was 72-82 bytes,
+    // so Telegram rejected EVERY attendance message with BUTTON_DATA_INVALID and
+    // the feature never worked in prod. `appt_yes:{uuid}` = 45 bytes.
     buttons.push([
-      Markup.button.callback(`✅ ${appt.customer_name} showed up`, `appt_yes:${clinic.slug}:${appt.id}`),
+      Markup.button.callback(`✅ ${appt.customer_name} showed up`, `appt_yes:${appt.id}`),
     ]);
     buttons.push([
-      Markup.button.callback(`❌ ${appt.customer_name} no-show`, `appt_no:${clinic.slug}:${appt.id}`),
+      Markup.button.callback(`❌ ${appt.customer_name} no-show`, `appt_no:${appt.id}`),
     ]);
   });
 
@@ -178,6 +182,10 @@ async function sendPostAppointmentChecks() {
     for (const appt of appointments) {
       try {
         const time = formatTime(appt.appointment_time);
+        // v2.3.6: callback_data is just the appointment UUID (45 bytes) — the
+        // old `appt_yes:{client_uuid}:{uuid}` format was 82 bytes, over
+        // Telegram's 64-byte limit, so every send 400'd silently (caught below,
+        // console-only) and attendance checks NEVER reached the clinic.
         await bot.telegram.sendMessage(chatId,
           `⏰ *Attendance Check*\n\n` +
           `Did *${appt.customer_name}* show up for their *${appt.service}* appointment at *${time}*?\n\n` +
@@ -185,8 +193,8 @@ async function sendPostAppointmentChecks() {
           {
             parse_mode: 'MarkdownV2',
             ...Markup.inlineKeyboard([
-              [Markup.button.callback(`✅ Yes, showed up`, `appt_yes:${appt.client_id}:${appt.id}`)],
-              [Markup.button.callback(`❌ No, no-show`, `appt_no:${appt.client_id}:${appt.id}`)],
+              [Markup.button.callback(`✅ Yes, showed up`, `appt_yes:${appt.id}`)],
+              [Markup.button.callback(`❌ No, no-show`, `appt_no:${appt.id}`)],
             ])
           }
         );

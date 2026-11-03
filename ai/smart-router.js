@@ -2300,7 +2300,8 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
       if (editChoice.includes('name') || editChoice.includes('phone') || editChoice.includes('contact') || editChoice.includes('details') || editChoice === 'edit_namephone') {
         setState(patientPhone, BOOKING_STATES.AWAITING_NAMEPHONE, editData);
         return {
-          text: `Please provide your updated name and phone number (e.g., "Tom Hands, 81234567"):`,
+          // v2.3.6: same copy as the direct edit-details path (line ~561)
+          text: `Please provide your updated name and phone number (e.g., "Tom Hands, 81234567") — if only one is changing, just give me that one.`,
           source: 'hardcoded',
           cost_saved: 1,
           latency_ms: Date.now() - startTime

@@ -1466,9 +1466,10 @@ bot.hears('❓ Help', safeHandler('❓ Help', async (ctx) => {
 // ─── APPOINTMENT ATTENDANCE CALLBACKS ────────────────────────────
 // YES/NO buttons from daily booking summary
 
-bot.action(/^appt_yes:(.+):(.+)$/, safeHandler('appt_yes', async (ctx) => {
-  const slug = ctx.match[1];
-  const apptId = ctx.match[2];
+bot.action(/^appt_yes:([0-9a-f-]{36})$/i, safeHandler('appt_yes', async (ctx) => {
+  // v2.3.6: callback_data is now just the appointment UUID (45 bytes) — the old
+  // two-segment format exceeded Telegram's 64-byte limit and never fired in prod.
+  const apptId = ctx.match[1];
   const { markAppointmentAttendance } = require('../jobs/daily-booking-summary');
 
   await ctx.answerCbQuery('Marking as showed up...');
@@ -1482,9 +1483,9 @@ bot.action(/^appt_yes:(.+):(.+)$/, safeHandler('appt_yes', async (ctx) => {
   }
 }));
 
-bot.action(/^appt_no:(.+):(.+)$/, safeHandler('appt_no', async (ctx) => {
-  const slug = ctx.match[1];
-  const apptId = ctx.match[2];
+bot.action(/^appt_no:([0-9a-f-]{36})$/i, safeHandler('appt_no', async (ctx) => {
+  // v2.3.6: callback_data is now just the appointment UUID (45 bytes).
+  const apptId = ctx.match[1];
   const { markAppointmentAttendance } = require('../jobs/daily-booking-summary');
 
   await ctx.answerCbQuery('Marking as no-show...');

@@ -383,7 +383,13 @@ async function updateBooking({ client_id, appointment_id, date, time, service, d
     const newService = service || existing.service;
     const newDuration = parseInt(duration) || existing.duration || clinic.appointment_duration_minutes || 60;
 
-    const scheduleChanged = newDate !== existing.appointment_date || newTime !== existing.appointment_time;
+    // v2.3.6: compare times normalized to HH:MM on BOTH sides. Postgres returns
+    // appointment_time as 'HH:MM:SS' while callers pass 'HH:MM', so a raw !==
+    // made EVERY details-only edit look like a schedule change — wrongly
+    // re-pending the booking, firing BOOKING RESCHEDULED with identical times,
+    // and skipping the BOOKING DETAILS UPDATED alert.
+    const { normalizeTimeStr: normT } = require('../../utils/date-helpers');
+    const scheduleChanged = newDate !== existing.appointment_date || normT(newTime) !== normT(existing.appointment_time);
     const serviceChanged = newService !== existing.service;
 
     // Validate the new slot — EXCLUDING this booking from the conflict check
