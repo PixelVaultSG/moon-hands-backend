@@ -344,14 +344,11 @@ async function storeWeeklyReport(clientId, report) {
 // ─── TELEGRAM DELIVERY ───────────────────────────────────────────
 
 async function sendTelegramReport(clinic, report) {
-  const bot = require('../telegram/bot').bot;
-  const chatId = process.env.TELEGRAM_ADMIN_CHAT_ID || clinic.telegram_chat_id;
-  
-  if (!chatId) {
-    console.log(`[WEEKLY_LOOP] No chat ID for ${clinic.slug} — skipping Telegram`);
-    return;
-  }
-  
+  // v2.3.7: route to the CLINIC's Telegram chats via the hardened sender
+  // (master admin gets a prefixed copy) — was: admin chat only, so the clinic
+  // never saw the report their attendance data feeds into.
+  const { sendClinicNotification } = require('../telegram/multi-clinic-sender');
+
   // Build the report message
   const lines = [
     `📊 *Weekly AI Optimization Report*`,
@@ -370,7 +367,7 @@ async function sendTelegramReport(clinic, report) {
   if (highPriority.length > 0) {
     lines.push(`*🚨 High Priority Insights:*`);
     highPriority.forEach((insight, i) => {
-      lines.push(`${i + 1}. *${insight.title}*\\n${insight.detail}`);
+      lines.push(`${i + 1}. *${insight.title}*\n${insight.detail}`);
     });
     lines.push('');
   }
@@ -381,19 +378,19 @@ async function sendTelegramReport(clinic, report) {
     lines.push(`*💡 Top Recommendations:*`);
     topSuggestions.forEach((s, i) => {
       const emoji = s.priority >= 8 ? '🔴' : s.priority >= 5 ? '🟡' : '🟢';
-      lines.push(`${emoji} *${s.action}* (Priority: ${s.priority}/10)\\n${s.description}\\n_Impact: ${s.expected_impact}_`);
+      lines.push(`${emoji} *${s.action}* (Priority: ${s.priority}/10)\n${s.description}\n_Impact: ${s.expected_impact}_`);
     });
     lines.push('');
   }
   
   lines.push(`_This is a Premium tier feature. Run every Sunday._`);
-  
-  try {
-    await bot.telegram.sendMessage(chatId, lines.join('\\n'), { parse_mode: 'MarkdownV2' });
-  } catch (mdErr) {
-    // Fallback: strip markdown and retry
-    const plainText = lines.join('\\n').replace(/[*_]/g, '');
-    await bot.telegram.sendMessage(chatId, plainText);
+
+  // v2.3.7: real newlines (was the literal text "\n" between every line) and
+  // Markdown v1 (V2 rejects the unescaped periods/parentheses in this report,
+  // so every send fell back to plain text).
+  const result = await sendClinicNotification(clinic.id, lines.join('\n'), { parseMode: 'Markdown' });
+  if (result.sentTo.length === 0 && !result.adminSent) {
+    console.error(`[WEEKLY_LOOP] ❌ Report for ${clinic.slug} reached NOBODY — check telegram_chat_ids`);
   }
 }
 

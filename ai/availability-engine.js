@@ -90,7 +90,12 @@ async function getAvailableSlots(clientId, dateStr, treatmentNames, clientConfig
   // 4b. Merge Google Calendar busy blocks — appointments the clinic typed
   // straight into their calendar (offline/walk-ins) must also block slots.
   // Fail-open: a GCal outage must never take booking down.
-  const calendarId = clientConfig.config?.google_calendar_id || clientConfig.google_calendar_id;
+  // v2.3.7: bot-engine flattens the clients column to camelCase
+  // `googleCalendarId` — the old read only knew the two snake_case shapes, so
+  // every caller that passed the flattened object silently skipped GCal.
+  const calendarId = clientConfig.config?.google_calendar_id
+    || clientConfig.google_calendar_id
+    || clientConfig.googleCalendarId;
   if (calendarId) {
     try {
       const { getBusyTimes } = require('../server/calendar-service');
@@ -446,7 +451,10 @@ async function validateBookingSlot(clientId, dateStr, timeStr, durationMin, clie
       }));
 
     // Google Calendar busy-merge (offline/walk-in appointments) — fail-open
-    const calendarId = clientConfig?.config?.google_calendar_id || clientConfig?.google_calendar_id;
+    // v2.3.7: accept bot-engine's flattened camelCase shape too (see 4b above).
+    const calendarId = clientConfig?.config?.google_calendar_id
+      || clientConfig?.google_calendar_id
+      || clientConfig?.googleCalendarId;
     if (calendarId) {
       try {
         const { getBusyTimes } = require('../server/calendar-service');

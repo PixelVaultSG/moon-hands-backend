@@ -919,7 +919,11 @@ async function madsGate(messageText, clientConfig, patientPhone, startTime) {
   // v2.2.8: escalation_phone (collected at onboarding, never used) rides on
   // the CLINIC alert. Deliberately NOT in the patient-facing red-flag reply —
   // an emergency must go to A&E/GP, not to the clinic's phone line.
-  const escLine = clientConfig?.escalation_phone ? `\n📞 Escalation contact on file: ${clientConfig.escalation_phone}` : '';
+  // v2.3.7: clients.escalation_phone does not exist as a column — the value
+  // lives in client_configs.config.escalation_phone. The old top-level read
+  // silently evaluated to undefined forever, so the line never rendered.
+  const escPhone = clientConfig?.escalation_phone || clientConfig?.config?.escalation_phone;
+  const escLine = escPhone ? `\n📞 Escalation contact on file: ${escPhone}` : '';
 
   // Pre-layer: regex red-flag detector — free, instant, always first
   const redFlag = detectRedFlag(messageText);
