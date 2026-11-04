@@ -1477,7 +1477,7 @@ bot.action(/^appt_yes:([0-9a-f-]{36})$/i, safeHandler('appt_yes', async (ctx) =>
 
   if (result.success) {
     await ctx.editMessageReplyMarkup({ inline_keyboard: [] }); // Remove buttons
-    await ctx.reply(`✅ ${result.appointment?.customer_name || 'Patient'} marked as *showed up*.\\n\\n_Updated in weekly optimization data._`, { parse_mode: 'Markdown' });
+    await ctx.reply(`✅ ${result.appointment?.customer_name || 'Patient'} marked as *showed up*.\n\n_Updated in weekly optimization data._`, { parse_mode: 'Markdown' });
   } else {
     await ctx.answerCbQuery('Error marking attendance');
   }
@@ -1493,7 +1493,7 @@ bot.action(/^appt_no:([0-9a-f-]{36})$/i, safeHandler('appt_no', async (ctx) => {
 
   if (result.success) {
     await ctx.editMessageReplyMarkup({ inline_keyboard: [] }); // Remove buttons
-    await ctx.reply(`❌ ${result.appointment?.customer_name || 'Patient'} marked as *no-show*.\\n\\n_This will be analyzed in the weekly optimization loop._`, { parse_mode: 'Markdown' });
+    await ctx.reply(`❌ ${result.appointment?.customer_name || 'Patient'} marked as *no-show*.\n\n_This will be analyzed in the weekly optimization loop._`, { parse_mode: 'Markdown' });
   } else {
     await ctx.answerCbQuery('Error marking attendance');
   }

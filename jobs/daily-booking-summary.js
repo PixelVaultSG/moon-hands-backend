@@ -81,10 +81,11 @@ async function sendClinicSummary(clinic, today) {
     return;
   }
 
-  const chatId = process.env.TELEGRAM_ADMIN_CHAT_ID;
-  if (!chatId) return;
-
-  const bot = require('../telegram/bot').bot;
+  // v2.3.7: route to the CLINIC's Telegram chats via the hardened sender
+  // (retry + plain-text fallback + delivery log), with a prefixed observational
+  // copy to Moon Hands master admin. Was: direct sendMessage to
+  // TELEGRAM_ADMIN_CHAT_ID only — a real clinic's front desk never saw this.
+  const { sendClinicNotification } = require('../telegram/multi-clinic-sender');
 
   // Build the message
   const lines = [
@@ -95,7 +96,10 @@ async function sendClinicSummary(clinic, today) {
   ];
 
   // Build inline keyboard with YES/NO buttons per appointment
-  const { Markup } = require('telegraf');
+  // v2.3.6: callback_data is just the appointment UUID. Telegram hard-limits
+  // callback_data to 64 bytes — `appt_yes:{slug|uuid}:{uuid}` was 72-82 bytes,
+  // so Telegram rejected EVERY attendance message with BUTTON_DATA_INVALID and
+  // the feature never worked in prod. `appt_yes:{uuid}` = 45 bytes.
   const buttons = [];
 
   appointments.forEach((appt, i) => {
@@ -106,32 +110,28 @@ async function sendClinicSummary(clinic, today) {
       `   📱 ${appt.customer_phone}\n`
     );
 
-    // Add YES/NO buttons for this appointment
-    // v2.3.6: callback_data is just the appointment UUID. Telegram hard-limits
-    // callback_data to 64 bytes — `appt_yes:{slug|uuid}:{uuid}` was 72-82 bytes,
-    // so Telegram rejected EVERY attendance message with BUTTON_DATA_INVALID and
-    // the feature never worked in prod. `appt_yes:{uuid}` = 45 bytes.
     buttons.push([
-      Markup.button.callback(`✅ ${appt.customer_name} showed up`, `appt_yes:${appt.id}`),
+      { text: `✅ ${appt.customer_name} showed up`, callback_data: `appt_yes:${appt.id}` },
     ]);
     buttons.push([
-      Markup.button.callback(`❌ ${appt.customer_name} no-show`, `appt_no:${appt.id}`),
+      { text: `❌ ${appt.customer_name} no-show`, callback_data: `appt_no:${appt.id}` },
     ]);
   });
 
   lines.push(`\n_Tap a button after each appointment to track attendance._`);
   lines.push(`_This data feeds into your weekly AI optimization report._`);
 
-  try {
-    await bot.telegram.sendMessage(chatId, lines.join('\n'), {
-      parse_mode: 'MarkdownV2',
-      ...Markup.inlineKeyboard(buttons),
-    });
-    console.log(`[DAILY_SUMMARY] ✅ Sent ${appointments.length} appt(s) for ${clinic.slug}`);
-  } catch (mdErr) {
-    // Fallback without markdown
-    const plainText = lines.join('\n').replace(/[*_]/g, '');
-    await bot.telegram.sendMessage(chatId, plainText, Markup.inlineKeyboard(buttons));
+  // Markdown (v1): the summary is full of MarkdownV2-hostile characters —
+  // parentheses in "(DEMO)" / "appointment(s)", periods, hyphens — so V2
+  // rejected every send and clinics always saw the plain fallback.
+  const result = await sendClinicNotification(clinic.id, lines.join('\n'), {
+    parseMode: 'Markdown',
+    replyMarkup: { inline_keyboard: buttons },
+  });
+  if (result.sentTo.length > 0 || result.adminSent) {
+    console.log(`[DAILY_SUMMARY] ✅ Sent ${appointments.length} appt(s) for ${clinic.slug} (staff: ${result.sentTo.length}, admin: ${result.adminSent})`);
+  } else {
+    console.error(`[DAILY_SUMMARY] ❌ Summary for ${clinic.slug} reached NOBODY — check telegram_chat_ids`);
   }
 }
 
@@ -175,9 +175,7 @@ async function sendPostAppointmentChecks() {
     appointments.length = 0;
     appointments.push(...dueAppointments);
 
-    const chatId = process.env.TELEGRAM_ADMIN_CHAT_ID;
-    const bot = require('../telegram/bot').bot;
-    const { Markup } = require('telegraf');
+    const { sendClinicNotification } = require('../telegram/multi-clinic-sender');
 
     for (const appt of appointments) {
       try {
@@ -186,26 +184,33 @@ async function sendPostAppointmentChecks() {
         // old `appt_yes:{client_uuid}:{uuid}` format was 82 bytes, over
         // Telegram's 64-byte limit, so every send 400'd silently (caught below,
         // console-only) and attendance checks NEVER reached the clinic.
-        await bot.telegram.sendMessage(chatId,
+        // v2.3.7: routed to the CLINIC's Telegram chats (was: admin chat only).
+        const result = await sendClinicNotification(appt.client_id,
           `⏰ *Attendance Check*\n\n` +
           `Did *${appt.customer_name}* show up for their *${appt.service}* appointment at *${time}*?\n\n` +
           `Please tap a button:`,
           {
-            parse_mode: 'MarkdownV2',
-            ...Markup.inlineKeyboard([
-              [Markup.button.callback(`✅ Yes, showed up`, `appt_yes:${appt.id}`)],
-              [Markup.button.callback(`❌ No, no-show`, `appt_no:${appt.id}`)],
-            ])
+            parseMode: 'Markdown',
+            replyMarkup: { inline_keyboard: [
+              [{ text: `✅ Yes, showed up`, callback_data: `appt_yes:${appt.id}` }],
+              [{ text: `❌ No, no-show`, callback_data: `appt_no:${appt.id}` }],
+            ] },
           }
         );
 
-        // Mark as checked (so we don't ask again)
-        await supabase
-          .from('appointments')
-          .update({ attendance_checked_at: now.toISOString() })
-          .eq('id', appt.id);
+        // Mark as checked ONLY if delivered to at least one chat — a total
+        // delivery failure must retry on the next tick (still today-only),
+        // and the sender's own security_events entry makes it visible.
+        if (result.sentTo.length > 0 || result.adminSent) {
+          await supabase
+            .from('appointments')
+            .update({ attendance_checked_at: now.toISOString() })
+            .eq('id', appt.id);
 
-        console.log(`[DAILY_SUMMARY] ✅ Sent attendance check for ${appt.customer_name}`);
+          console.log(`[DAILY_SUMMARY] ✅ Sent attendance check for ${appt.customer_name}`);
+        } else {
+          console.error(`[DAILY_SUMMARY] ❌ Attendance check for ${appt.customer_name} reached NOBODY — will retry next tick`);
+        }
       } catch (err) {
         console.error(`[DAILY_SUMMARY] Failed to send check:`, err.message);
       }
