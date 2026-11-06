@@ -160,7 +160,7 @@ const server = http.createServer(async (req, res) => {
     res.end(JSON.stringify({
       status: 'ok',
       service: 'moon-hands',
-      version: '2.3.7',
+      version: '2.3.8',
       webhook: !!webhookHandler,
       telegram: telegramOk,
       calendar: !!process.env.GOOGLE_CALENDAR_KEY,

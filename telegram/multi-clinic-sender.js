@@ -151,7 +151,17 @@ async function sendClinicNotification(clinicId, message, options = {}) {
         });
         if (resp.ok) {
           if (plainTextOnly) console.warn(`[MULTI_CLINIC] ⚠ Sent to ${chatId} as PLAIN TEXT after markdown rejection — check message for metachars`);
-          return { ok: true, plainText: plainTextOnly };
+          // v2.3.8: capture message_id so callers can settle keyboards later
+          // (attendance cross-message sync). Best-effort — a stub/proxy
+          // without a parseable body must never break a successful send.
+          let messageId = null;
+          try {
+            if (typeof resp.json === 'function') {
+              const okBody = await resp.json();
+              messageId = okBody?.result?.message_id ?? null;
+            }
+          } catch (_) { /* capture is best-effort */ }
+          return { ok: true, plainText: plainTextOnly, messageId };
         }
         const errBody = await resp.text().catch(() => '');
         console.error(`[MULTI_CLINIC] ✗ Telegram rejected send to ${chatId} (HTTP ${resp.status}, attempt ${attempt}):`, errBody.substring(0, 300));
@@ -186,9 +196,13 @@ async function sendClinicNotification(clinicId, message, options = {}) {
     ? clinicChats.filter(id => String(id) !== String(adminChatId))
     : clinicChats;
   const failedChats = [];
+  const deliveries = []; // v2.3.8: { chatId, messageId, hasButtons } per delivered message
   for (const chatId of staffChats) {
     const r = await sendToChat(chatId, message, replyMarkup);
-    if (r.ok) sentTo.push(chatId); else failedChats.push(chatId);
+    if (r.ok) {
+      sentTo.push(chatId);
+      deliveries.push({ chatId: String(chatId), messageId: r.messageId ?? null, hasButtons: !!replyMarkup });
+    } else failedChats.push(chatId);
   }
   
   // 2. Send COPY to Moon Hands admin (SECONDARY)
@@ -201,6 +215,7 @@ async function sendClinicNotification(clinicId, message, options = {}) {
       : message;
     const r = await sendToChat(adminChatId, adminMessage, adminNeedsButtons ? replyMarkup : null);
     adminSent = r.ok;
+    if (r.ok) deliveries.push({ chatId: String(adminChatId), messageId: r.messageId ?? null, hasButtons: !!adminNeedsButtons });
   }
 
   // LOUD FAILURE: a notification that reached NOBODY must be queryable,
@@ -241,7 +256,7 @@ async function sendClinicNotification(clinicId, message, options = {}) {
 
 
   console.log(`[MULTI_CLINIC] ✓ Sent to ${sentTo.length} clinic chat(s) + admin: ${adminSent} | Clinic: ${clinicName}`);
-  return { sentTo, adminSent };
+  return { sentTo, adminSent, deliveries };
 }
 
 /**
