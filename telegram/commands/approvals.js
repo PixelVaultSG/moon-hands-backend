@@ -120,9 +120,13 @@ async function handleApprove(bot, msg, args) {
     const booking = bookings[0]; // Most recent
 
     // Update to confirmed
+    // v2.3.9: removed `approved_at` from this update — the column does not
+    // exist in the appointments table, so PostgREST rejected the whole
+    // update and the /approve text command ALWAYS errored out (only the
+    // inline-button path worked). No schema change — just drop the column.
     const { error } = await db.supabase
       .from('appointments')
-      .update({ status: 'confirmed', approved_at: new Date().toISOString() })
+      .update({ status: 'confirmed' })
       .eq('id', booking.id);
 
     if (error) {

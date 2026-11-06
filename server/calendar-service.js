@@ -119,6 +119,41 @@ async function testConnection(calendarId) {
 }
 
 /**
+ * v2.3.9: is this calendar event one that should BLOCK bookings?
+ * - Cancelled events never block.
+ * - transparency:'transparent' ("Show me as: Free") never blocks — Google
+ *   marks birthdays/reminders and many personal entries transparent, and
+ *   real clinics WILL have them on shared calendars. Only "Busy" blocks.
+ * Pure + exported so the harness can pin the policy.
+ */
+function isBlockableEvent(e) {
+    if (!e || e.status === 'cancelled') return false;
+    if (e.transparency === 'transparent') return false;
+    return !!(e.start && (e.start.dateTime || e.start.date));
+}
+
+/**
+ * Convert a busy entry ({start, end} strings, as returned by getBusyTimes)
+ * to SG-minute period. All-day (date-only) entries block the WHOLE day —
+ * v2.3.9 fixes isSlotAvailable previously computing getHours() on midnight
+ * (=0) so all-day events never blocked, and doing the math in SERVER time
+ * (UTC on Render) instead of SG.
+ */
+function busyWindowMinutes(entry) {
+    const start = entry?.start, end = entry?.end;
+    if (!start || !end) return { start: 0, end: 1440 };
+    if (String(start).length <= 10) return { start: 0, end: 1440 }; // all-day
+    const toSgMin = (iso) => {
+        const parts = new Date(iso).toLocaleString('en-US', {
+            timeZone: 'Asia/Singapore', hour12: false, hour: '2-digit', minute: '2-digit'
+        });
+        const [h, m] = parts.split(':').map(Number);
+        return (h === 24 ? 0 : h) * 60 + m;
+    };
+    return { start: toSgMin(start), end: toSgMin(end) };
+}
+
+/**
  * Get busy times for a specific date from a clinic's calendar
  * @param {string} calendarId — Google Calendar ID
  * @param {string} date — ISO date string (YYYY-MM-DD)
@@ -141,7 +176,8 @@ async function getBusyTimes(calendarId, date) {
             maxResults: 100,
         });
 
-        return (data.items || []).map(e => ({
+        // v2.3.9: only blockable events (Busy, not cancelled) make the list
+        return (data.items || []).filter(isBlockableEvent).map(e => ({
             start: e.start?.dateTime || e.start?.date,
             end: e.end?.dateTime || e.end?.date,
             summary: e.summary || 'Busy',
@@ -150,6 +186,43 @@ async function getBusyTimes(calendarId, date) {
         console.error('[Calendar] getBusyTimes error:', err.message);
         return [];
     }
+}
+
+// ─── SG PUBLIC HOLIDAYS (v2.3.9) ─────────────────────────────────
+// Clinics see gazetted holidays in their Google Calendar app via the
+// subscribed "Holidays in Singapore" calendar — but the service account
+// only has access to the clinic's PRIMARY calendar, so those holidays are
+// INVISIBLE to us unless we read the public holiday calendar ourselves.
+// Without this, a patient can book straight onto Deepavali. Fail-open:
+// a holiday-fetch error must not break availability entirely.
+const SG_HOLIDAY_CALENDAR_ID = 'en.singapore#holiday@group.v.calendar.google.com';
+const holidayCache = new Map(); // date -> busy[] (in-memory, per process)
+
+async function getPublicHolidayBusyTimes(date) {
+    if (holidayCache.has(date)) return holidayCache.get(date);
+    let busy = [];
+    if (getAuth()) {
+        try {
+            const tz = 'Asia/Singapore';
+            const { data } = await calendar.events.list({
+                calendarId: SG_HOLIDAY_CALENDAR_ID,
+                timeMin: `${date}T00:00:00+08:00`,
+                timeMax: `${date}T23:59:59+08:00`,
+                singleEvents: true,
+                maxResults: 10,
+            });
+            busy = (data.items || []).filter(isBlockableEvent).map(e => ({
+                start: e.start?.dateTime || e.start?.date,
+                end: e.end?.dateTime || e.end?.date,
+                summary: e.summary || 'Public Holiday',
+            }));
+        } catch (err) {
+            console.error('[Calendar] SG holiday fetch failed (fail-open):', err.message);
+        }
+    }
+    holidayCache.set(date, busy);
+    if (holidayCache.size > 400) holidayCache.delete(holidayCache.keys().next().value);
+    return busy;
 }
 
 /**
@@ -326,12 +399,12 @@ async function isSlotAvailable(calendarId, date, time, durationMinutes = 60) {
     const reqStart = reqH * 60 + reqM;
     const reqEnd = reqStart + durationMinutes;
 
+    // v2.3.9: SG-minute conversion incl. whole-day all-day events (was:
+    // server-local getHours() — UTC on Render — so timed events compared
+    // 8h off and all-day events computed bEnd=0 and NEVER blocked).
     const isBusy = busyTimes.some(b => {
-        const s = new Date(b.start);
-        const e = new Date(b.end);
-        const bStart = s.getHours() * 60 + s.getMinutes();
-        const bEnd = e.getHours() * 60 + e.getMinutes();
-        return reqStart < bEnd && reqEnd > bStart;
+        const period = busyWindowMinutes(b);
+        return reqStart < period.end && reqEnd > period.start;
     });
 
     return !isBusy;
@@ -427,4 +500,9 @@ module.exports = {
     findEventsByPatient,
     getUpcomingAvailability,
     isSlotAvailable,
+    // v2.3.9
+    isBlockableEvent,
+    busyWindowMinutes,
+    getPublicHolidayBusyTimes,
+    SG_HOLIDAY_CALENDAR_ID,
 };

@@ -89,22 +89,8 @@ async function getAvailableSlots(clientId, dateStr, treatmentNames, clientConfig
 
   // 4b. Merge Google Calendar busy blocks — appointments the clinic typed
   // straight into their calendar (offline/walk-ins) must also block slots.
-  // Fail-open: a GCal outage must never take booking down.
-  // v2.3.7: bot-engine flattens the clients column to camelCase
-  // `googleCalendarId` — the old read only knew the two snake_case shapes, so
-  // every caller that passed the flattened object silently skipped GCal.
-  const calendarId = clientConfig.config?.google_calendar_id
-    || clientConfig.google_calendar_id
-    || clientConfig.googleCalendarId;
-  if (calendarId) {
-    try {
-      const { getBusyTimes } = require('../server/calendar-service');
-      const gcalBusy = await getBusyTimes(calendarId, dateStr);
-      for (const ev of (gcalBusy || [])) busyPeriods.push(gcalEventToPeriod(ev));
-    } catch (gcalErr) {
-      console.warn('[AVAILABILITY] GCal busy-merge failed (fail-open):', gcalErr.message);
-    }
-  }
+  // v2.3.9: also merges SG public holidays (see mergeExternalBusy).
+  await mergeExternalBusy(clientConfig, dateStr, busyPeriods);
   
   // 5. Calculate free slots
   const openMin = minutesFromTime(hours.open_time);
@@ -271,6 +257,43 @@ function gcalEventToPeriod(ev) {
   return { start: toSgMin(ev.start), end: toSgMin(ev.end) };
 }
 
+/**
+ * v2.3.9: merge external busy sources into busyPeriods (tagged by source, so
+ * validateBookingSlot can give honest refusal reasons):
+ *  - 'calendar': the clinic's own Google Calendar (offline/walk-ins, doctor's
+ *    out-of-office blocks). Fail-open — a GCal outage must never take booking
+ *    down. Accepts all three calendar-id shapes (v2.3.7 camelCase fix).
+ *  - 'holiday': gazetted SG public holidays, read from Google's public
+ *    holiday calendar. Clinics SEE these in their calendar app via a
+ *    subscribed calendar the service account can't read — without this merge
+ *    patients could book straight onto Deepavali. A clinic that opens on
+ *    public holidays opts out with config.booking_open_on_public_holidays.
+ */
+async function mergeExternalBusy(clientConfig, dateStr, busyPeriods) {
+  const calendarId = clientConfig?.config?.google_calendar_id
+    || clientConfig?.google_calendar_id
+    || clientConfig?.googleCalendarId;
+  if (calendarId) {
+    try {
+      const { getBusyTimes } = require('../server/calendar-service');
+      const gcalBusy = await getBusyTimes(calendarId, dateStr);
+      for (const ev of (gcalBusy || [])) busyPeriods.push({ ...gcalEventToPeriod(ev), source: 'calendar' });
+    } catch (gcalErr) {
+      console.warn('[AVAILABILITY] GCal busy-merge failed (fail-open):', gcalErr.message);
+    }
+  }
+  const opensOnPublicHolidays = clientConfig?.config?.booking_open_on_public_holidays === true;
+  if (!opensOnPublicHolidays) {
+    try {
+      const { getPublicHolidayBusyTimes } = require('../server/calendar-service');
+      const holBusy = await getPublicHolidayBusyTimes(dateStr);
+      for (const ev of (holBusy || [])) busyPeriods.push({ ...gcalEventToPeriod(ev), source: 'holiday', label: ev.summary });
+    } catch (holErr) {
+      console.warn('[AVAILABILITY] SG holiday merge failed (fail-open):', holErr.message);
+    }
+  }
+}
+
 function minutesFromTime(timeStr) {
   const [h, m] = timeStr.split(':').map(Number);
   return h * 60 + m;
@@ -421,6 +444,20 @@ async function validateBookingSlot(clientId, dateStr, timeStr, durationMin, clie
 
   // 4. Conflict check against slot-holding bookings
   if (dateStr && timeStr) {
+    // v2.3.9: min-notice enforced IN THE GATE (was only in slot lists — a
+    // typed time inside the notice window sailed through to confirm).
+    const noticeHours = clientConfig?.config?.booking_min_notice_hours || 2;
+    if (dateStr === getTodaySG()) {
+      const sgNow = new Date().toLocaleString('en-US', {
+        timeZone: 'Asia/Singapore', hour12: false, hour: '2-digit', minute: '2-digit'
+      });
+      const [sgH, sgM] = sgNow.split(':').map(Number);
+      const nowMin = (sgH === 24 ? 0 : sgH) * 60 + sgM;
+      if (minutesFromTime(timeStr) < nowMin + noticeHours * 60) {
+        return { ok: false, reason: `That time is too soon — we need at least ${noticeHours}h notice`, openTime: null, closeTime: null };
+      }
+    }
+
     const { data: existing, error } = await supabase
       .from('appointments')
       .select('id, appointment_time, duration')
@@ -447,27 +484,26 @@ async function validateBookingSlot(clientId, dateStr, timeStr, durationMin, clie
       .filter(b => !(excludeBookingId && b.id === excludeBookingId))
       .map(b => ({
         start: minutesFromTime(b.appointment_time),
-        end: minutesFromTime(b.appointment_time) + (b.duration || 60) + bufferMin
+        end: minutesFromTime(b.appointment_time) + (b.duration || 60) + bufferMin,
+        source: 'db'
       }));
 
-    // Google Calendar busy-merge (offline/walk-in appointments) — fail-open
-    // v2.3.7: accept bot-engine's flattened camelCase shape too (see 4b above).
-    const calendarId = clientConfig?.config?.google_calendar_id
-      || clientConfig?.google_calendar_id
-      || clientConfig?.googleCalendarId;
-    if (calendarId) {
-      try {
-        const { getBusyTimes } = require('../server/calendar-service');
-        const gcalBusy = await getBusyTimes(calendarId, dateStr);
-        for (const ev of (gcalBusy || [])) busyPeriods.push(gcalEventToPeriod(ev));
-      } catch (gcalErr) {
-        console.warn('[AVAILABILITY] GCal busy-merge failed (fail-open):', gcalErr.message);
-      }
-    }
+    // Google Calendar busy-merge (offline/walk-in appointments) — fail-open.
+    // v2.3.9: shared helper also merges SG public holidays, and periods are
+    // source-tagged so the refusal reason says WHAT blocked the slot.
+    await mergeExternalBusy(clientConfig, dateStr, busyPeriods);
 
     for (const b of busyPeriods) {
       if (start < b.end && end > b.start) {
-        return { ok: false, reason: 'That time overlaps an existing booking', openTime: null, closeTime: null };
+        // v2.3.9: honest copy — the old message blamed "an existing booking"
+        // even when the block came from the clinic's own calendar.
+        if (b.source === 'holiday') {
+          return { ok: false, reason: `We're closed${b.label ? ` — ${b.label}` : ''} (public holiday)`, openTime: null, closeTime: null };
+        }
+        if (b.source === 'calendar') {
+          return { ok: false, reason: 'The clinic is unavailable at that time', openTime: null, closeTime: null };
+        }
+        return { ok: false, reason: 'That slot was just taken by another booking', openTime: null, closeTime: null };
       }
     }
   }

@@ -2619,6 +2619,52 @@ async function buildConfirmationResponse(clinicConfig, patientPhone, date, time,
     }
   }
 
+  // ── v2.3.9: SELECTION-TIME GATE ─────────────────────────────────
+  // The moment date+time are known (typed OR tapped), validate BEFORE any
+  // confirm UI renders. Ash's repro: he typed "Tomorrow at 10am" on a day
+  // the date-list had already excluded as fully blocked — the system showed
+  // a Confirm card anyway and only refused when he tapped it. The patient
+  // must be stopped HERE, with working alternatives. Fail-open: the
+  // write-time gates (bot-engine / function-handlers createBooking) still
+  // protect every insert if this check itself errors.
+  try {
+    const { validateBookingSlot, getAvailableSlots, getNextAvailableDates } = require('./availability-engine');
+    const gate = await validateBookingSlot(clinicConfig.id, date, time, totalDuration || 60, clinicConfig);
+    if (!gate.ok) {
+      const failBase = { source: 'hardcoded', intents: ['slot_unavailable'], cost_saved: 1, latency_ms: Date.now() - startTime };
+      const { formatDateStrDisplay: fmtGateDate } = require('../utils/date-helpers');
+      // Same-day alternatives first — the patient wants THIS date.
+      try {
+        const avail = await getAvailableSlots(clinicConfig.id, date, treatments, clinicConfig);
+        if (avail.available && avail.slots.length > 0) {
+          const { getTimeSlotButtons } = require('./whatsapp-interactive');
+          setState(patientPhone, BOOKING_STATES.AWAITING_TIME, { date, treatment: treatments[0], treatments });
+          const bodyTxt = `Sorry — ${gate.reason} on ${fmtGateDate(date)}.${windowsLineFor(avail.slots, treatments, services) || `\n🕐 ${avail.operatingHours}`}\n\nPick a time:`;
+          return { ...failBase, text: bodyTxt, whatsappInteractive: getTimeSlotButtons(avail.slots, avail.operatingHours, bodyTxt) };
+        }
+      } catch (altErr) {
+        console.error('[CONFIRM_GATE] same-day alternatives failed:', altErr.message);
+      }
+      // Whole day is out — offer the next dates that DO have room.
+      try {
+        const { getDateButtonOptions } = require('./whatsapp-interactive');
+        const dateOptions = await getNextAvailableDates(clinicConfig.id, treatments, clinicConfig, 3);
+        setState(patientPhone, BOOKING_STATES.AWAITING_DATE, { treatment: treatments[0], treatments });
+        const txt = `Sorry — ${gate.reason}. Here are the next available dates:`;
+        if (dateOptions.length > 0) {
+          return { ...failBase, text: txt, whatsappInteractive: getDateButtonOptions(dateOptions) };
+        }
+        return { ...failBase, text: `Sorry — ${gate.reason}. Please suggest another date.` };
+      } catch (altErr2) {
+        console.error('[CONFIRM_GATE] next-dates alternatives failed:', altErr2.message);
+        setState(patientPhone, BOOKING_STATES.AWAITING_DATE, { treatment: treatments[0], treatments });
+        return { ...failBase, text: `Sorry — ${gate.reason}. Which other date works for you?` };
+      }
+    }
+  } catch (gateErr) {
+    console.error('[CONFIRM_GATE] selection-time validation failed (fail-open):', gateErr.message);
+  }
+
   // Range-aware total: fixed prices sum to one number, ranges sum to min–max
   const priceSum = sumServicePrices(matched);
   const totalPriceText = priceSum.hasPrice ? formatPriceTotal(priceSum.min, priceSum.max) : undefined;
@@ -2839,39 +2885,10 @@ async function attemptBooking(clinicConfig, patientPhone, fields, conversationHi
   }
 }
 
-// ─── CALENDAR HEALTH TRACKER ─────────────────────────────────────
-// Tracks per-clinic calendar API failures. After 30 minutes of consecutive
-// failures, we fall back to "subject to clinic confirmation" mode.
-const calendarHealthTracker = new Map();
-const CALENDAR_FAILURE_WINDOW_MS = 30 * 60 * 1000; // 30 minutes
-const CALENDAR_API_TIMEOUT_MS = 15 * 1000; // 15 seconds — patient can wait
-
-function recordCalendarFailure(clinicId, error) {
-  const now = Date.now();
-  const record = calendarHealthTracker.get(clinicId) || { firstFailure: now, count: 0, lastError: '' };
-  record.count++;
-  record.lastError = error;
-  calendarHealthTracker.set(clinicId, record);
-  console.log(`[CALENDAR_HEALTH] Clinic ${clinicId}: failure #${record.count}, first at ${new Date(record.firstFailure).toISOString()}`);
-}
-
-function recordCalendarSuccess(clinicId) {
-  calendarHealthTracker.delete(clinicId);
-}
-
-function isCalendarHealthy(clinicId) {
-  const record = calendarHealthTracker.get(clinicId);
-  if (!record) return true; // No failures recorded
-  const elapsed = Date.now() - record.firstFailure;
-  if (elapsed > CALENDAR_FAILURE_WINDOW_MS) {
-    // 30 minutes of failures — mark unhealthy
-    console.log(`[CALENDAR_HEALTH] Clinic ${clinicId}: UNHEALTHY after ${Math.round(elapsed / 60000)}min of failures`);
-    return false;
-  }
-  // Within 30-min window — still try, but log warning
-  console.log(`[CALENDAR_HEALTH] Clinic ${clinicId}: trying despite ${record.count} recent failures`);
-  return true;
-}
+// v2.3.9: the CALENDAR HEALTH TRACKER block that lived here was deleted —
+// its only consumer was the duplicate availability validator in
+// buildBookingSummary, replaced by the unified validateBookingSlot gate
+// (which is fail-open by design and needs no health bookkeeping).
 
 // ─── BOOKING CONFIRMATION SUMMARY ────────────────────────────────
 // Builds a detailed booking summary for patient confirmation.
@@ -2903,59 +2920,34 @@ async function buildBookingSummary(clinicConfig, date, time, treatments, service
     : '';
   const durLine = totalDuration > 0 ? `\n⏱ Total duration: ${totalDuration}mins` : '';
   
-  // ── Calendar availability check ──
+  // ── Availability advisory (v2.3.9: unified gate) ──
+  // Was: a second, divergent validator using calendar-service.isSlotAvailable
+  // — blind to all-day events (bEnd computed as midnight = 0) and comparing
+  // times in server-UTC. Now the SAME gate that protects writes advises here.
   let availabilityNote = '';
   let confirmationNote = '';
-  const calendarId = clinicConfig.config?.google_calendar_id || clinicConfig.google_calendar_id;
   const clinicId = clinicConfig.id || 'unknown';
-  
-  if (!calendarId) {
-    // Clinic has NO Google Calendar — always show "subject to clinic confirmation"
-    confirmationNote = '\n\n⏳ This booking is subject to clinic confirmation.';
-  } else if (!isCalendarHealthy(clinicId)) {
-    // Calendar has been failing for 30+ minutes — fall back
-    confirmationNote = '\n\n⏳ Our calendar sync is temporarily unavailable. This booking is subject to clinic confirmation.';
-  } else {
-    // Clinic HAS calendar and it's healthy — check availability (patient can wait 15s)
-    try {
-      const calendarService = require('../server/calendar-service');
-      const isAvailable = await Promise.race([
-        calendarService.isSlotAvailable(calendarId, date, time, totalDuration),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), CALENDAR_API_TIMEOUT_MS))
-      ]);
-      
-      if (isAvailable) {
-        recordCalendarSuccess(clinicId);
-      } else {
-        // Slot is taken — find 2 alternatives (patient can wait another 15s)
-        const hours = clinicConfig.config?.operating_hours || [];
-        const dayEntry = hours.find(h => {
-          const d = new Date(date + 'T00:00:00+08:00');
-          const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-          return h.day === dayNames[d.getDay()];
-        });
-        
-        if (dayEntry?.isOpen) {
-          const altSlots = await Promise.race([
-            calendarService.getAvailableSlots(calendarId, date, { open: dayEntry.open_time, close: dayEntry.close_time }, totalDuration, 15),
-            new Promise(resolve => setTimeout(() => resolve([]), CALENDAR_API_TIMEOUT_MS))
-          ]);
-          
-          const alternatives = altSlots.slice(0, 2);
-          if (alternatives.length > 0) {
-            const altText = alternatives.map((s, i) => `${i + 1}. ${s.start}`).join('\n');
-            availabilityNote = `\n\n⚠️ That slot is taken. Available alternatives:\n${altText}\n\nReply with the number (1 or 2) or suggest another time.`;
-          } else {
-            availabilityNote = `\n\n⚠️ That slot is taken. Please suggest another time.`;
-          }
+  try {
+    const { validateBookingSlot, getAvailableSlots } = require('./availability-engine');
+    const gate = await validateBookingSlot(clinicId, date, time, totalDuration || 60, clinicConfig);
+    if (!gate.ok) {
+      availabilityNote = `\n\n⚠️ ${gate.reason}.`;
+      try {
+        const avail = await getAvailableSlots(clinicId, date, treatments, clinicConfig);
+        if (avail.available && avail.slots.length > 0) {
+          const altText = avail.slots.slice(0, 2).map((s, i) => `${i + 1}. ${s}`).join('\n');
+          availabilityNote += ` Available that day:\n${altText}\n\nReply with the number (1 or 2) or suggest another time.`;
+        } else {
+          availabilityNote += ` Please suggest another date or time.`;
         }
+      } catch (altErr) {
+        availabilityNote += ` Please suggest another date or time.`;
       }
-    } catch (err) {
-      // Calendar API failed or timed out — record failure but still proceed
-      recordCalendarFailure(clinicId, err.message);
-      console.log(`[BOOKING_SUMMARY] Calendar check failed: ${err.message}. Proceeding with subject-to-confirmation.`);
-      confirmationNote = '\n\n⏳ Checking our calendar... This booking is subject to clinic confirmation.';
     }
+  } catch (err) {
+    // Advisory failed — the write-time gate still protects the insert.
+    console.log(`[BOOKING_SUMMARY] availability advisory failed (fail-open): ${err.message}`);
+    confirmationNote = '\n\n⏳ This booking is subject to clinic confirmation.';
   }
   
   // Multi-treatment warning
