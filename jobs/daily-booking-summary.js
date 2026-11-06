@@ -130,6 +130,12 @@ async function sendClinicSummary(clinic, today) {
   });
   if (result.sentTo.length > 0 || result.adminSent) {
     console.log(`[DAILY_SUMMARY] ✅ Sent ${appointments.length} appt(s) for ${clinic.slug} (staff: ${result.sentTo.length}, admin: ${result.adminSent})`);
+    // v2.3.8: remember which messages carry the summary keyboard so a tap on
+    // ANY attendance button can rebuild every copy (cross-message sync).
+    const refs = (result.deliveries || [])
+      .filter(d => d.hasButtons && d.messageId)
+      .map(d => ({ chatId: d.chatId, messageId: d.messageId }));
+    if (refs.length > 0) await kvSet(`attsum:${clinic.id}:${today}`, { refs });
   } else {
     console.error(`[DAILY_SUMMARY] ❌ Summary for ${clinic.slug} reached NOBODY — check telegram_chat_ids`);
   }
@@ -207,6 +213,13 @@ async function sendPostAppointmentChecks() {
             .update({ attendance_checked_at: now.toISOString() })
             .eq('id', appt.id);
 
+          // v2.3.8: remember which messages carry this check's keyboard so a
+          // tap on ANY copy can settle all of them (cross-message sync).
+          const refs = (result.deliveries || [])
+            .filter(d => d.hasButtons && d.messageId)
+            .map(d => ({ chatId: d.chatId, messageId: d.messageId }));
+          if (refs.length > 0) await kvSet(`attref:${appt.id}`, { refs });
+
           console.log(`[DAILY_SUMMARY] ✅ Sent attendance check for ${appt.customer_name}`);
         } else {
           console.error(`[DAILY_SUMMARY] ❌ Attendance check for ${appt.customer_name} reached NOBODY — will retry next tick`);
@@ -227,8 +240,26 @@ async function sendPostAppointmentChecks() {
  * Called from Telegram callback handler when admin taps YES/NO.
  * Updates the appointment status and logs it.
  */
-async function markAppointmentAttendance(appointmentId, showedUp, markedBy) {
+async function markAppointmentAttendance(appointmentId, showedUp, markedBy, opts = {}) {
   try {
+    // v2.3.8: FIRST TAP WINS. Two live prompts exist per appointment (morning
+    // summary + timed check); before this guard, a second/conflicting tap
+    // silently overwrote the first. A marked appointment stays marked unless
+    // the caller explicitly allows a same-day correction (flipAttendance).
+    const { data: current, error: findErr } = await supabase
+      .from('appointments')
+      .select('id, client_id, appointment_date, customer_name, status, attendance_marked_at')
+      .eq('id', appointmentId)
+      .single();
+    if (findErr || !current) throw findErr || new Error('Appointment not found');
+    if (current.status === 'cancelled') {
+      // Marking a cancelled booking would resurrect it as completed/no_show.
+      return { success: false, error: 'cancelled', appointment: current };
+    }
+    if (current.attendance_marked_at && !opts.allowChange) {
+      return { success: false, alreadyMarked: true, status: current.status, markedAt: current.attendance_marked_at, appointment: current };
+    }
+
     const newStatus = showedUp ? 'completed' : 'no_show';
 
     const { data, error } = await supabase
@@ -245,12 +276,118 @@ async function markAppointmentAttendance(appointmentId, showedUp, markedBy) {
     if (error) throw error;
 
     console.log(`[DAILY_SUMMARY] Appointment ${appointmentId} marked as ${newStatus}`);
-    return { success: true, appointment: data, status: newStatus };
+    return { success: true, appointment: data, status: newStatus, changed: !!current.attendance_marked_at };
 
   } catch (err) {
     console.error(`[DAILY_SUMMARY] Failed to mark attendance:`, err.message);
     return { success: false, error: err.message };
   }
+}
+
+// ─── ATTENDANCE MESSAGE SYNC (v2.3.8) ────────────────────────────
+// The same appointment can have TWO live prompts: the morning summary (one
+// message, multi-appointment keyboard) and the timed post-appointment check.
+// First tap wins; every other prompt must settle so no second tap can flip
+// the record. Message IDs are captured at send time and stored in kv_store
+// (no schema change needed).
+
+async function kvGet(key) {
+  try {
+    const { data } = await supabase.from('kv_store').select('data').eq('key', key).single();
+    return data?.data ?? null;
+  } catch (e) { return null; }
+}
+async function kvSet(key, data) {
+  try { await supabase.from('kv_store').upsert({ key, data }); }
+  catch (e) { console.warn('[ATTENDANCE] kvSet failed:', e.message); }
+}
+async function kvDel(key) {
+  try { await supabase.from('kv_store').delete().eq('key', key); }
+  catch (e) { /* best-effort */ }
+}
+
+// Correction path (b): the settled state IS a button — tapping it within the
+// same SG day re-opens a confirm. `appt_flip:{uuid}` = 46 bytes (limit 64).
+function settledKeyboard(apptId) {
+  return [[{ text: '↩️ Change attendance', callback_data: `appt_flip:${apptId}` }]];
+}
+
+// Rebuild the shared morning-summary keyboard WITHOUT marked appointments,
+// so other patients' buttons stay live after one is settled.
+async function buildSummaryKeyboard(clinicId, date) {
+  const { data: appts } = await supabase
+    .from('appointments')
+    .select('id, customer_name, attendance_marked_at')
+    .eq('client_id', clinicId)
+    .eq('appointment_date', date)
+    .in('status', ['confirmed', 'pending'])
+    .order('appointment_time');
+  const remaining = (appts || []).filter(a => !a.attendance_marked_at);
+  if (remaining.length === 0) return null;
+  const kb = [];
+  for (const a of remaining) {
+    kb.push([{ text: `✅ ${a.customer_name} showed up`, callback_data: `appt_yes:${a.id}` }]);
+    kb.push([{ text: `❌ ${a.customer_name} no-show`, callback_data: `appt_no:${a.id}` }]);
+  }
+  return kb;
+}
+
+/**
+ * Settle every live prompt for an appointment: per-appointment check messages
+ * get the settled (↩️ change) keyboard; the shared morning-summary keyboard is
+ * rebuilt minus this appointment. Returns a Set of "chatId:messageId" edited,
+ * so handlers can settle the tapped message itself if refs missed it.
+ */
+async function syncAttendanceMessages(appt) {
+  const bot = require('../telegram/bot').bot;
+  const edited = new Set();
+  const settled = { inline_keyboard: settledKeyboard(appt.id) };
+
+  const checkRefs = (await kvGet(`attref:${appt.id}`))?.refs || [];
+  for (const r of checkRefs) {
+    try {
+      await bot.telegram.editMessageReplyMarkup(r.chatId, r.messageId, undefined, settled);
+      edited.add(`${r.chatId}:${r.messageId}`);
+    } catch (e) { console.warn('[ATTENDANCE] settle check msg failed:', e.message); }
+  }
+  if (checkRefs.length > 0) await kvDel(`attref:${appt.id}`);
+
+  const sumKey = `attsum:${appt.client_id}:${appt.appointment_date}`;
+  const sumRefs = (await kvGet(sumKey))?.refs || [];
+  if (sumRefs.length > 0) {
+    const remainingKb = await buildSummaryKeyboard(appt.client_id, appt.appointment_date);
+    for (const r of sumRefs) {
+      try {
+        await bot.telegram.editMessageReplyMarkup(r.chatId, r.messageId, undefined, { inline_keyboard: remainingKb || [] });
+        edited.add(`${r.chatId}:${r.messageId}`);
+      } catch (e) { console.warn('[ATTENDANCE] rebuild summary msg failed:', e.message); }
+    }
+    if (!remainingKb) await kvDel(sumKey);
+  }
+  return edited;
+}
+
+async function getAttendanceState(apptId) {
+  const { data } = await supabase
+    .from('appointments')
+    .select('id, client_id, appointment_date, customer_name, status, attendance_marked_at, attendance_marked_by')
+    .eq('id', apptId)
+    .single();
+  return data || null;
+}
+
+/**
+ * Correction path (b): flip an already-marked attendance to its opposite.
+ * Same SG day only — older records feed weekly math and are locked here.
+ */
+async function flipAttendance(apptId, markedBy) {
+  const current = await getAttendanceState(apptId);
+  if (!current) return { success: false, error: 'not_found' };
+  if (!current.attendance_marked_at) return { success: false, error: 'not_marked', appointment: current };
+  if (current.appointment_date !== getTodaySG()) return { success: false, error: 'past_day', appointment: current };
+  const showedUp = current.status !== 'completed'; // completed → no_show, no_show → completed
+  const result = await markAppointmentAttendance(apptId, showedUp, markedBy, { allowChange: true });
+  return { ...result, flippedTo: result.success ? result.status : null };
 }
 
 // ─── UTILITY FUNCTIONS ───────────────────────────────────────────
@@ -305,5 +442,11 @@ module.exports = {
   sendPostAppointmentChecks,
   markAppointmentAttendance,
   startDailySummaryScheduler,
+  // v2.3.8: attendance integrity (cross-message sync + same-day correction)
+  syncAttendanceMessages,
+  settledKeyboard,
+  buildSummaryKeyboard,
+  getAttendanceState,
+  flipAttendance,
   CONFIG,
 };

@@ -1464,7 +1464,25 @@ bot.hears('❓ Help', safeHandler('❓ Help', async (ctx) => {
 }));
 
 // ─── APPOINTMENT ATTENDANCE CALLBACKS ────────────────────────────
-// YES/NO buttons from daily booking summary
+// YES/NO buttons from daily booking summary + post-appointment checks.
+// v2.3.8: FIRST TAP WINS. The same appointment can be prompted twice (morning
+// summary keyboard + timed check) and Ash's screenshots proved both taps used
+// to succeed (last-write-wins → wrong data). Now the second tap is refused,
+// every live copy of the prompt is settled cross-message, and a settled
+// message offers a same-day correction path (appt_flip → confirm → flip).
+
+// Shared post-tap sync: settle every OTHER live prompt for this appointment,
+// and settle the tapped message itself if refs didn't cover it.
+async function settleAfterTap(ctx, appt) {
+  const { syncAttendanceMessages, settledKeyboard } = require('../jobs/daily-booking-summary');
+  const edited = await syncAttendanceMessages(appt);
+  const msgKey = `${ctx.chat.id}:${ctx.callbackQuery?.message?.message_id}`;
+  if (!edited.has(msgKey)) {
+    try {
+      await ctx.editMessageReplyMarkup({ inline_keyboard: settledKeyboard(appt.id) });
+    } catch (e) { /* message may be gone or already settled */ }
+  }
+}
 
 bot.action(/^appt_yes:([0-9a-f-]{36})$/i, safeHandler('appt_yes', async (ctx) => {
   // v2.3.6: callback_data is now just the appointment UUID (45 bytes) — the old
@@ -1472,12 +1490,17 @@ bot.action(/^appt_yes:([0-9a-f-]{36})$/i, safeHandler('appt_yes', async (ctx) =>
   const apptId = ctx.match[1];
   const { markAppointmentAttendance } = require('../jobs/daily-booking-summary');
 
-  await ctx.answerCbQuery('Marking as showed up...');
   const result = await markAppointmentAttendance(apptId, true, ctx.from.id);
 
   if (result.success) {
-    await ctx.editMessageReplyMarkup({ inline_keyboard: [] }); // Remove buttons
+    await ctx.answerCbQuery('Marked as showed up');
+    await settleAfterTap(ctx, { id: apptId, ...result.appointment });
     await ctx.reply(`✅ ${result.appointment?.customer_name || 'Patient'} marked as *showed up*.\n\n_Updated in weekly optimization data._`, { parse_mode: 'Markdown' });
+  } else if (result.alreadyMarked) {
+    await ctx.answerCbQuery(`Already marked as ${result.status === 'completed' ? 'showed up' : result.status} — tap ↩️ Change attendance to correct`, { show_alert: true });
+    await settleAfterTap(ctx, { id: apptId, ...result.appointment });
+  } else if (result.error === 'cancelled') {
+    await ctx.answerCbQuery('This appointment was cancelled — no attendance needed', { show_alert: true });
   } else {
     await ctx.answerCbQuery('Error marking attendance');
   }
@@ -1488,15 +1511,77 @@ bot.action(/^appt_no:([0-9a-f-]{36})$/i, safeHandler('appt_no', async (ctx) => {
   const apptId = ctx.match[1];
   const { markAppointmentAttendance } = require('../jobs/daily-booking-summary');
 
-  await ctx.answerCbQuery('Marking as no-show...');
   const result = await markAppointmentAttendance(apptId, false, ctx.from.id);
 
   if (result.success) {
-    await ctx.editMessageReplyMarkup({ inline_keyboard: [] }); // Remove buttons
+    await ctx.answerCbQuery('Marked as no-show');
+    await settleAfterTap(ctx, { id: apptId, ...result.appointment });
     await ctx.reply(`❌ ${result.appointment?.customer_name || 'Patient'} marked as *no-show*.\n\n_This will be analyzed in the weekly optimization loop._`, { parse_mode: 'Markdown' });
+  } else if (result.alreadyMarked) {
+    await ctx.answerCbQuery(`Already marked as ${result.status === 'completed' ? 'showed up' : result.status} — tap ↩️ Change attendance to correct`, { show_alert: true });
+    await settleAfterTap(ctx, { id: apptId, ...result.appointment });
+  } else if (result.error === 'cancelled') {
+    await ctx.answerCbQuery('This appointment was cancelled — no attendance needed', { show_alert: true });
   } else {
     await ctx.answerCbQuery('Error marking attendance');
   }
+}));
+
+// ─── ATTENDANCE CORRECTION (v2.3.8, path b) ──────────────────────
+// Settled messages carry one "↩️ Change attendance" button. Tapping it the
+// SAME SG day swaps the keyboard for a confirm pair; confirming flips
+// completed ↔ no_show. Past days are locked (weekly math has consumed them).
+
+bot.action(/^appt_flip:([0-9a-f-]{36})$/i, safeHandler('appt_flip', async (ctx) => {
+  const apptId = ctx.match[1];
+  const { getAttendanceState } = require('../jobs/daily-booking-summary');
+  const { getTodaySG } = require('../utils/date-helpers');
+
+  const state = await getAttendanceState(apptId);
+  if (!state || !state.attendance_marked_at) {
+    await ctx.answerCbQuery('Nothing to correct — attendance not marked yet', { show_alert: true });
+    return;
+  }
+  if (state.appointment_date !== getTodaySG()) {
+    await ctx.answerCbQuery('Past-day attendance is locked — contact Pixel Vault support to correct', { show_alert: true });
+    return;
+  }
+  const opposite = state.status === 'completed' ? 'no-show' : 'showed up';
+  // appt_flipgo:{uuid} = 48 bytes, appt_flipcx:{uuid} = 48 bytes (limit 64)
+  await ctx.answerCbQuery();
+  await ctx.editMessageReplyMarkup({ inline_keyboard: [
+    [{ text: `✅ Yes, change to ${opposite}`, callback_data: `appt_flipgo:${apptId}` }],
+    [{ text: '❌ Cancel', callback_data: `appt_flipcx:${apptId}` }],
+  ] });
+}));
+
+bot.action(/^appt_flipgo:([0-9a-f-]{36})$/i, safeHandler('appt_flipgo', async (ctx) => {
+  const apptId = ctx.match[1];
+  const { flipAttendance } = require('../jobs/daily-booking-summary');
+
+  const result = await flipAttendance(apptId, ctx.from.id);
+
+  if (result.success) {
+    await ctx.answerCbQuery('Attendance corrected');
+    await settleAfterTap(ctx, { id: apptId, ...result.appointment });
+    const label = result.flippedTo === 'completed' ? 'showed up' : 'no-show';
+    await ctx.reply(`🔁 ${result.appointment?.customer_name || 'Patient'} attendance corrected to *${label}*.\n\n_Weekly optimization data updated._`, { parse_mode: 'Markdown' });
+  } else if (result.error === 'past_day') {
+    await ctx.answerCbQuery('Past-day attendance is locked', { show_alert: true });
+  } else if (result.error === 'not_marked') {
+    await ctx.answerCbQuery('Nothing to correct — attendance not marked yet', { show_alert: true });
+  } else {
+    await ctx.answerCbQuery('Error correcting attendance');
+  }
+}));
+
+bot.action(/^appt_flipcx:([0-9a-f-]{36})$/i, safeHandler('appt_flipcx', async (ctx) => {
+  const apptId = ctx.match[1];
+  const { settledKeyboard } = require('../jobs/daily-booking-summary');
+  await ctx.answerCbQuery('Kept as-is');
+  try {
+    await ctx.editMessageReplyMarkup({ inline_keyboard: settledKeyboard(apptId) });
+  } catch (e) { /* best-effort */ }
 }));
 
 // ─── CLINIC SELECTION CALLBACKS ──────────────────────────────────
