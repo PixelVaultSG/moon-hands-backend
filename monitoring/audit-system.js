@@ -226,7 +226,21 @@ async function logEvent(event) {
   try {
     const { supabase } = require('../supabase/client');
     const { error } = await supabase.from('audit_log').insert([payload]);
-    if (error) console.error('[AUDIT] Supabase insert failed:', error.message);
+    if (error && error.code === '23514') {
+      // v2.4.0: audit_log has a category CHECK constraint. Unknown categories
+      // (e.g. 'calendar_operation') were rejected and lost — every calendar
+      // audit write has silently failed since the table existed. Fall back to
+      // 'general' and preserve the real category in details.
+      const fallback = {
+        ...payload,
+        category: 'general',
+        details: { ...(payload.details || {}), original_category: payload.category },
+      };
+      const { error: fallbackError } = await supabase.from('audit_log').insert([fallback]);
+      if (fallbackError) console.error('[AUDIT] Supabase insert failed (fallback too):', fallbackError.message);
+    } else if (error) {
+      console.error('[AUDIT] Supabase insert failed:', error.message);
+    }
   } catch (err) {
     console.error('[AUDIT] Failed to persist to Supabase:', err.message);
   }
@@ -266,6 +280,41 @@ async function checkSuspiciousPatterns(event) {
         pattern.severity
       );
     }
+  }
+}
+
+// ─── ADMIN DEGRADATION ALERTS (v2.4.0) ──────────────────────────
+// Fail-open branches (booking gate, calendar merges) must never fail SILENTLY.
+// Throttled: the same alert fires at most once per 15 min per process, so a
+// broken Google API can't spam the admin on every patient message.
+const alertThrottle = new Map();
+const ALERT_THROTTLE_MS = 15 * 60 * 1000;
+
+async function notifyAdmin(message) {
+  const now = Date.now();
+  const key = String(message).slice(0, 80);
+  const last = alertThrottle.get(key) || 0;
+  if (now - last < ALERT_THROTTLE_MS) return false;
+  alertThrottle.set(key, now);
+  if (alertThrottle.size > 200) alertThrottle.delete(alertThrottle.keys().next().value);
+
+  const botToken = process.env.TELEGRAM_BOT_TOKEN;
+  const chatId = process.env.TELEGRAM_ADMIN_CHAT_ID;
+  if (!botToken || !chatId) {
+    console.warn('[ALERT] Telegram admin channel not configured — alert suppressed:', message);
+    return false;
+  }
+  try {
+    // No parse_mode: error messages contain arbitrary characters that break Markdown.
+    await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, text: `🛠 MOON HANDS ALERT\n\n${message}` }),
+    });
+    return true;
+  } catch (err) {
+    console.error('[ALERT] notifyAdmin send failed:', err.message);
+    return false;
   }
 }
 
@@ -444,4 +493,5 @@ module.exports = {
   getDeviceFingerprint,
   classifyActor,
   sendSecurityAlert,
+  notifyAdmin,
 };

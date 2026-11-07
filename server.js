@@ -160,7 +160,7 @@ const server = http.createServer(async (req, res) => {
     res.end(JSON.stringify({
       status: 'ok',
       service: 'moon-hands',
-      version: '2.3.9',
+      version: '2.4.0',
       webhook: !!webhookHandler,
       telegram: telegramOk,
       calendar: !!process.env.GOOGLE_CALENDAR_KEY,
@@ -351,6 +351,42 @@ server.listen(PORT, () => {
   console.log(`  Debug:  GET /debug`);
   console.log(`${'='.repeat(50)}\n`);
 });
+
+// ─── v2.4.0: BOOT CALENDAR CANARY ────────────────────────────────
+// 20s after boot, prove the service account can actually READ every active
+// clinic's calendar + the SG holiday calendar, and Telegram the report.
+// The v2.3.9 prod failure ran for days because calendar reads failed
+// SILENTLY (fail-open, console-only logs). Fully guarded: a canary crash
+// must never take the server down, and it runs once — no interval.
+setTimeout(async () => {
+  try {
+    const { supabase } = require('./supabase/client');
+    const { calendarSelfCheck } = require('./server/calendar-service');
+    const { notifyAdmin } = require('./monitoring/audit-system');
+    const { data: clinics, error } = await supabase
+      .from('clients')
+      .select('id, name, google_calendar_id')
+      .eq('status', 'active');
+    if (error) {
+      await notifyAdmin(`⚠️ Boot calendar canary could not load clinics: ${error.message}`);
+      return;
+    }
+    const report = await calendarSelfCheck(clinics || []);
+    const lines = [`🚀 v2.4.0 boot calendar canary`, ''];
+    for (const c of report.clinics) {
+      lines.push(`${c.ok ? '✅' : '❌'} ${c.name} — ${c.detail}`);
+      if (!c.ok) console.error(`[BOOT_CANARY] ${c.name}: ${c.detail}`);
+    }
+    lines.push(`${report.holiday.ok ? '✅' : '❌'} SG public holidays — ${report.holiday.detail}`);
+    if (!report.holiday.ok) console.error(`[BOOT_CANARY] holidays: ${report.holiday.detail}`);
+    const anyFail = report.clinics.some(c => !c.ok) || !report.holiday.ok;
+    if (anyFail) lines.push('', 'Fix: share the clinic Google Calendar with moon-hands-calendar@moon-hands.iam.gserviceaccount.com ("Make changes to events"), or run /calcheck to re-test.');
+    await notifyAdmin(lines.join('\n'));
+    console.log(`[BOOT_CANARY] done — ${report.clinics.filter(c => c.ok).length}/${report.clinics.length} clinic calendars OK, holidays ${report.holiday.ok ? 'OK' : 'FAIL'}`);
+  } catch (canaryErr) {
+    console.error('[BOOT_CANARY] crashed (non-fatal):', canaryErr.message);
+  }
+}, 20000);
 
 // ─── ENVIRONMENT CHECK (non-blocking) ────────────────────────────
 

@@ -184,6 +184,12 @@ async function getBusyTimes(calendarId, date) {
         }));
     } catch (err) {
         console.error('[Calendar] getBusyTimes error:', err.message);
+        // v2.4.0: fail-open must never be SILENT — a dead calendar read means
+        // the booking gate is running blind for this clinic.
+        try {
+            const { notifyAdmin } = require('../monitoring/audit-system');
+            await notifyAdmin(`⚠️ Booking gate degraded — clinic calendar read FAILED (calendar ${String(calendarId).slice(0, 6)}…) for ${date}: ${err.message}\nCalendar blocks are OFF until this recovers. Check the calendar is shared with the service account ("Make changes to events").`);
+        } catch (_) { /* alerting must never break booking */ }
         return [];
     }
 }
@@ -196,14 +202,26 @@ async function getBusyTimes(calendarId, date) {
 // Without this, a patient can book straight onto Deepavali. Fail-open:
 // a holiday-fetch error must not break availability entirely.
 const SG_HOLIDAY_CALENDAR_ID = 'en.singapore#holiday@group.v.calendar.google.com';
-const holidayCache = new Map(); // date -> busy[] (in-memory, per process)
+const holidayCache = new Map(); // date -> busy[] (SUCCESSFUL fetches only, per process)
 
-async function getPublicHolidayBusyTimes(date) {
-    if (holidayCache.has(date)) return holidayCache.get(date);
+/**
+ * v2.4.0: holiday entries are CLOSURE signals, not personal events. Google's
+ * holiday calendars mark every entry transparency:'transparent' ("Show as:
+ * Free") — applying the clinic-calendar isBlockableEvent policy here silently
+ * filtered out EVERY holiday (v2.3.9 prod bug: Mon 9 Nov 2026, Deepavali
+ * in-lieu, stayed bookable). Only cancelled entries are skipped.
+ */
+function isHolidayEntry(e) {
+    if (!e || e.status === 'cancelled') return false;
+    return !!(e.start && (e.start.dateTime || e.start.date));
+}
+
+async function getPublicHolidayBusyTimes(date, { bypassCache = false } = {}) {
+    if (!bypassCache && holidayCache.has(date)) return holidayCache.get(date);
     let busy = [];
+    let fetchOk = false;
     if (getAuth()) {
         try {
-            const tz = 'Asia/Singapore';
             const { data } = await calendar.events.list({
                 calendarId: SG_HOLIDAY_CALENDAR_ID,
                 timeMin: `${date}T00:00:00+08:00`,
@@ -211,17 +229,33 @@ async function getPublicHolidayBusyTimes(date) {
                 singleEvents: true,
                 maxResults: 10,
             });
-            busy = (data.items || []).filter(isBlockableEvent).map(e => ({
+            busy = (data.items || []).filter(isHolidayEntry).map(e => ({
                 start: e.start?.dateTime || e.start?.date,
                 end: e.end?.dateTime || e.end?.date,
                 summary: e.summary || 'Public Holiday',
             }));
+            fetchOk = true;
+            console.log(`[Calendar] SG holiday fetch OK: ${busy.length} event(s) for ${date}`);
         } catch (err) {
             console.error('[Calendar] SG holiday fetch failed (fail-open):', err.message);
+            try {
+                const { notifyAdmin } = require('../monitoring/audit-system');
+                await notifyAdmin(`⚠️ Booking gate degraded — SG holiday fetch FAILED for ${date}: ${err.message}\nPublic-holiday blocking is OFF until this recovers.`);
+            } catch (_) { /* alerting must never break booking */ }
         }
+    } else {
+        console.error('[Calendar] SG holiday check skipped — no calendar auth (fail-open)');
+        try {
+            const { notifyAdmin } = require('../monitoring/audit-system');
+            await notifyAdmin(`⚠️ Booking gate degraded — calendar auth unavailable; public-holiday blocking is OFF. Check GOOGLE_CALENDAR_KEY.`);
+        } catch (_) { /* alerting must never break booking */ }
     }
-    holidayCache.set(date, busy);
-    if (holidayCache.size > 400) holidayCache.delete(holidayCache.keys().next().value);
+    // v2.4.0: cache SUCCESSFUL fetches only. v2.3.9 cached failures too — one
+    // transient error disabled holiday blocking for the process lifetime.
+    if (fetchOk) {
+        holidayCache.set(date, busy);
+        if (holidayCache.size > 400) holidayCache.delete(holidayCache.keys().next().value);
+    }
     return busy;
 }
 
@@ -487,6 +521,68 @@ async function findEventsByPatient(calendarId, patientPhone, date) {
     }
 }
 
+/**
+ * v2.4.0: LIVE calendar self-check — the post-deploy canary and /calcheck
+ * share this. Never throws; every probe returns its own ok/error so one dead
+ * calendar can't hide another's result. Probes the holiday calendar DIRECTLY
+ * (not getPublicHolidayBusyTimes) — that wrapper fails open, so a dead fetch
+ * would report "OK, 0 events" instead of the real error.
+ * @param {Array<{id:string, name:string, google_calendar_id?:string}>} clinics
+ * @returns {Promise<{clinics: Array<{name:string, ok:boolean, detail:string}>, holiday: {ok:boolean, detail:string}}>}
+ */
+async function calendarSelfCheck(clinics) {
+    const { getTodaySG } = require('../utils/date-helpers');
+    const today = getTodaySG();
+    const result = { clinics: [], holiday: { ok: false, detail: 'not run' } };
+
+    if (!getAuth()) {
+        const msg = 'no calendar auth — GOOGLE_CALENDAR_KEY missing or unparsable';
+        for (const c of (clinics || [])) result.clinics.push({ name: c.name || c.id, ok: false, detail: msg });
+        result.holiday = { ok: false, detail: msg };
+        return result;
+    }
+
+    for (const clinic of (clinics || [])) {
+        const calId = clinic.google_calendar_id;
+        const label = clinic.name || clinic.id;
+        if (!calId) {
+            result.clinics.push({ name: label, ok: false, detail: 'no google_calendar_id configured' });
+            continue;
+        }
+        try {
+            // Direct events.list (not getBusyTimes) so the probe's error is
+            // REAL — getBusyTimes fails open and would mask a 403/404.
+            const { data } = await calendar.events.list({
+                calendarId: calId,
+                timeMin: `${today}T00:00:00+08:00`,
+                timeMax: `${today}T23:59:59+08:00`,
+                singleEvents: true,
+                maxResults: 10,
+            });
+            result.clinics.push({ name: label, ok: true, detail: `read OK — ${(data.items || []).length} event(s) today` });
+        } catch (err) {
+            result.clinics.push({ name: label, ok: false, detail: `read FAILED: ${err.message} — share the calendar with the service account ("Make changes to events")` });
+        }
+    }
+
+    try {
+        // Direct events.list for the same reason as the clinic probes: the
+        // fail-open wrapper would turn a 403/404 into a false "OK, 0 events".
+        const { data } = await calendar.events.list({
+            calendarId: SG_HOLIDAY_CALENDAR_ID,
+            timeMin: `${today}T00:00:00+08:00`,
+            timeMax: `${today}T23:59:59+08:00`,
+            singleEvents: true,
+            maxResults: 10,
+        });
+        const hol = (data.items || []).filter(isHolidayEntry);
+        result.holiday = { ok: true, detail: `read OK — ${hol.length} holiday event(s) today${hol.length ? ` (${hol.map(h => h.summary || 'Public Holiday').join(', ')})` : ''}` };
+    } catch (err) {
+        result.holiday = { ok: false, detail: `read FAILED: ${err.message}` };
+    }
+    return result;
+}
+
 module.exports = {
     getAuth,
     isCalendarEnabled,
@@ -505,4 +601,7 @@ module.exports = {
     busyWindowMinutes,
     getPublicHolidayBusyTimes,
     SG_HOLIDAY_CALENDAR_ID,
+    // v2.4.0
+    isHolidayEntry,
+    calendarSelfCheck,
 };

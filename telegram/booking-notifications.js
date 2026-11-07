@@ -334,7 +334,9 @@ async function sendWeeklyRoundup(clinicConfig, supabase) {
     lines.push(`*${dayName}, ${formatDateSG(date)}*`);
     for (const appt of appts) {
       const statusEmoji = appt.status === 'confirmed' ? '✅' : '⏳';
-      lines.push(`  ${statusEmoji} ${formatTimeSG(appt.appointment_time)} — ${escapeMarkdown(appt.customer_name || '?')} (${escapeMarkdown(appt.service || 'General')})`);
+      // v2.4.0: include the phone — the footer tells staff to "/approve
+      // <phone>", which is impossible when the roundup never shows one.
+      lines.push(`  ${statusEmoji} ${formatTimeSG(appt.appointment_time)} — ${escapeMarkdown(appt.customer_name || '?')} (${escapeMarkdown(appt.service || 'General')}) · ${escapeMarkdown(appt.customer_phone || 'no phone')}`);
     }
     lines.push('');
   }

@@ -561,7 +561,12 @@ bot.action(/^approve_(.+)$/, safeHandler('approve_btn', async (ctx) => {
     // Markup removal may fail on redelivery (already edited) — never throw.
     await ctx.editMessageReplyMarkup({ inline_keyboard: [] }).catch(() => {});
     const notifyLine = result.patientNotified ? '✓ Patient notified' : '⚠️ Patient NOT notified — send confirmation manually';
-    const calLine = result.calendarSynced ? '\n✓ Google Calendar synced' : '';
+    // v2.4.0: NEVER stay silent on calendar-sync failure — the old ''
+    // meant Ash approved a booking that never reached Google Calendar and
+    // nobody knew (prod bug, Nov 7).
+    const calLine = result.calendarSynced
+      ? '\n✓ Google Calendar synced'
+      : '\n⚠️ Google Calendar NOT synced — add the event to the clinic calendar manually';
     const overlapLines = (result.overlaps && result.overlaps.length > 0)
       ? '\n\n⚠️ OVERLAP WARNING — this slot now overlaps:\n' + result.overlaps.map(o => `• ${o.time} — ${o.name} (${o.status})`).join('\n') + '\nSuggest an alternative time for this booking.'
       : '';
@@ -622,7 +627,11 @@ bot.action(/^cancelgo_(.+)$/, safeHandler('cancelgo_btn', async (ctx) => {
   if (result.success) {
     await ctx.editMessageReplyMarkup({ inline_keyboard: [] }).catch(() => {});
     const notifyLine = result.patientNotified ? '✓ Patient notified on WhatsApp' : '⚠️ Patient NOT notified — inform them manually';
-    const calLine = result.calendarDeleted ? '\n✓ Google Calendar event removed' : '';
+    // v2.4.0: a failed calendar delete leaves a STALE event on the clinic
+    // calendar — say so, or the slot looks blocked forever.
+    const calLine = result.calendarDeleted
+      ? '\n✓ Google Calendar event removed'
+      : '\n⚠️ Google Calendar event NOT removed — delete it from the clinic calendar manually';
     await ctx.reply(`🗑 Booking cancelled for ${result.patientName}\n📅 ${result.date} at ${result.time}\n🩺 ${result.treatment}\n${notifyLine}${calLine}`);
   } else {
     await ctx.reply(`❌ Failed to cancel booking: ${result.error}`);
@@ -803,6 +812,34 @@ bot.command('authlog', adminCmd('/authlog', commands.handleAuthLog));
 bot.command('debug', adminCmd('/debug', commands.handleDebug));
 bot.command('testnotify', adminCmd('/testnotify', commands.handleTestNotify));
 bot.command('notiflog', adminCmd('/notiflog', commands.handleNotifLog));
+
+// v2.4.0: /calcheck — on-demand proof that the service account can READ
+// each clinic's calendar + the SG holiday calendar. Calendar-sharing
+// mistakes were fully silent before (zero events synced, gate fail-open,
+// nobody knew — prod bug Nov 7). Plain text: Google error strings break
+// Markdown parse_mode.
+bot.command('calcheck', adminCmd('/calcheck', async (ctx) => {
+  await ctx.reply('🔍 Checking calendar connections…');
+  const { supabase } = require('../supabase/client');
+  const { calendarSelfCheck } = require('../server/calendar-service');
+  const { data: clinics, error } = await supabase
+    .from('clients')
+    .select('id, name, google_calendar_id')
+    .eq('status', 'active');
+  if (error) {
+    return ctx.reply(`❌ Could not load clinics: ${error.message}`);
+  }
+  const report = await calendarSelfCheck(clinics || []);
+  const lines = ['🗓 CALENDAR SELF-CHECK', ''];
+  for (const c of report.clinics) {
+    lines.push(`${c.ok ? '✅' : '❌'} ${c.name} — ${c.detail}`);
+  }
+  lines.push('');
+  lines.push(`${report.holiday.ok ? '✅' : '❌'} SG public holidays — ${report.holiday.detail}`);
+  lines.push('');
+  lines.push('If a clinic fails: share that Google Calendar with moon-hands-calendar@moon-hands.iam.gserviceaccount.com ("Make changes to events"), then rerun /calcheck.');
+  await ctx.reply(lines.join('\n'));
+}));
 
 // ─── ONBOARDING APPROVAL COMMANDS ────────────────────────────────
 // Clinic submits form → onboarding_submissions (status='pending')

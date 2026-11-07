@@ -893,6 +893,23 @@ async function startBookingFlow(message, clinicConfig, patientPhone, conversatio
         });
         return await buildConfirmationResponse(clinicConfig, patientPhone, fields.date, fields.time, treatmentNames, startTime);
       }
+      // v2.4.0: validate the requested slot BEFORE saying it "works" — a
+      // blocked/holiday slot previously got a cheerful confirmation here and
+      // the patient only found out at the confirm card (or never).
+      try {
+        const { validateBookingSlot } = require('./availability-engine');
+        const gate = await validateBookingSlot(clinicConfig.id, fields.date, fields.time, clinicConfig.config?.appointment_duration_minutes || 60, clinicConfig);
+        if (!gate.ok) {
+          console.log(`[START_BOOKING] date+time gate BLOCKED — ${fields.date} ${fields.time}: ${gate.reason}`);
+          return await slotRefusalResponse(clinicConfig, patientPhone, fields.date, fields.time, treatmentNames, gate, startTime);
+        }
+      } catch (gateErr) {
+        console.error('[START_BOOKING] date+time gate failed (fail-open):', gateErr.message);
+        try {
+          const { notifyAdmin } = require('../monitoring/audit-system');
+          await notifyAdmin(`⚠️ Booking gate ERROR (fail-open) — date+time pre-check threw for clinic ${clinicConfig.id} on ${fields.date} ${fields.time}: ${gateErr.message}`);
+        } catch { /* alerting must never break booking */ }
+      }
       setState(patientPhone, BOOKING_STATES.AWAITING_TREATMENT, { date: fields.date, time: fields.time });
       const { formatDateStrDisplay: _fmtD1 } = require('../utils/date-helpers');
       return { text: `Great, ${_fmtD1(fields.date)} at ${fields.time} works. Which treatment are you looking for?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
@@ -914,12 +931,40 @@ async function startBookingFlow(message, clinicConfig, patientPhone, conversatio
             whatsappInteractive: getTimeSlotButtons(avail.slots, avail.operatingHours, bodyTxt)
           };
         }
+        // v2.4.0: day has no room (closed / holiday / blocked / capped) —
+        // refuse honestly with next-date buttons instead of "noted ✓", which
+        // previously invited the patient to type a time into a dead day.
+        console.log(`[START_BOOKING] date gate BLOCKED — ${fields.date}: ${avail.reason || 'no slots'}`);
+        return await slotRefusalResponse(clinicConfig, patientPhone, fields.date, null, treatmentNames,
+          { reason: avail.reason || `${fields.date} is fully booked` }, startTime);
       } catch (availErr) {
         console.error(`[START_BOOKING] getAvailableSlots error: ${availErr.message}`);
+        try {
+          const { notifyAdmin } = require('../monitoring/audit-system');
+          await notifyAdmin(`⚠️ Booking gate ERROR (fail-open) — day-level availability check threw for clinic ${clinicConfig.id} on ${fields.date}: ${availErr.message}`);
+        } catch { /* alerting must never break booking */ }
       }
       return { text: `${require('../utils/date-helpers').formatDateStrDisplay(fields.date)} noted ✓ What time would you prefer?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
     }
+    // v2.4.0: even with no treatment chosen yet, a fully-out day (closed /
+    // holiday / blocked / capped) must be refused HERE, not acknowledged
+    // with "noted ✓" and re-discovered at the confirm card.
     setState(patientPhone, BOOKING_STATES.AWAITING_TIME, { date: fields.date });
+    try {
+      const { getAvailableSlots } = require('./availability-engine');
+      const avail = await getAvailableSlots(clinicConfig.id, fields.date, treatmentNames, clinicConfig);
+      if (!avail.available || avail.slots.length === 0) {
+        console.log(`[START_BOOKING] date-only gate BLOCKED — ${fields.date}: ${avail.reason || 'no slots'}`);
+        return await slotRefusalResponse(clinicConfig, patientPhone, fields.date, null, treatmentNames,
+          { reason: avail.reason || `${fields.date} is fully booked` }, startTime);
+      }
+    } catch (availErr) {
+      console.error(`[START_BOOKING] date-only availability check error (fail-open): ${availErr.message}`);
+      try {
+        const { notifyAdmin } = require('../monitoring/audit-system');
+        await notifyAdmin(`⚠️ Booking gate ERROR (fail-open) — date-only availability check threw for clinic ${clinicConfig.id} on ${fields.date}: ${availErr.message}`);
+      } catch { /* alerting must never break booking */ }
+    }
     return { text: `${require('../utils/date-helpers').formatDateStrDisplay(fields.date)} noted ✓ What time would you prefer?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
   }
 
@@ -1792,6 +1837,23 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
           });
           return await buildConfirmationResponse(clinicConfig, patientPhone, data.date, data.time, existingTreatments, startTime);
         }
+        // v2.4.0: treatment unknown, but the slot itself must be validated
+        // BEFORE we tell the patient it "works" — a holiday/blocked slot used
+        // to sail through here unchallenged.
+        try {
+          const { validateBookingSlot } = require('./availability-engine');
+          const gate = await validateBookingSlot(clinicConfig.id, data.date, data.time, clinicConfig.config?.appointment_duration_minutes || 60, clinicConfig);
+          if (!gate.ok) {
+            console.log(`[AWAITING_DATE] slot gate BLOCKED — ${data.date} ${data.time}: ${gate.reason}`);
+            return await slotRefusalResponse(clinicConfig, patientPhone, data.date, data.time, existingTreatments, gate, startTime);
+          }
+        } catch (gateErr) {
+          console.error('[AWAITING_DATE] slot gate failed (fail-open):', gateErr.message);
+          try {
+            const { notifyAdmin } = require('../monitoring/audit-system');
+            await notifyAdmin(`⚠️ Booking gate ERROR (fail-open) — date-state slot check threw for clinic ${clinicConfig.id} on ${data.date} ${data.time}: ${gateErr.message}`);
+          } catch { /* alerting must never break booking */ }
+        }
         setState(patientPhone, BOOKING_STATES.AWAITING_TREATMENT, { date: data.date, time: data.time });
         return { text: `${data.date} at ${data.time} works! Which treatment would you like?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
       }
@@ -1839,7 +1901,24 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
         return { text: isClosedDay ? `Sorry, ${avail.reason}.` : `${formatDateStrDisplay(data.date)} is fully booked. Please try another date.${waitlistHintFor(clinicConfig)}`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
       }
       
+      // v2.4.0: no treatment chosen yet — still refuse a fully-out day
+      // (closed / holiday / blocked / capped) instead of "{date} works".
       setState(patientPhone, BOOKING_STATES.AWAITING_TIME, { date: data.date });
+      try {
+        const { getAvailableSlots: _getSlotsDay } = require('./availability-engine');
+        const dayAvail = await _getSlotsDay(clinicConfig.id, data.date, existingTreatments, clinicConfig);
+        if (!dayAvail.available || dayAvail.slots.length === 0) {
+          console.log(`[AWAITING_DATE] day gate BLOCKED — ${data.date}: ${dayAvail.reason || 'no slots'}`);
+          return await slotRefusalResponse(clinicConfig, patientPhone, data.date, null, existingTreatments,
+            { reason: dayAvail.reason || `${data.date} is fully booked` }, startTime);
+        }
+      } catch (dayErr) {
+        console.error(`[AWAITING_DATE] day-level availability check error (fail-open): ${dayErr.message}`);
+        try {
+          const { notifyAdmin } = require('../monitoring/audit-system');
+          await notifyAdmin(`⚠️ Booking gate ERROR (fail-open) — day-level check threw for clinic ${clinicConfig.id} on ${data.date}: ${dayErr.message}`);
+        } catch { /* alerting must never break booking */ }
+      }
       return { text: `${data.date} works. What time would you prefer?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
     
     case BOOKING_STATES.AWAITING_TIME:
@@ -2606,6 +2685,48 @@ function extractCategoryId(message, services = []) {
 
 // ─── CONFIRMATION CARD ────────────────────────────────────────────
 
+/**
+ * v2.4.0: shared refusal builder — same-day alternatives first (the patient
+ * wants THIS date), then next available dates, with honest reason copy.
+ * Used by the confirmation-card gate AND the date-stage gates so every
+ * refusal path behaves identically. `time` may be null (date-level refusal).
+ */
+async function slotRefusalResponse(clinicConfig, patientPhone, date, time, treatments, gate, startTime) {
+  const failBase = { source: 'hardcoded', intents: ['slot_unavailable'], cost_saved: 1, latency_ms: Date.now() - startTime };
+  const { formatDateStrDisplay: fmtGateDate } = require('../utils/date-helpers');
+  // Same-day alternatives first — only meaningful when a time was requested.
+  if (time) {
+    try {
+      const { getAvailableSlots } = require('./availability-engine');
+      const avail = await getAvailableSlots(clinicConfig.id, date, treatments, clinicConfig);
+      if (avail.available && avail.slots.length > 0) {
+        const { getTimeSlotButtons } = require('./whatsapp-interactive');
+        setState(patientPhone, BOOKING_STATES.AWAITING_TIME, { date, treatment: treatments[0], treatments });
+        const bodyTxt = `Sorry — ${gate.reason} on ${fmtGateDate(date)}.${windowsLineFor(avail.slots, treatments, clinicConfig.config?.services || clinicConfig.services) || `\n🕐 ${avail.operatingHours}`}\n\nPick a time:`;
+        return { ...failBase, text: bodyTxt, whatsappInteractive: getTimeSlotButtons(avail.slots, avail.operatingHours, bodyTxt) };
+      }
+    } catch (altErr) {
+      console.error('[CONFIRM_GATE] same-day alternatives failed:', altErr.message);
+    }
+  }
+  // Whole day is out — offer the next dates that DO have room.
+  try {
+    const { getNextAvailableDates } = require('./availability-engine');
+    const { getDateButtonOptions } = require('./whatsapp-interactive');
+    const dateOptions = await getNextAvailableDates(clinicConfig.id, treatments, clinicConfig, 3);
+    setState(patientPhone, BOOKING_STATES.AWAITING_DATE, { treatment: treatments[0], treatments });
+    const txt = `Sorry — ${gate.reason}. Here are the next available dates:`;
+    if (dateOptions.length > 0) {
+      return { ...failBase, text: txt, whatsappInteractive: getDateButtonOptions(dateOptions) };
+    }
+    return { ...failBase, text: `Sorry — ${gate.reason}. Please suggest another date.` };
+  } catch (altErr2) {
+    console.error('[CONFIRM_GATE] next-dates alternatives failed:', altErr2.message);
+    setState(patientPhone, BOOKING_STATES.AWAITING_DATE, { treatment: treatments[0], treatments });
+    return { ...failBase, text: `Sorry — ${gate.reason}. Which other date works for you?` };
+  }
+}
+
 async function buildConfirmationResponse(clinicConfig, patientPhone, date, time, treatments, startTime) {
   const services = clinicConfig.config?.services || [];
   let totalDuration = 0;
@@ -2628,41 +2749,21 @@ async function buildConfirmationResponse(clinicConfig, patientPhone, date, time,
   // write-time gates (bot-engine / function-handlers createBooking) still
   // protect every insert if this check itself errors.
   try {
-    const { validateBookingSlot, getAvailableSlots, getNextAvailableDates } = require('./availability-engine');
+    const { validateBookingSlot } = require('./availability-engine');
     const gate = await validateBookingSlot(clinicConfig.id, date, time, totalDuration || 60, clinicConfig);
     if (!gate.ok) {
-      const failBase = { source: 'hardcoded', intents: ['slot_unavailable'], cost_saved: 1, latency_ms: Date.now() - startTime };
-      const { formatDateStrDisplay: fmtGateDate } = require('../utils/date-helpers');
-      // Same-day alternatives first — the patient wants THIS date.
-      try {
-        const avail = await getAvailableSlots(clinicConfig.id, date, treatments, clinicConfig);
-        if (avail.available && avail.slots.length > 0) {
-          const { getTimeSlotButtons } = require('./whatsapp-interactive');
-          setState(patientPhone, BOOKING_STATES.AWAITING_TIME, { date, treatment: treatments[0], treatments });
-          const bodyTxt = `Sorry — ${gate.reason} on ${fmtGateDate(date)}.${windowsLineFor(avail.slots, treatments, services) || `\n🕐 ${avail.operatingHours}`}\n\nPick a time:`;
-          return { ...failBase, text: bodyTxt, whatsappInteractive: getTimeSlotButtons(avail.slots, avail.operatingHours, bodyTxt) };
-        }
-      } catch (altErr) {
-        console.error('[CONFIRM_GATE] same-day alternatives failed:', altErr.message);
-      }
-      // Whole day is out — offer the next dates that DO have room.
-      try {
-        const { getDateButtonOptions } = require('./whatsapp-interactive');
-        const dateOptions = await getNextAvailableDates(clinicConfig.id, treatments, clinicConfig, 3);
-        setState(patientPhone, BOOKING_STATES.AWAITING_DATE, { treatment: treatments[0], treatments });
-        const txt = `Sorry — ${gate.reason}. Here are the next available dates:`;
-        if (dateOptions.length > 0) {
-          return { ...failBase, text: txt, whatsappInteractive: getDateButtonOptions(dateOptions) };
-        }
-        return { ...failBase, text: `Sorry — ${gate.reason}. Please suggest another date.` };
-      } catch (altErr2) {
-        console.error('[CONFIRM_GATE] next-dates alternatives failed:', altErr2.message);
-        setState(patientPhone, BOOKING_STATES.AWAITING_DATE, { treatment: treatments[0], treatments });
-        return { ...failBase, text: `Sorry — ${gate.reason}. Which other date works for you?` };
-      }
+      console.log(`[CONFIRM_GATE] BLOCKED — date:${date} time:${time} reason:${gate.reason}`);
+      return await slotRefusalResponse(clinicConfig, patientPhone, date, time, treatments, gate, startTime);
     }
+    console.log(`[CONFIRM_GATE] slot FREE for ${date} ${time} — proceeding to confirmation`);
   } catch (gateErr) {
     console.error('[CONFIRM_GATE] selection-time validation failed (fail-open):', gateErr.message);
+    // v2.4.0: fail-open must never be SILENT — alert so a broken gate is
+    // found in minutes, not by a patient booking into a blocked slot.
+    try {
+      const { notifyAdmin } = require('../monitoring/audit-system');
+      await notifyAdmin(`⚠️ Booking gate ERROR (fail-open) — confirmation gate threw for clinic ${clinicConfig.id} on ${date} ${time}: ${gateErr.message}`);
+    } catch { /* alerting must never break booking */ }
   }
 
   // Range-aware total: fixed prices sum to one number, ranges sum to min–max
