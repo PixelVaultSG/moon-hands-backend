@@ -280,6 +280,11 @@ async function mergeExternalBusy(clientConfig, dateStr, busyPeriods) {
       for (const ev of (gcalBusy || [])) busyPeriods.push({ ...gcalEventToPeriod(ev), source: 'calendar' });
     } catch (gcalErr) {
       console.warn('[AVAILABILITY] GCal busy-merge failed (fail-open):', gcalErr.message);
+      // v2.4.0: fail-open, never silent (getBusyTimes itself also alerts on API errors)
+      try {
+        const { notifyAdmin } = require('../monitoring/audit-system');
+        await notifyAdmin(`⚠️ Booking gate degraded — calendar busy-merge threw for clinic ${clientConfig?.id || 'unknown'} on ${dateStr}: ${gcalErr.message}`);
+      } catch (_) { /* alerting must never break booking */ }
     }
   }
   const opensOnPublicHolidays = clientConfig?.config?.booking_open_on_public_holidays === true;
@@ -290,6 +295,11 @@ async function mergeExternalBusy(clientConfig, dateStr, busyPeriods) {
       for (const ev of (holBusy || [])) busyPeriods.push({ ...gcalEventToPeriod(ev), source: 'holiday', label: ev.summary });
     } catch (holErr) {
       console.warn('[AVAILABILITY] SG holiday merge failed (fail-open):', holErr.message);
+      // v2.4.0: fail-open, never silent (the fetch itself also alerts on API errors)
+      try {
+        const { notifyAdmin } = require('../monitoring/audit-system');
+        await notifyAdmin(`⚠️ Booking gate degraded — holiday merge threw for ${dateStr}: ${holErr.message}`);
+      } catch (_) { /* alerting must never break booking */ }
     }
   }
 }
