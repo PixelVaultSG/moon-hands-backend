@@ -381,14 +381,18 @@ function extractAllTreatments(message, services = []) {
       // "facial" should NOT match if already exact-matched "Hydrating Facial"
       // Also check abbreviations: "pico" matches "picosure", "rf" matches "rf skin tightening"
       const words = svcName.split(' ').filter(w => w.length >= 3);
+      // v2.4.1 [BOTH]: token-based fuzzy — the old substring-prefix rule matched
+      // "spine" → "Spinal Decompression" (wrong treatment on the confirm card).
+      // A fuzzy hit now requires a real MESSAGE TOKEN that is a prefix of the
+      // service word ("pico" → "picosure") or a small extension of it
+      // ("adjustments" → "adjustment"). "spine" matches neither "spinal".
+      const remainingTokens = remaining.split(/[^a-z0-9]+/).filter(Boolean);
       const hasMatch = words.some(word => {
         if (remaining.includes(word)) return true;
-        // Fuzzy: "pico" matches "picosure" (prefix match for ≥4 char queries)
-        if (word.length >= 5) {
-          const prefix = word.substring(0, 4);
-          if (remaining.includes(prefix) && !['this','that','with','from'].includes(prefix)) return true;
-        }
-        return false;
+        return remainingTokens.some(t =>
+          (t.length >= 4 && word.startsWith(t)) ||
+          (word.length >= 4 && t.startsWith(word) && t.length <= word.length + 2)
+        );
       });
       
       if (hasMatch) {
@@ -436,6 +440,10 @@ function extractBookingFields(message, services = []) {
     /next\s+(mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun)\b/i,
     /next week/i,
     /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i, // bare weekday → next occurrence
+    // v2.4.1 [BOTH]: bare abbrev weekday ("Wed at 12pm", "sat 10am") — parseDatePhrase
+    // expands via SHORT_FORMS. Lookahead requires time-ish context so English words
+    // like "sun" ("sun spot removal") or "sat" ("I sat down") never parse as dates.
+    /\b(mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun)\b(?=\s*(?:at\b|@|\d|,|\.|$|\?|!))/i,
     /\btmr\b|\btmrw\b/i,
     /tomorrow/i,
     /\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}\b/i,
