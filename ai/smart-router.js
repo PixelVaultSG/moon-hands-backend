@@ -277,7 +277,7 @@ async function routeMessage(message, clinicConfig, patientPhone = null, conversa
     // BEFORE sending to OpenAI: check if message contains booking fields
     // (date + time or date + treatment) even without explicit booking words
     // e.g., "Next Tue at 9pm for both treatments" → should start booking flow
-    const fields = extractBookingFields(message);
+    const fields = extractBookingFields(message, clinicConfig?.config?.services || []);
     if (fields.date && (fields.time || fields.treatment)) {
       console.log(`[SMART_ROUTER] Message has booking fields (date+${fields.time ? 'time' : 'treatment'}) but intent was '${primaryIntent.intent}' — routing to booking flow`);
       return await startBookingFlow(message, clinicConfig, patientPhone, conversationHistory, startTime);
@@ -822,8 +822,14 @@ async function startBookingFlow(message, clinicConfig, patientPhone, conversatio
     return { text: "What date would you prefer? (e.g., 'next Tuesday' or 'September 15')", source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
   }
 
+  // v2.4.1 [BOTH]: services must be available BEFORE extraction — calling
+  // extractBookingFields without them dropped matching to an aesthetic-only
+  // keyword fallback, so chiro phrases like "consultation" or "spine
+  // adjustment" never resolved to a service and fell through to categories.
+  const services = clinicConfig.config?.services || [];
+
   // Try to extract all booking fields from the initial message
-  const fields = extractBookingFields(message);
+  const fields = extractBookingFields(message, services);
 
   // ── VALIDATE: Reject past dates in free-text bookings ────────────
   if (fields.date) {
@@ -838,8 +844,6 @@ async function startBookingFlow(message, clinicConfig, patientPhone, conversatio
       };
     }
   }
-
-  const services = clinicConfig.config?.services || [];
 
   // Check for existing multi-treatment selection in state
   const { getState: _getStateForBooking } = require('./conversation-state');
@@ -1330,7 +1334,9 @@ async function rePromptSuspendedState(clinicConfig, patientPhone, suspended, sta
 }
 
 async function handleBookingFlow(message, clinicConfig, patientPhone, currentState, conversationHistory, startTime) {
-  const fields = extractBookingFields(message);
+  // v2.4.1 [BOTH]: pass services so mid-flow treatment mentions
+  // ("consultation", "adjustment") resolve against THIS clinic's menu.
+  const fields = extractBookingFields(message, clinicConfig?.config?.services || []);
   const data = { ...currentState.data, ...fields };
   const hours = clinicConfig.config?.operating_hours || clinicConfig.operating_hours || [];
   const services = clinicConfig.config?.services || [];
@@ -1993,7 +1999,7 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
       const existingTreatments2 = currentState.data?.treatments || (existingTreatment2 ? [existingTreatment2] : []);
       
       try {
-        const { getAvailableSlots, findNextSlotsOnDate, findNextAvailableAfter, isTimeAvailable } = require('./availability-engine');
+        const { getAvailableSlots, findNextAvailableAfter, validateBookingSlot } = require('./availability-engine');
         const availCheck = await getAvailableSlots(clinicConfig.id, date, existingTreatments2, clinicConfig);
 
         // DEFENSIVE: if slot engine says no slots available at all, block the booking
@@ -2025,56 +2031,23 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
           };
         }
 
-        // Check if the EXACT requested time is free (not just in pre-generated 30-min slots)
-        const isRequestedTimeFree = await isTimeAvailable(clinicConfig.id, date, data.time, existingTreatments2, clinicConfig);
-        if (!isRequestedTimeFree) {
-          // Requested time overlaps with an existing booking — suggest next available
-          const { formatDateStrDisplay } = require('../utils/date-helpers');
-          const sameDay = await findNextSlotsOnDate(clinicConfig.id, date, existingTreatments2, clinicConfig, data.time);
-          if (sameDay.found && sameDay.slots.length > 0) {
-            const { getTimeSlotButtons } = require('./whatsapp-interactive');
-            // v2.3.3: show the FULL day's duration-aware windows (availCheck.slots),
-            // not just the 3 button starts after the requested time — the patient
-            // sees every block that fits before choosing (Ash, item 4).
-            const bodyText = `${data.time} is already taken on ${formatDateStrDisplay(date)}. Here are the next available times:${windowsLineFor(availCheck.slots, existingTreatments2, clinicConfig.config?.services || clinicConfig.services)}${waitlistHintFor(clinicConfig)}`;
-            return {
-              text: bodyText,
-              source: 'hardcoded',
-              intents: ['time_suggestion'],
-              cost_saved: 1,
-              latency_ms: Date.now() - startTime,
-              whatsappInteractive: getTimeSlotButtons(sameDay.slots, availCheck?.operatingHours, bodyText)
-            };
-          }
-
-          // No more slots today — suggest next dates
-          const nextAvail = await findNextAvailableAfter(clinicConfig.id, existingTreatments2, clinicConfig, date);
-          if (nextAvail.found) {
-            setState(patientPhone, BOOKING_STATES.AWAITING_DATE, { treatment: existingTreatment2, treatments: existingTreatments2 });
-            const { getDateButtonOptions } = require('./whatsapp-interactive');
-            // v2.3.3: name the last start that still fits TODAY (Ash: "I asked
-            // 5pm, no later slots — what does the bot recommend?") + waitlist out.
-            const lastFit = (availCheck.slots && availCheck.slots.length > 0)
-              ? `\nLast start today that fits: *${fmtSlot12(availCheck.slots[availCheck.slots.length - 1])}*.`
-              : '';
-            const bodyText = `${formatDateStrDisplay(date)} is fully booked after ${data.time}.${lastFit} Here are the next available dates:${waitlistHintFor(clinicConfig)}`;
-            return {
-              text: bodyText,
-              source: 'hardcoded',
-              intents: ['date_suggestion'],
-              cost_saved: 1,
-              latency_ms: Date.now() - startTime,
-              whatsappInteractive: getDateButtonOptions(nextAvail.allDates, bodyText)
-            };
-          }
-
-          // Fallback if no alternatives found
-          return {
-            text: `Sorry, ${data.time} on ${date} is no longer available. Please choose a different time.${waitlistHintFor(clinicConfig)}`,
-            source: 'hardcoded',
-            cost_saved: 1,
-            latency_ms: Date.now() - startTime
-          };
+        // v2.4.1 [BOTH]: typed time goes through the FULL gate (DB overlaps +
+        // Google Calendar blocks + holidays + operating hours) — the same
+        // standard as the confirm card. The old DB-only isTimeAvailable let a
+        // calendar-blocked time (e.g. "12.30pm?" during a 12–1pm clinic block)
+        // sail through to category selection and only refused at the card.
+        // Refuse HERE instead, with same-day alternatives, via the shared
+        // v2.4.0 refusal builder (keeps AWAITING_TIME state + date intact).
+        const gateDur = totalDurationFor(existingTreatments2, clinicConfig.config?.services || [])
+          || clinicConfig.config?.appointment_duration_minutes || 60;
+        const gate = await validateBookingSlot(clinicConfig.id, date, data.time, gateDur, clinicConfig);
+        if (!gate.ok) {
+          console.log(`[AWAITING_TIME] slot gate BLOCKED ${date} ${data.time}: ${gate.reason || 'unavailable'}`);
+          const refusal = await slotRefusalResponse(clinicConfig, patientPhone, date, data.time, existingTreatments2, gate, startTime);
+          // Preserve the waitlist out patients have had since v2.3.3 —
+          // slotRefusalResponse is shared and stays generic.
+          if (refusal.text && clinicConfig.config?.booking_waitlist_enabled) refusal.text += waitlistHintFor(clinicConfig);
+          return refusal;
         }
       } catch (err) {
         console.error(`[AWAITING_TIME] Slot availability check error: ${err.message}`);
