@@ -95,6 +95,40 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  // ─── STATIC: onboarding page + logo (v2.4.2) ─────────────────────
+  // Serve the public onboarding form directly from the backend so clinics
+  // use https://moon-hands-backend.onrender.com/onboarding.html — no separate
+  // static host or custom domain required. CSP above already permits the
+  // page's inline scripts and Google Fonts; /api/onboarding is same-origin here.
+  if (req.method === 'GET' && (url.pathname === '/onboarding.html' || url.pathname === '/onboarding')) {
+    try {
+      const fs = require('fs');
+      const path = require('path');
+      const html = fs.readFileSync(path.join(__dirname, 'onboarding.html'), 'utf8');
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' });
+      res.end(html);
+    } catch (err) {
+      console.error('[SERVER] onboarding.html serve error:', err.message);
+      res.writeHead(404, { 'Content-Type': 'text/plain' });
+      res.end('Not found');
+    }
+    return;
+  }
+  if (req.method === 'GET' && url.pathname === '/logo.png') {
+    try {
+      const fs = require('fs');
+      const path = require('path');
+      const png = fs.readFileSync(path.join(__dirname, 'public', 'logo.png'));
+      res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=86400' });
+      res.end(png);
+    } catch (err) {
+      console.error('[SERVER] logo.png serve error:', err.message);
+      res.writeHead(404, { 'Content-Type': 'text/plain' });
+      res.end('Not found');
+    }
+    return;
+  }
+
   // Google Calendar connection verification (rate-limited: 5 req/min per IP)
   if (url.pathname === '/api/calendar/verify' && req.method === 'GET') {
     if (isRateLimited('calendar_verify', 5, 60 * 1000)) {
@@ -160,7 +194,7 @@ const server = http.createServer(async (req, res) => {
     res.end(JSON.stringify({
       status: 'ok',
       service: 'moon-hands',
-      version: '2.4.1',
+      version: '2.4.2',
       webhook: !!webhookHandler,
       telegram: telegramOk,
       calendar: !!process.env.GOOGLE_CALENDAR_KEY,
@@ -372,7 +406,7 @@ setTimeout(async () => {
       return;
     }
     const report = await calendarSelfCheck(clinics || []);
-    const lines = [`🚀 v2.4.1 boot calendar canary`, ''];
+    const lines = [`🚀 v2.4.2 boot calendar canary`, ''];
     for (const c of report.clinics) {
       lines.push(`${c.ok ? '✅' : '❌'} ${c.name} — ${c.detail}`);
       if (!c.ok) console.error(`[BOOT_CANARY] ${c.name}: ${c.detail}`);

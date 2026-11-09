@@ -4,25 +4,28 @@
  * Receives clinic onboarding data from the website form, validates it,
  * stores in Supabase, and sends Telegram notification to admin.
  * 
- * Security measures:
- * - Rate limiting (1 submission per 60s per IP)
+ * Security measures (v2.4.2 — public form model):
+ * - Rate limiting (5 submissions per 60s per IP)
+ * - Honeypot field (invisible "website" input — bots fill it, humans don't; filled = silent drop)
+ * - Freshness timestamp (_t) — rejects stale (>24h) or clock-skewed replays
  * - Input validation and sanitization
  * - No sensitive data in logs
  * - Supabase RLS enabled (service-role only access)
  * - Telegram notifications (no email to avoid spam filters)
+ *
+ * NOTE: the old mandatory x-api-key check was removed in v2.4.2 — the public
+ * static form cannot hold a secret, and the key (living only in Render env)
+ * 401'd EVERY real submission. Honeypot + rate limit + freshness replace it.
  */
 
 const { supabase } = require('../supabase/client');
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const ADMIN_CHAT_ID = process.env.TELEGRAM_ADMIN_CHAT_ID;
-const ONBOARDING_API_KEY = process.env.ONBOARDING_API_KEY || process.env.WEBHOOK_SECRET;
 
-// Security: API key MUST be configured for onboarding endpoint
-if (!ONBOARDING_API_KEY) {
-  console.error('[ONBOARDING] CRITICAL: ONBOARDING_API_KEY or WEBHOOK_SECRET must be set in environment');
-  console.error('[ONBOARDING] The onboarding endpoint will reject all requests until configured');
-}
+// Freshness window for _t timestamp (client Date.now() at submit time)
+const MAX_SUBMISSION_AGE_MS = 24 * 60 * 60 * 1000; // 24h
+const MAX_FUTURE_SKEW_MS = 5 * 60 * 1000; // 5 min clock-skew allowance
 
 // Rate limiter: simple in-memory map (resets on server restart)
 const rateLimiter = new Map();
@@ -103,8 +106,16 @@ async function sendTelegramNotification(data, submissionId = null) {
   }
 
   const planLabel = data.selectedPlan === 'premium' ? 'Premium (S$547/mo)' : 'Basic (S$347/mo)';
-  const industryLabel = data.industry === 'chiropractic' ? '🦴 Chiropractic' : '✨ Aesthetic';
+  const industryLabel = data.industry === 'chiropractic' ? '🦴 Chiropractic'
+                      : data.industry === 'other' ? '🏥 Other'
+                      : '✨ Aesthetic';
   const treatmentCount = data.treatments?.length || 0;
+  // Calendar status from the onboarding form's Calendar step (alert-only, not stored in DB)
+  const calendarLabel = data.calendarUse === 'yes'
+    ? (data.calendarShared ? 'Yes — SA access shared ✅' : 'Yes — sharing NOT confirmed ⚠️')
+    : data.calendarUse === 'no' ? 'No calendar (manual)'
+    : data.calendarUse === 'not_sure' ? 'Not sure — needs help'
+    : '—';
 
   const message = [
     '🏥 *NEW CLINIC ONBOARDING*',
@@ -116,6 +127,7 @@ async function sendTelegramNotification(data, submissionId = null) {
     `👤 ${escapeMarkdown(data.contactName || '—')} (${escapeMarkdown(data.contactRole || '—')})`,
     `💎 ${planLabel}`,
     `💉 ${treatmentCount} treatments`,
+    `📅 Calendar: ${calendarLabel}`,
     submissionId ? `\n🆔 Submission #\`${submissionId}\`` : '',
   ].join('\n');
 
@@ -230,23 +242,14 @@ async function handleOnboardingSubmission(req, res) {
                    req.connection?.remoteAddress || 'unknown';
 
   try {
-    // 1. API Key validation (MANDATORY — no key = reject all)
-    const apiKey = req.headers['x-api-key'];
-    if (!ONBOARDING_API_KEY || apiKey !== ONBOARDING_API_KEY) {
-      res.writeHead(401, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ success: false, error: 'Unauthorized — valid x-api-key required' }));
-      console.warn(`[ONBOARDING] Rejected request from ${clientIp} — missing/invalid API key`);
-      return true;
-    }
-
-    // 2. Rate limiting by IP (5 per 60 seconds — production friendly)
+    // 1. Rate limiting by IP (5 per 60 seconds — production friendly)
     if (isRateLimited(clientIp)) {
       res.writeHead(429, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ success: false, error: 'Too many submissions. Please wait 60 seconds.' }));
       return true;
     }
 
-    // 3. Read request body
+    // 2. Read request body
     const body = await readBody(req);
     let data;
     try {
@@ -257,7 +260,28 @@ async function handleOnboardingSubmission(req, res) {
       return true;
     }
 
-    // 4. Validate required fields
+    // 3. Honeypot drop — invisible "website" field; only bots fill it.
+    //    Respond 200 success so bots move on, but store NOTHING and send NO alert.
+    if (data.website && String(data.website).trim()) {
+      console.warn(`[ONBOARDING] Honeypot triggered from ${clientIp} — silently dropped`);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, message: 'Onboarding submission received' }));
+      return true;
+    }
+
+    // 4. Freshness check — _t must be present, not stale (>24h), not future-skewed (>5min).
+    //    The served form always sets _t at submit time; missing/stale = replay or bot.
+    const submittedAt = Number(data._t);
+    if (!Number.isFinite(submittedAt) ||
+        (Date.now() - submittedAt) > MAX_SUBMISSION_AGE_MS ||
+        (submittedAt - Date.now()) > MAX_FUTURE_SKEW_MS) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'Form session expired — please refresh the page and submit again.' }));
+      console.warn(`[ONBOARDING] Rejected stale/missing _t from ${clientIp}`);
+      return true;
+    }
+
+    // 5. Validate required fields
     const missing = REQUIRED_FIELDS.filter(f => !data[f] || !String(data[f]).trim());
     if (missing.length > 0) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -265,7 +289,7 @@ async function handleOnboardingSubmission(req, res) {
       return true;
     }
 
-    // 5. Validate field formats
+    // 6. Validate field formats
     for (const [field, validator] of Object.entries(FIELD_VALIDATORS)) {
       if (data[field] && !validator(data[field])) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -274,7 +298,7 @@ async function handleOnboardingSubmission(req, res) {
       }
     }
 
-    // 6. Sanitize all text inputs
+    // 7. Sanitize all text inputs
     data.clinicName = sanitize(data.clinicName);
     data.clinicEmail = sanitizeEmail(data.clinicEmail);
     data.whatsapp = sanitize(data.whatsapp);
@@ -290,13 +314,13 @@ async function handleOnboardingSubmission(req, res) {
     data.cancelPolicy = sanitize(data.cancelPolicy || '');
     data.selectedPlan = data.selectedPlan === 'premium' ? 'premium' : 'basic';
 
-    // 7. Store in Supabase
+    // 8. Store in Supabase
     const stored = await storeInSupabase(data);
 
-    // 8. Send Telegram notification (with inline approve/reject buttons)
+    // 9. Send Telegram notification (with inline approve/reject buttons)
     await sendTelegramNotification(data, stored.id);
 
-    // 9. Return success
+    // 10. Return success
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
       success: true,
