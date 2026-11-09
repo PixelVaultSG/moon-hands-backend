@@ -168,23 +168,15 @@
     </style>
 </head>
 <body>
-    <!-- Nav -->
+    <!-- Nav (standalone page: no links to unserved pages) -->
     <nav class="navbar">
         <div class="nav-container">
-            <a href="index.html" class="nav-logo">
+            <div class="nav-logo">
                 <img src="logo.png" alt="Moon Hands">
                 <div class="logo-text">
                     <span class="logo-title">MOON HANDS</span>
                     <span class="logo-subtitle">BY PIXEL VAULT</span>
                 </div>
-            </a>
-            <div class="nav-menu">
-                <a href="index.html" class="nav-link">HOME</a>
-                <a href="simulator.html" class="nav-link">SIMULATOR</a>
-                <a href="index.html#pricing" class="nav-link">MY PLAN</a>
-                <a href="dashboard.html" class="nav-link">DASHBOARD</a>
-                <a href="index.html#cta" class="nav-link">GET STARTED</a>
-                <a href="onboarding.html" class="nav-btn">BOOK DEMO</a>
             </div>
         </div>
     </nav>
@@ -193,12 +185,9 @@
     <div class="page" id="formPage">
         <!-- Header -->
         <div class="page-header">
-            <a href="index.html" title="Back">
-                <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5"/></svg>
-            </a>
             <div>
                 <h1>Clinic Onboarding</h1>
-                <p id="stepCounter">STEP 1 OF 7</p>
+                <p id="stepCounter">STEP 1 OF 8</p>
             </div>
         </div>
 
@@ -262,19 +251,11 @@
                 </ol>
 
                 <div style="border-top:1px solid var(--border); padding-top:1rem; margin-top:1rem;">
-                    <h3>Bank Transfer Details</h3>
-                    <div class="bank-details">
-                        <p><span>Bank:</span> DBS Bank</p>
-                        <p><span>Account Name:</span> Pixel Vault Pte Ltd</p>
-                        <p><span>Account Number:</span> [YOUR_ACCOUNT_NUMBER]</p>
-                        <p><span>Amount:</span> <span id="successAmount">S$547</span></p>
-                        <p><span>Reference:</span> <span id="successRef">Clinic</span></p>
-                    </div>
-                    <p style="font-size:0.7rem; color:var(--muted); margin-top:0.5rem;">Email your payment screenshot to pixelvaultsg@gmail.com</p>
+                    <h3>Payment</h3>
+                    <p style="font-size:0.85rem;">Estimated first month: <strong id="successAmount">S$547</strong> (ref: <span id="successRef">Clinic</span>)</p>
+                    <p style="font-size:0.8rem; color:var(--muted); margin-top:0.5rem;">Payment details will be sent to you after we review your profile — no payment is needed right now.</p>
                 </div>
             </div>
-
-            <a href="index.html" class="btn btn-gold" style="display:inline-block; text-decoration:none;">Back to Home</a>
         </div>
     </div>
 
@@ -282,17 +263,32 @@
 // ═══════════════════════════════════════════════════════════
 //  DATA
 // ═══════════════════════════════════════════════════════════
-const STEPS = ['Clinic Info','Treatments','Hours','AI Personality','Booking','FAQ & Notes','Review'];
-const DEFAULT_TREATMENTS = [
-    {name:'Botox',price:'380',unit:'per area',dur:'30',cat:'Injectables',desc:'Reduces fine lines and wrinkles. Results last 3-4 months.'},
-    {name:'Dermal Fillers',price:'680',unit:'per syringe',dur:'45',cat:'Injectables',desc:'Restores volume and contours. Results last 6-12 months.'},
-    {name:'HydraFacial',price:'280',unit:'per session',dur:'60',cat:'Facials',desc:'Deep cleansing, exfoliation and hydration. Instant glow.'},
-    {name:'HIFU Face Lift',price:'1280',unit:'per session',dur:'90',cat:'Lifting',desc:'Non-surgical facelift using ultrasound. Results over 2-3 months.'},
-    {name:'Laser Skin Rejuvenation',price:'450',unit:'per session',dur:'45',cat:'Laser',desc:'Improves skin texture, pores and pigmentation.'},
-    {name:'Chemical Peel',price:'180',unit:'per session',dur:'30',cat:'Facials',desc:'Exfoliates dead skin cells for brighter, smoother skin.'},
-    {name:'Rejuran Healer',price:'880',unit:'per session',dur:'45',cat:'Injectables',desc:'Skin healing and regeneration. 3 sessions recommended.'},
-    {name:'Thread Lift',price:'2500',unit:'full face',dur:'60',cat:'Lifting',desc:'Dissolvable threads lift and tighten sagging skin.'},
-];
+const STEPS = ['Clinic Info','Treatments','Hours','Calendar','AI Personality','Booking','FAQ & Notes','Review'];
+const TREATMENT_PRESETS = {
+    chiropractic: [
+        {name:'Initial Consultation & Assessment',price:'120',unit:'per visit',dur:'60',cat:'Consultation',desc:'First-visit history, examination and assessment.'},
+        {name:'Chiropractic Adjustment',price:'90',unit:'per session',dur:'30',cat:'Adjustment',desc:'Spinal manipulation to restore joint mobility.'},
+        {name:'Spinal Decompression Therapy',price:'110',unit:'per session',dur:'45',cat:'Therapy',desc:'Decompression table therapy for disc-related pain.'},
+        {name:'Dry Needling',price:'85',unit:'per session',dur:'30',cat:'Therapy',desc:'Targets muscular trigger points and tension.'},
+        {name:'Posture Correction Program',price:'480',unit:'6 sessions',dur:'30',cat:'Program',desc:'Structured program for postural issues.'},
+    ],
+    aesthetic: [
+        {name:'Botox',price:'380',unit:'per area',dur:'30',cat:'Injectables',desc:'Reduces fine lines and wrinkles. Results last 3-4 months.'},
+        {name:'Dermal Fillers',price:'680',unit:'per syringe',dur:'45',cat:'Injectables',desc:'Restores volume and contours. Results last 6-12 months.'},
+        {name:'HydraFacial',price:'280',unit:'per session',dur:'60',cat:'Facials',desc:'Deep cleansing, exfoliation and hydration. Instant glow.'},
+        {name:'HIFU Face Lift',price:'1280',unit:'per session',dur:'90',cat:'Lifting',desc:'Non-surgical facelift using ultrasound. Results over 2-3 months.'},
+        {name:'Laser Skin Rejuvenation',price:'450',unit:'per session',dur:'45',cat:'Laser',desc:'Improves skin texture, pores and pigmentation.'},
+        {name:'Chemical Peel',price:'180',unit:'per session',dur:'30',cat:'Facials',desc:'Exfoliates dead skin cells for brighter, smoother skin.'},
+        {name:'Rejuran Healer',price:'880',unit:'per session',dur:'45',cat:'Injectables',desc:'Skin healing and regeneration. 3 sessions recommended.'},
+        {name:'Thread Lift',price:'2500',unit:'full face',dur:'60',cat:'Lifting',desc:'Dissolvable threads lift and tighten sagging skin.'},
+    ],
+    other: [],
+};
+const CATEGORY_OPTIONS = {
+    chiropractic: ['Consultation','Adjustment','Therapy','Rehab','Program','Wellness','Other'],
+    aesthetic: ['Injectables','Facials','Lifting','Laser','Body','Hair','Skin','Wellness','Other'],
+    other: ['Consultation','Treatment','Program','Other'],
+};
 const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 const TONES = [
     {id:'friendly',label:'Friendly & Warm',desc:'Casual and approachable'},
@@ -310,6 +306,9 @@ const LANGS = [
 let step = 0;
 let form = {
     clinicName:'',businessRegNo:'',whatsapp:'',clinicPhone:'',clinicEmail:'',address:'',postalCode:'',nearestMrt:'',parkingInfo:'',selectedPlan:'premium',
+    industry:'chiropractic',
+    calendarUse:'',calendarShared:false,
+    website:'', // honeypot — real users never fill this; bots do
     treatments:[],
     hours:DAYS.map(()=>({open:'10:00',close:'20:00',isOpen:true})),slotDuration:'30',bufferMinutes:'15',maxAppts:'12',
     agentName:'Sophia',tone:'friendly',greeting:'',languages:['en'],
@@ -334,7 +333,7 @@ function renderProgress() {
 
 function renderStep() {
     const c = document.getElementById('stepContent');
-    const renderers = [renderClinicInfo,renderTreatments,renderHours,renderPersonality,renderBooking,renderFAQ,renderReview];
+    const renderers = [renderClinicInfo,renderTreatments,renderHours,renderCalendar,renderPersonality,renderBooking,renderFAQ,renderReview];
     c.innerHTML = renderers[step]();
     renderProgress();
 }
@@ -344,6 +343,15 @@ function renderClinicInfo() {
     return `
         <h2 class="sec-title">Tell us about your clinic</h2>
         <p class="sec-desc">This information helps our AI answer patient questions accurately.</p>
+
+        <p class="form-label">Clinic Type</p>
+        <div class="form-row" style="margin-bottom:1rem">
+            ${[['chiropractic','Chiropractic / Physio'],['aesthetic','Aesthetic'],['other','Other']].map(([id,label])=>`
+                <div class="option-card ${form.industry===id?'selected':''}" onclick="setIndustry('${id}')">
+                    <div class="option-radio"></div>
+                    <div class="option-info"><p>${label}</p></div>
+                </div>`).join('')}
+        </div>
 
         <div class="form-group">
             <label class="form-label">Selected Plan</label>
@@ -400,6 +408,10 @@ function renderClinicInfo() {
         <div class="form-group">
             <label class="form-label">Parking Information</label>
             <input class="form-input" placeholder="e.g., Complimentary parking at ION Orchard" value="${esc(form.parkingInfo)}" onchange="form.parkingInfo=this.value">
+        </div>
+        <!-- Honeypot: invisible to humans, bots auto-fill it. Server drops submissions with this set. -->
+        <div style="position:absolute;left:-9999px;top:-9999px;height:1px;width:1px;overflow:hidden;" aria-hidden="true">
+            <label>Website <input type="text" name="website" tabindex="-1" autocomplete="off" value="" onchange="form.website=this.value"></label>
         </div>`;
 }
 
@@ -412,7 +424,8 @@ function renderTreatments() {
         <p class="sec-desc">Select from common treatments and add your own.</p>
 
         <p class="form-label">Common Treatments</p>
-        ${DEFAULT_TREATMENTS.map(t=>{
+        ${(TREATMENT_PRESETS[form.industry]||[]).length===0?'<p style="font-size:0.8rem;color:var(--muted);font-style:italic;margin-bottom:0.75rem">No presets for this industry — add your treatments below.</p>':''}
+        ${(TREATMENT_PRESETS[form.industry]||[]).map(t=>{
             const sel = selected.some(s=>s.name===t.name);
             return `<div class="treatment-item ${sel?'selected':''}" onclick="toggleDefaultTreatment('${t.name}')">
                 <div class="treatment-left">
@@ -444,7 +457,7 @@ function renderCustomTreatmentForm(t,idx) {
         <div class="form-row" style="margin-bottom:0.5rem">
             <input class="form-input" placeholder="Treatment name" value="${esc(t.name)}" onchange="updateCustomTreatment(${idx},'name',this.value)">
             <select class="form-select" onchange="updateCustomTreatment(${idx},'category',this.value)">
-                ${['Injectables','Facials','Lifting','Laser','Body','Hair','Skin','Wellness','Other'].map(c=>`<option ${t.category===c?'selected':''}>${c}</option>`).join('')}
+                ${(CATEGORY_OPTIONS[form.industry]||CATEGORY_OPTIONS.other).map(c=>`<option ${t.category===c?'selected':''}>${c}</option>`).join('')}
             </select>
         </div>
         <div class="form-row" style="margin-bottom:0.5rem">
@@ -504,7 +517,49 @@ function renderHours() {
         </div>`;
 }
 
-// ── Step 4: AI Personality ──
+// ── Step 4: Calendar ──
+function renderCalendar() {
+    return `
+        <h2 class="sec-title">Google Calendar</h2>
+        <p class="sec-desc">Moon Hands reads your clinic calendar so patients can never book over your blocked time — and writes confirmed bookings into it. This is what makes scheduling trustworthy.</p>
+
+        <p class="form-label">Do you use Google Calendar for clinic appointments?</p>
+        ${[['yes','Yes, we use Google Calendar'],['no','No, or we use something else'],['not_sure','Not sure']].map(([id,label])=>`
+            <div class="option-card ${form.calendarUse===id?'selected':''}" onclick="form.calendarUse='${id}';form.calendarShared=false;renderStep();">
+                <div class="option-radio"></div>
+                <div class="option-info"><p>${label}</p></div>
+            </div>`).join('')}
+        ${form.calendarUse==='yes'?`
+        <div style="margin-top:1rem;padding:1rem;background:rgba(27,58,92,0.1);border:1px solid var(--border);border-radius:8px;">
+            <p style="font-size:0.85rem;font-weight:600;margin-bottom:0.5rem">One-time setup (2 minutes)</p>
+            <ol style="font-size:0.8rem;color:rgba(232,232,232,0.75);line-height:1.7;padding-left:1.2rem;margin:0 0 0.75rem">
+                <li>On your computer, open <strong>calendar.google.com</strong></li>
+                <li>Under <strong>My calendars</strong>, hover your clinic calendar → tap <strong>&#8942;</strong> → <strong>Settings and sharing</strong></li>
+                <li>Scroll to <strong>Share with specific people</strong> → <strong>Add people</strong></li>
+                <li>Paste this address:
+                    <div style="display:flex;gap:0.5rem;align-items:center;margin:0.4rem 0;flex-wrap:wrap">
+                        <code style="background:#0F0F0F;border:1px solid var(--border);border-radius:6px;padding:0.4rem 0.6rem;font-size:0.75rem;word-break:break-all">moon-hands-calendar@moon-hands.iam.gserviceaccount.com</code>
+                        <button type="button" class="btn btn-outline" style="padding:0.35rem 0.7rem;font-size:0.7rem" onclick="copyCalEmail(this)">Copy</button>
+                    </div>
+                </li>
+                <li>Set permission to <strong>&ldquo;Make changes to events&rdquo;</strong> → <strong>Send</strong></li>
+            </ol>
+            <div class="toggle-row" style="cursor:pointer" onclick="form.calendarShared=!form.calendarShared;renderStep();">
+                <div class="toggle-info"><p>I've shared the calendar</p><p>You can also do this later — we'll help you during setup</p></div>
+                <button type="button" class="toggle-btn ${form.calendarShared?'on':''}"></button>
+            </div>
+        </div>`:''}
+        ${form.calendarUse==='no'?`
+        <div style="margin-top:1rem;padding:0.75rem;background:rgba(27,58,92,0.1);border:1px solid var(--border);border-radius:8px;">
+            <p style="font-size:0.8rem;color:rgba(232,232,232,0.75);line-height:1.6;margin:0">No problem — bookings still work without a calendar. Patients just can't be stopped from booking over your own appointments, and bookings won't appear in a calendar automatically. We can set this up together later.</p>
+        </div>`:''}
+        ${form.calendarUse==='not_sure'?`
+        <div style="margin-top:1rem;padding:0.75rem;background:rgba(27,58,92,0.1);border:1px solid var(--border);border-radius:8px;">
+            <p style="font-size:0.8rem;color:rgba(232,232,232,0.75);line-height:1.6;margin:0">No problem — we'll help you figure it out during setup (takes about 2 minutes on a call).</p>
+        </div>`:''}`;
+}
+
+// ── Step 5: AI Personality ──
 function renderPersonality() {
     return `
         <h2 class="sec-title">AI Personality</h2>
@@ -546,7 +601,7 @@ function renderPersonality() {
         </div>`;
 }
 
-// ── Step 5: Booking ──
+// ── Step 6: Booking ──
 function renderBooking() {
     const toggles = [
         {key:'autoConfirm',label:'Auto-confirm bookings',desc:'Patients get instant confirmation'},
@@ -603,7 +658,7 @@ function renderBooking() {
         </div>`;
 }
 
-// ── Step 6: FAQ ──
+// ── Step 7: FAQ ──
 function renderFAQ() {
     return `
         <h2 class="sec-title">FAQs & Special Notes</h2>
@@ -633,7 +688,7 @@ function renderFAQ() {
         </div>`;
 }
 
-// ── Step 7: Review ──
+// ── Step 8: Review ──
 function renderReview() {
     const selTreatments = form.treatments;
     return `
@@ -693,13 +748,23 @@ function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').
 function toggleDefaultTreatment(name){
     const idx=form.treatments.findIndex(t=>t.name===name&&!t.isCustom);
     if(idx>=0)form.treatments.splice(idx,1);
-    else{const dt=DEFAULT_TREATMENTS.find(t=>t.name===name);if(dt)form.treatments.push({...dt,isCustom:false});}
+    else{const dt=(TREATMENT_PRESETS[form.industry]||[]).find(t=>t.name===name);if(dt)form.treatments.push({...dt,isCustom:false});}
     renderStep();
 }
 function addCustomTreatment(){form.treatments.push({name:'',price:'',unit:'per session',duration:'60',description:'',category:'Other',isCustom:true});renderStep();}
 function updateCustomTreatment(idx,field,val){const c=form.treatments.filter(t=>t.isCustom)[idx];if(c)c[field]=val;renderStep();}
 function removeCustomTreatment(idx){const ci=form.treatments.findIndex((t,i)=>t.isCustom&&form.treatments.filter(x=>x.isCustom).indexOf(t)===idx);if(ci>=0)form.treatments.splice(ci,1);renderStep();}
 function toggleDay(i){form.hours[i].isOpen=!form.hours[i].isOpen;renderStep();}
+function setIndustry(id){
+    if(form.industry===id)return;
+    form.industry=id;
+    // Preset picks from the previous industry are stale — keep only custom entries
+    form.treatments=form.treatments.filter(t=>t.isCustom);
+    renderStep();
+}
+function copyCalEmail(btn){
+    navigator.clipboard.writeText('moon-hands-calendar@moon-hands.iam.gserviceaccount.com').then(()=>{btn.textContent='Copied ✓';setTimeout(()=>btn.textContent='Copy',1500);});
+}
 function toggleLang(l){const i=form.languages.indexOf(l);if(i>=0)form.languages.splice(i,1);else form.languages.push(l);}
 function addFAQ(){form.faqs.push({q:'',a:''});renderStep();}
 function removeFAQ(i){form.faqs.splice(i,1);renderStep();}
@@ -797,6 +862,7 @@ async function submitForm(){
     nextBtn.disabled=true;
 
     try{
+        form._t=Date.now(); // freshness timestamp (server rejects stale/missing)
         const response=await fetch(API_BASE+'/api/onboarding',{
             method:'POST',
             headers:{'Content-Type':'application/json'},
@@ -815,24 +881,17 @@ async function submitForm(){
             // Fill the data display
             const fullText=buildSubmissionText();
             document.getElementById('submittedData').textContent=fullText;
-
-            // Telegram deep link
-            document.getElementById('telegramLink').href='https://t.me/';
         }else{
-            alert('Submission failed: '+(result.error||'Unknown error'));
+            alert('Submission failed: '+(result.error||'Unknown error')+'\n\nPlease try again, or WhatsApp us for help.');
             nextBtn.textContent='Submit';
             nextBtn.disabled=false;
         }
     }catch(err){
         console.error('Submit error:',err);
-        // Fallback: show success page with local data anyway
-        document.getElementById('formPage').classList.add('hidden');
-        document.getElementById('successPage').classList.remove('hidden');
-        document.getElementById('successAmount').textContent=form.selectedPlan==='premium'?'S$547':'S$347';
-        document.getElementById('successRef').textContent=form.clinicName||'Clinic';
-        const fullText=buildSubmissionText();
-        document.getElementById('submittedData').textContent=fullText;
-        alert('Network issue — your data is shown below. Please copy and send to us.');
+        // Do NOT show the success page — the submission did not reach us.
+        alert('Could not reach our server (network issue).\n\nYour details are NOT lost — please click Submit again in a moment. If it keeps failing, WhatsApp us and we will onboard you manually.');
+        nextBtn.textContent='Submit';
+        nextBtn.disabled=false;
     }
 }
 

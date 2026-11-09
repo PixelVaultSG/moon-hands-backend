@@ -241,6 +241,39 @@ async function sendClinicNotification(clinicId, message, options = {}) {
     } catch (e) {
       console.error('[MULTI_CLINIC] 🚨 Failed to record notification failure:', e.message);
     }
+
+    // v2.4.2 [BOTH]: a security_events row is silent-in-pocket — on a total
+    // delivery failure the admin must know NOW (prod, 9 Nov 2026: a NEW
+    // BOOKING card never delivered; the booking sat pending until the admin
+    // happened to open "My Bookings"). Escalate via sendAdminOnly, which uses
+    // a DIRECT api.telegram.org call — independent of the path that just
+    // failed. Loop-safe: escalation only fires on the ORIGINAL send's
+    // failure; the delayed retry below suppresses its own escalation.
+    if (!options._isRetry) {
+      try {
+        await sendAdminOnly(
+          `🚨 *TELEGRAM DELIVERY FAILED*\n\n` +
+          `A notification for *${clinicName}* reached ZERO recipients (all retries exhausted).\n\n` +
+          `Message: ${message.substring(0, 180)}\n\n` +
+          `Check pending items in My Bookings or /notiflog.`
+        );
+      } catch (escErr) {
+        console.error('[MULTI_CLINIC] 🚨 Escalation send also failed:', escErr.message);
+      }
+      // One delayed full retry (60s) — covers transient Telegram/Render
+      // network blips, which is what zero-recipient failures usually are.
+      // unref'd: never holds the process open; if the process restarts the
+      // security_events row + the escalation above are the record.
+      const retryTimer = setTimeout(async () => {
+        try {
+          console.warn(`[MULTI_CLINIC] retrying failed notification for clinic ${clinicId} after 60s…`);
+          await sendClinicNotification(clinicId, message, { ...options, _isRetry: true });
+        } catch (retryErr) {
+          console.error('[MULTI_CLINIC] 🚨 60s retry threw:', retryErr.message);
+        }
+      }, 60000);
+      if (retryTimer.unref) retryTimer.unref();
+    }
   }
 
   // Delivery receipt (v2.2.3): every notification — success or failure —
