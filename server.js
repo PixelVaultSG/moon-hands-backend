@@ -194,7 +194,7 @@ const server = http.createServer(async (req, res) => {
     res.end(JSON.stringify({
       status: 'ok',
       service: 'moon-hands',
-      version: '2.4.2',
+      version: '2.4.3',
       webhook: !!webhookHandler,
       telegram: telegramOk,
       calendar: !!process.env.GOOGLE_CALENDAR_KEY,
@@ -406,7 +406,7 @@ setTimeout(async () => {
       return;
     }
     const report = await calendarSelfCheck(clinics || []);
-    const lines = [`🚀 v2.4.2 boot calendar canary`, ''];
+    const lines = [`🚀 v2.4.3 boot calendar canary`, ''];
     for (const c of report.clinics) {
       lines.push(`${c.ok ? '✅' : '❌'} ${c.name} — ${c.detail}`);
       if (!c.ok) console.error(`[BOOT_CANARY] ${c.name}: ${c.detail}`);
