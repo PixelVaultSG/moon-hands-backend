@@ -754,7 +754,11 @@ async function handleWebhook(req, res, channel, url) {
     }
     
     // Record outgoing message for loop detection (tracks our responses)
-    loopDetector.recordOutgoing(message.to, message.from, response.text);
+    // v2.4.6: null text = reply suppressed (alt-accept approval path) — nothing
+    // was sent, so nothing to record; recordOutgoing would crash on .substring.
+    if (response.text) {
+      loopDetector.recordOutgoing(message.to, message.from, response.text);
+    }
     
     console.log(`[WEBHOOK:whatsapp] Before sanitization: hasInteractive=${!!response.whatsappInteractive}`);
     

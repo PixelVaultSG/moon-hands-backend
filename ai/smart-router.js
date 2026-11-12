@@ -92,6 +92,22 @@ async function routeMessage(message, clinicConfig, patientPhone = null, conversa
       const { handlePatientConfirmAlternative } = require('../telegram/booking-notifications');
       const result = await handlePatientConfirmAlternative(pendingAlt.id);
       if (result.success) {
+        // v2.4.6 (Ash): when the approval confirmation (approval text +
+        // "Add to Calendar" CTA) was just sent by handlePatientConfirmAlternative,
+        // it REPLACES this chat reply — the patient must see exactly one
+        // confirmation, identical to the /approve flow. Fail-open: if the
+        // approval send failed, keep the old text so the patient still gets
+        // a confirmation in-chat.
+        if (result.approvalSent) {
+          return {
+            text: null,
+            source: 'hardcoded',
+            intents: ['alt_confirmed'],
+            alreadySent: true,
+            cost_saved: 1,
+            latency_ms: Date.now() - startTime
+          };
+        }
         return {
           text: `✅ Great! Your appointment has been confirmed with the new time. We look forward to seeing you then!`,
           source: 'hardcoded',
