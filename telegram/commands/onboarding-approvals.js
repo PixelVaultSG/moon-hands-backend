@@ -19,9 +19,11 @@ const { supabase } = require('../../supabase/client');
 
 // ─── HELPERS ─────────────────────────────────────────────────────
 
+// v2.5.0: legacy parse_mode 'Markdown' only treats _ * ` [ as special —
+// escaping the MarkdownV2 set (. - etc.) leaks literal backslashes (Ash's 'gmail\.com').
 function escapeMarkdown(text) {
   if (!text) return '';
-  return String(text).replace(/[_*\[\]()~`>#+=|{}.!-]/g, '\\$&');
+  return String(text).replace(/[_*`\[]/g, '\\$&');
 }
 
 function generateSlug(clinicName) {
@@ -172,12 +174,17 @@ async function handleApproveClinic(ctx) {
     }
 
     // Normalize services to have category field
+    // v2.5.0: accept BOTH key schemas — presets use dur/desc/cat, custom
+    // treatments submitted before v2.5.0 use duration/description/category.
+    // The old long-key-only read silently turned preset durations into 60min,
+    // dropped descriptions, re-guessed categories, and lost pricing units.
     services = services.map(s => ({
       name: s.name || s,
       price: s.price || '',
-      duration: s.duration || 60,
-      description: s.description || '',
-      category: s.category || categorizeService(s.name || s)
+      unit: s.unit || 'per session',
+      duration: parseInt(s.duration ?? s.dur) || 60,
+      description: s.description ?? s.desc ?? '',
+      category: s.category ?? s.cat ?? categorizeService(s.name || s)
     }));
 
     // 5. Parse operating hours
@@ -203,6 +210,9 @@ async function handleApproveClinic(ctx) {
     } catch {
       faqs = [];
     }
+    // v2.5.0: never carry blank/half-filled FAQ rows into the live config —
+    // the bot would serve an empty answer.
+    faqs = faqs.filter(f => f && (f.q || '').trim() && (f.a || '').trim());
 
     // 7. Build config JSONB
     const isChiro = submission.industry === 'chiropractic';
@@ -290,7 +300,11 @@ async function handleApproveClinic(ctx) {
       `Slug: \`${slug}\``,
       `Plan: ${plan === 'premium' ? 'Premium' : 'Basic'} (S$${monthlyAmount}/mo)`,
       `WhatsApp: ${escapeMarkdown(submission.whatsapp_number || '—')}`,
-      `Contact: ${escapeMarkdown(submission.contact_name)}`,
+      `Contact: ${escapeMarkdown(submission.contact_name)}${submission.contact_email ? ` — ${escapeMarkdown(submission.contact_email)}` : ''}${submission.contact_phone ? ` / ${escapeMarkdown(submission.contact_phone)}` : ''}`,
+      // v2.5.0: calendar intent now persists — surface it so wiring isn't forgotten.
+      // clients.google_calendar_id stays null until manually verified: an unshared
+      // calendar ID would break availability checks (the v2.3.9 lesson).
+      `📅 Calendar: ${submission.has_google_calendar ? `Yes${submission.google_calendar_email ? ` (${escapeMarkdown(submission.google_calendar_email)})` : ''} — verify SA access, THEN set google_calendar_id` : 'No / later'}`,
       ``,
       `🤖 AI Agent: ${escapeMarkdown(config.agent_name)}`,
       `💉 Treatments: ${services.length}`,

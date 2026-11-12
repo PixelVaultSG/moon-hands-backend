@@ -307,7 +307,7 @@ let step = 0;
 let form = {
     clinicName:'',businessRegNo:'',whatsapp:'',clinicPhone:'',clinicEmail:'',address:'',postalCode:'',nearestMrt:'',parkingInfo:'',selectedPlan:'premium',
     industry:'chiropractic',
-    calendarUse:'',calendarShared:false,
+    calendarUse:'',calendarShared:false,calendarEmail:'',
     website:'', // honeypot — real users never fill this; bots do
     treatments:[],
     hours:DAYS.map(()=>({open:'10:00',close:'20:00',isOpen:true})),slotDuration:'30',bufferMinutes:'15',maxAppts:'12',
@@ -417,16 +417,18 @@ function renderClinicInfo() {
 
 // ── Step 2: Treatments ──
 function renderTreatments() {
-    const custom = form.treatments.filter(t=>t.isCustom);
-    const selected = form.treatments.filter(t=>!t.isCustom);
+    // v2.5.0: presets are EDITABLE once selected (Ash, 2026-11-13: "when I
+    // choose a preset treatment, I am able to edit the name, price or
+    // duration"). Every selected treatment — preset or custom — renders as an
+    // editable row below; preset cards are just a picker.
     return `
         <h2 class="sec-title">Your treatments</h2>
-        <p class="sec-desc">Select from common treatments and add your own.</p>
+        <p class="sec-desc">Tap to add common treatments, then edit names, prices and durations below. Add your own too.</p>
 
         <p class="form-label">Common Treatments</p>
         ${(TREATMENT_PRESETS[form.industry]||[]).length===0?'<p style="font-size:0.8rem;color:var(--muted);font-style:italic;margin-bottom:0.75rem">No presets for this industry — add your treatments below.</p>':''}
         ${(TREATMENT_PRESETS[form.industry]||[]).map(t=>{
-            const sel = selected.some(s=>s.name===t.name);
+            const sel = form.treatments.some(s=>s.preset===t.name);
             return `<div class="treatment-item ${sel?'selected':''}" onclick="toggleDefaultTreatment('${t.name}')">
                 <div class="treatment-left">
                     <div class="option-check" style="margin-right:0.5rem;">${sel?'✓':''}</div>
@@ -438,12 +440,12 @@ function renderTreatments() {
 
         <div style="margin-top:1rem">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem;">
-                <p class="form-label">Custom Treatments</p>
+                <p class="form-label">Your Treatment Menu</p>
                 <button class="btn-add" onclick="addCustomTreatment()">+ Add Treatment</button>
             </div>
-            ${custom.length===0?'<p style="font-size:0.8rem;color:var(--muted);font-style:italic">No custom treatments yet.</p>':''}
-            <div id="customTreatments">
-                ${custom.map((t,i)=>renderCustomTreatmentForm(t,i)).join('')}
+            ${form.treatments.length===0?'<p style="font-size:0.8rem;color:var(--muted);font-style:italic">No treatments yet — pick from above or add your own.</p>':''}
+            <div id="treatmentEditor">
+                ${form.treatments.map((t,i)=>renderTreatmentRow(t,i)).join('')}
             </div>
         </div>
 
@@ -452,20 +454,28 @@ function renderTreatments() {
         </div>`:''}`;
 }
 
-function renderCustomTreatmentForm(t,idx) {
+const UNIT_OPTIONS = ['per session','per visit','per treatment','per area','per syringe','full face','4 sessions','6 sessions','10 sessions'];
+
+function renderTreatmentRow(t,idx) {
+    const cats = CATEGORY_OPTIONS[form.industry]||CATEGORY_OPTIONS.other;
+    const catOpts = (cats.includes(t.cat)?cats:[t.cat,...cats]).filter(Boolean);
+    const unitOpts = (UNIT_OPTIONS.includes(t.unit)?UNIT_OPTIONS:[t.unit,...UNIT_OPTIONS]).filter(Boolean);
     return `<div style="padding:0.75rem;background:rgba(27,58,92,0.1);border:1px solid var(--border);border-radius:8px;margin-bottom:0.5rem;" data-idx="${idx}">
         <div class="form-row" style="margin-bottom:0.5rem">
-            <input class="form-input" placeholder="Treatment name" value="${esc(t.name)}" oninput="updateCustomTreatment(${idx},'name',this.value)">
-            <select class="form-select" onchange="updateCustomTreatment(${idx},'category',this.value)">
-                ${(CATEGORY_OPTIONS[form.industry]||CATEGORY_OPTIONS.other).map(c=>`<option ${t.category===c?'selected':''}>${c}</option>`).join('')}
+            <input class="form-input" placeholder="Treatment name" value="${esc(t.name)}" oninput="updateTreatment(${idx},'name',this.value)">
+            <select class="form-select" onchange="updateTreatment(${idx},'cat',this.value)">
+                ${catOpts.map(c=>`<option ${t.cat===c?'selected':''}>${c}</option>`).join('')}
             </select>
         </div>
-        <div class="form-row" style="margin-bottom:0.5rem">
-            <input class="form-input" placeholder="Price (S$)" value="${esc(t.price)}" oninput="updateCustomTreatment(${idx},'price',this.value)">
-            <input class="form-input" placeholder="Duration (min)" value="${esc(t.duration)}" oninput="updateCustomTreatment(${idx},'duration',this.value)">
+        <div class="form-row form-row-3" style="margin-bottom:0.5rem">
+            <input class="form-input" placeholder="Price (S$)" value="${esc(t.price)}" oninput="updateTreatment(${idx},'price',this.value)">
+            <select class="form-select" onchange="updateTreatment(${idx},'unit',this.value)">
+                ${unitOpts.map(u=>`<option ${t.unit===u?'selected':''}>${u}</option>`).join('')}
+            </select>
+            <input class="form-input" placeholder="Duration (min)" value="${esc(t.dur)}" oninput="updateTreatment(${idx},'dur',this.value)">
         </div>
-        <textarea class="form-textarea" rows="2" placeholder="Description..." oninput="updateCustomTreatment(${idx},'description',this.value)">${esc(t.description)}</textarea>
-        <button class="btn-remove" onclick="removeCustomTreatment(${idx})" style="margin-top:0.25rem">Remove</button>
+        <textarea class="form-textarea" rows="2" placeholder="Description..." oninput="updateTreatment(${idx},'desc',this.value)">${esc(t.desc)}</textarea>
+        <button class="btn-remove" onclick="removeTreatment(${idx})" style="margin-top:0.25rem">Remove</button>
     </div>`;
 }
 
@@ -547,6 +557,11 @@ function renderCalendar() {
             <div class="toggle-row" style="cursor:pointer" onclick="form.calendarShared=!form.calendarShared;renderStep();">
                 <div class="toggle-info"><p>I've shared the calendar</p><p>You can also do this later — we'll help you during setup</p></div>
                 <button type="button" class="toggle-btn ${form.calendarShared?'on':''}"></button>
+            </div>
+            <div style="margin-top:0.75rem">
+                <label class="form-label">Your calendar email (optional)</label>
+                <input class="form-input" type="email" placeholder="e.g. yourclinic@gmail.com" value="${esc(form.calendarEmail)}" oninput="syncField('calendarEmail',this.value)">
+                <p style="font-size:0.7rem;color:var(--muted);margin:0.35rem 0 0">The Gmail address of the calendar you just shared — so bookings land in the right place.</p>
             </div>
         </div>`:''}
         ${form.calendarUse==='no'?`
@@ -737,6 +752,10 @@ function renderReview() {
                     ${['Clinic Owner','Doctor','Manager','Receptionist','Other'].map(r=>`<option ${form.contactRole===r?'selected':''}>${r}</option>`).join('')}
                 </select>
             </div>
+            <div class="form-row" style="margin-top:0.5rem">
+                <input class="form-input" type="email" placeholder="Contact email (optional)" value="${esc(form.contactEmail)}" oninput="syncField('contactEmail',this.value)">
+                <input class="form-input" type="tel" placeholder="Contact phone (optional)" value="${esc(form.contactPhone)}" oninput="syncField('contactPhone',this.value)">
+            </div>
         </div>`;
 }
 
@@ -762,20 +781,31 @@ function syncField(field,val){form[field]=val;const b=document.getElementById('n
 // FAQ fields and even the honeypot were DEAD (Ash UVT 2026-11-12: "are the
 // toggles dead?"). Function indirection closes over the real state object.
 function toggleBool(key){form[key]=!form[key];renderStep();}
+// v2.5.0: a FAQ only counts when BOTH sides are filled — a lone question or
+// lone answer is useless to the bot and previously stored as a blank row.
+function cleanFaqs(){return form.faqs.filter(f=>(f.q||'').trim()&&(f.a||'').trim());}
 function setHour(i,field,val){form.hours[i][field]=val;}
 function setFAQ(i,field,val){form.faqs[i][field]=val;}
 
 function toggleDefaultTreatment(name){
-    const idx=form.treatments.findIndex(t=>t.name===name&&!t.isCustom);
+    // Preset membership is tracked by the immutable 'preset' key, not the
+    // (now editable) name — renaming a selected preset must not deselect it.
+    const idx=form.treatments.findIndex(t=>t.preset===name);
     if(idx>=0)form.treatments.splice(idx,1);
-    else{const dt=(TREATMENT_PRESETS[form.industry]||[]).find(t=>t.name===name);if(dt)form.treatments.push({...dt,isCustom:false});}
+    else{const dt=(TREATMENT_PRESETS[form.industry]||[]).find(t=>t.name===name);if(dt)form.treatments.push({...dt,isCustom:false,preset:dt.name});}
     renderStep();
 }
-function addCustomTreatment(){form.treatments.push({name:'',price:'',unit:'per session',duration:'60',description:'',category:'Other',isCustom:true});renderStep();}
+// v2.5.0: ONE schema for all treatments — short keys (dur/desc/cat/unit) like
+// the presets. Customs previously used duration/description/category, which the
+// summary rendered as "undefinedmin | undefined" and the approval normalizer
+// read differently from presets (preset durations silently became 60min).
+function addCustomTreatment(){form.treatments.push({name:'',price:'',unit:'per session',dur:'60',cat:'Other',desc:'',isCustom:true});renderStep();}
 // v2.4.8: no renderStep here — these fire oninput now, and re-rendering per
 // keystroke would drop focus mid-typing. Add/remove/toggle still renderStep.
-function updateCustomTreatment(idx,field,val){const c=form.treatments.filter(t=>t.isCustom)[idx];if(c)c[field]=val;const b=document.getElementById('nextBtn');if(b)b.disabled=!canProceed();}
-function removeCustomTreatment(idx){const ci=form.treatments.findIndex((t,i)=>t.isCustom&&form.treatments.filter(x=>x.isCustom).indexOf(t)===idx);if(ci>=0)form.treatments.splice(ci,1);renderStep();}
+// v2.5.0: idx is the REAL index in form.treatments (all rows are editable,
+// presets included) — not the old customs-only filtered index.
+function updateTreatment(idx,field,val){const t=form.treatments[idx];if(t)t[field]=val;const b=document.getElementById('nextBtn');if(b)b.disabled=!canProceed();}
+function removeTreatment(idx){if(idx>=0&&idx<form.treatments.length)form.treatments.splice(idx,1);renderStep();}
 function toggleDay(i){form.hours[i].isOpen=!form.hours[i].isOpen;renderStep();}
 function setIndustry(id){
     if(form.industry===id)return;
@@ -859,8 +889,11 @@ function buildSubmissionText(){
     lines.push('Cancellation: '+form.cancelPolicy);
     lines.push('');
     lines.push('--- FAQS ---');
-    if(form.faqs.length===0)lines.push('None provided');
-    form.faqs.forEach((f,i)=>{lines.push('Q'+(i+1)+': '+f.q);lines.push('A: '+f.a);});
+    // v2.5.0: skip blank rows — the default empty FAQ row previously stored as
+    // {q:'',a:''} and rendered "Q1: / A:" (Ash's blank-FAQ report).
+    const faqs=cleanFaqs();
+    if(faqs.length===0)lines.push('None provided');
+    faqs.forEach((f,i)=>{lines.push('Q'+(i+1)+': '+f.q);lines.push('A: '+f.a);});
     lines.push('');
     lines.push('--- SPECIAL NOTES ---');
     lines.push(form.specialNotes||'None provided');
@@ -889,6 +922,7 @@ async function submitForm(){
 
     try{
         form._t=Date.now(); // freshness timestamp (server rejects stale/missing)
+        form.faqs=cleanFaqs(); // never POST blank FAQ rows
         const response=await fetch(API_BASE+'/api/onboarding',{
             method:'POST',
             headers:{'Content-Type':'application/json'},

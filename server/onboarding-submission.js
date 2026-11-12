@@ -125,11 +125,14 @@ async function sendTelegramNotification(data, submissionId = null) {
     `📧 ${escapeMarkdown(data.clinicEmail || '—')}`,
     `📱 ${escapeMarkdown(data.whatsapp || '—')}`,
     `👤 ${escapeMarkdown(data.contactName || '—')} (${escapeMarkdown(data.contactRole || '—')})`,
+    data.contactEmail ? `✉️ ${escapeMarkdown(data.contactEmail)}` : '',
+    data.contactPhone ? `📞 ${escapeMarkdown(data.contactPhone)}` : '',
     `💎 ${planLabel}`,
     `💉 ${treatmentCount} treatments`,
     `📅 Calendar: ${calendarLabel}`,
     submissionId ? `\n🆔 Submission #\`${submissionId}\`` : '',
-  ].join('\n');
+  // keep the one intentional blank separator (index 1); drop conditional empties
+  ].filter((l, i) => l !== '' || i === 1).join('\n');
 
   const inlineKeyboard = submissionId ? {
     inline_keyboard: [
@@ -160,8 +163,10 @@ async function sendTelegramNotification(data, submissionId = null) {
   }
 }
 
+// v2.5.0: legacy parse_mode 'Markdown' only treats _ * ` [ as special —
+// escaping the MarkdownV2 set (. - etc.) leaks literal backslashes (Ash's 'gmail\.com').
 function escapeMarkdown(text) {
-  return text.replace(/[_*\[\]()~`>#+=|{}.!-]/g, '\\$&');
+  return text.replace(/[_*`\[]/g, '\\$&');
 }
 
 // ─── SUPABASE STORAGE ────────────────────────────────────────────
@@ -202,6 +207,15 @@ async function storeInSupabase(data) {
     booking_reminder_1h: data.rem1h,
     booking_followup_48h: data.follow48h,
     faqs: JSON.stringify(data.faqs || []),
+    // v2.5.0: the calendar choice used to be alert-only and lost on approval
+    // (Ash's test: card said "Yes — SA access shared" but DB stored false).
+    has_google_calendar: data.calendarUse === 'yes',
+    google_calendar_email: data.calendarEmail || undefined,
+    // v2.5.0: owner direct contacts (optional). NB: the contact_email /
+    // contact_phone columns are added by a manual migration — until it runs,
+    // the insert below retries without these keys on a column error.
+    contact_email: data.contactEmail || undefined,
+    contact_phone: data.contactPhone || undefined,
     // Chiro expansion: whitelisted industry field (defaults to aesthetic)
     industry: data.industry === 'chiropractic' ? 'chiropractic' : 'aesthetic',
     status: 'pending',
@@ -214,11 +228,25 @@ async function storeInSupabase(data) {
     }
   });
 
-  const { data: inserted, error } = await supabase
+  let { data: inserted, error } = await supabase
     .from('onboarding_submissions')
     .insert(record)
     .select()
     .single();
+
+  // v2.5.0 self-heal: if the contact_email/contact_phone migration hasn't run
+  // yet, PostgREST rejects the unknown column — strip those keys and retry once
+  // rather than losing the whole submission.
+  if (error && /contact_email|contact_phone/.test(error.message || '')) {
+    console.warn('[ONBOARDING] contact_email/contact_phone columns missing — retrying insert without them (run the v2.5.0 migration)');
+    delete record.contact_email;
+    delete record.contact_phone;
+    ({ data: inserted, error } = await supabase
+      .from('onboarding_submissions')
+      .insert(record)
+      .select()
+      .single());
+  }
 
   if (error) {
     console.error('[ONBOARDING] Supabase insert failed:', error.message);

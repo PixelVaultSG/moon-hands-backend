@@ -800,11 +800,12 @@ async function handleTestAlerts(ctx) {
   const { SAMPLES } = require('../sample-alerts');
   await ctx.reply(`🧪 Firing ${SAMPLES.length} sample messages... (about ${Math.ceil(SAMPLES.length * 0.7)}s)`);
   await ctx.reply(`🧪 *SAMPLE ALERT RUN — ${SAMPLES.length} message types*
-Synced 2026-09-05: basic/premium plans, WhatsApp-only, admin-only free/payable split.`,
+Synced 2026-11-13 (v2.5.0): chiro + aesthetic fixtures, alt-time flow, delivery-failure escalation, demo-config alert, onboarding cards.`,
     { parse_mode: 'Markdown' }).catch(() => {});
   for (let i = 0; i < SAMPLES.length; i++) {
     const s = SAMPLES[i];
-    const text = `[${i + 1}/${SAMPLES.length}] ${s.name}
+    // v2.5.0: tolerate slug/label entries — previously printed "undefined"
+    const text = `[${i + 1}/${SAMPLES.length}] ${s.name || s.label || s.slug || 'SAMPLE'}
 
 ${s.text}`;
     const opts = { parse_mode: 'Markdown' };
