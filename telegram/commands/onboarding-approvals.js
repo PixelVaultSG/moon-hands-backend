@@ -120,13 +120,16 @@ async function handleApproveClinic(ctx) {
     // 1. Resolve submission by short code or full UUID
     const { submission, error: resolveErr, matches } = await resolveSubmission(args[0]);
     if (resolveErr === 'not_found') {
-      return ctx.reply(`❌ Pending submission "${args[0]}" not found. Use /pendingonboarding to see pending submissions.`);
+      ctx.reply(`❌ Pending submission "${args[0]}" not found. Use /pendingonboarding to see pending submissions.`);
+      return false;
     }
     if (resolveErr === 'ambiguous') {
-      return ctx.reply(`⚠️ "${args[0]}" matches ${matches.length} pending submissions — use a longer code.`);
+      ctx.reply(`⚠️ "${args[0]}" matches ${matches.length} pending submissions — use a longer code.`);
+      return false;
     }
     if (resolveErr || !submission) {
-      return ctx.reply('⚠️ Unable to fetch submissions. Please try again.');
+      ctx.reply('⚠️ Unable to fetch submissions. Please try again.');
+      return false;
     }
     const submissionId = submission.id;
 
@@ -162,7 +165,8 @@ async function handleApproveClinic(ctx) {
 
     if (clientErr) {
       console.error('[ONBOARDING_APPROVALS] Client insert error:', clientErr.message);
-      return ctx.reply(`❌ Failed to create clinic: ${clientErr.message}`);
+      ctx.reply(`❌ Failed to create clinic: ${clientErr.message}`);
+      return false;
     }
 
     // 4. Parse treatment menu
@@ -339,10 +343,12 @@ async function handleApproveClinic(ctx) {
     }
 
     console.log(`[ONBOARDING_APPROVALS] Approved submission ${submissionId} → clinic ${newClient.id} (${slug})`);
+    return true; // v2.5.1: buttons need the real outcome
 
   } catch (err) {
     console.error('[ONBOARDING_APPROVALS] /approveclinic error:', err.message, err.stack);
     ctx.reply('❌ Error approving clinic. Check logs.');
+    return false;
   }
 }
 
@@ -359,13 +365,16 @@ async function handleRejectClinic(ctx) {
   try {
     const { submission, error: resolveErr, matches } = await resolveSubmission(args[0]);
     if (resolveErr === 'not_found') {
-      return ctx.reply(`❌ Pending submission "${args[0]}" not found.`);
+      ctx.reply(`❌ Pending submission "${args[0]}" not found.`);
+      return false;
     }
     if (resolveErr === 'ambiguous') {
-      return ctx.reply(`⚠️ "${args[0]}" matches ${matches.length} pending submissions — use a longer code.`);
+      ctx.reply(`⚠️ "${args[0]}" matches ${matches.length} pending submissions — use a longer code.`);
+      return false;
     }
     if (resolveErr || !submission) {
-      return ctx.reply('⚠️ Unable to fetch submissions. Please try again.');
+      ctx.reply('⚠️ Unable to fetch submissions. Please try again.');
+      return false;
     }
     const submissionId = submission.id;
 
@@ -381,7 +390,8 @@ async function handleRejectClinic(ctx) {
 
     if (rejectErr) {
       console.error('[ONBOARDING_APPROVALS] Reject status update failed:', rejectErr.message);
-      return ctx.reply(`❌ Failed to update submission status: ${rejectErr.message}`);
+      ctx.reply(`❌ Failed to update submission status: ${rejectErr.message}`);
+      return false;
     }
 
     // Notify clinic contact
@@ -404,10 +414,12 @@ async function handleRejectClinic(ctx) {
     });
 
     console.log(`[ONBOARDING_APPROVALS] Rejected submission ${submissionId}: ${reason}`);
+    return true; // v2.5.1: buttons need the real outcome
 
   } catch (err) {
     console.error('[ONBOARDING_APPROVALS] /rejectclinic error:', err.message);
     ctx.reply('❌ Error rejecting submission. Check logs.');
+    return false;
   }
 }
 
