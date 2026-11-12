@@ -1214,10 +1214,15 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
     // ─── CANCEL DISAMBIGUATION (v2.4.4): a bare number answers the
     // "which booking should I cancel?" list — intercept before any router
     // or AI layer can misread it as a date, a phone number, or small talk.
+    // v2.4.5: "YES" confirms a SINGLE-booking cancel ("Reply YES to confirm"
+    // from the idle cancel_request handler, which now arms cancel_pending).
     const cancelPendingState = patientPhone ? convState.getState(patientPhone) : null;
-    if (cancelPendingState?.state === 'cancel_pending' && /^\s*\d{1,2}\s*$/.test(messageText || '')) {
-      const idx = parseInt(messageText.trim(), 10) - 1;
-      const ids = cancelPendingState.data?.ids || [];
+    const cancelPendingIds = cancelPendingState?.data?.ids || [];
+    const isCancelNumber = cancelPendingState?.state === 'cancel_pending' && /^\s*\d{1,2}\s*$/.test(messageText || '');
+    const isCancelYes = cancelPendingState?.state === 'cancel_pending' && cancelPendingIds.length === 1 && convState.isConfirmation(messageText || '');
+    if (isCancelNumber || isCancelYes) {
+      const idx = isCancelYes ? 0 : parseInt(messageText.trim(), 10) - 1;
+      const ids = cancelPendingIds;
       const labels = cancelPendingState.data?.label || [];
       convState.resetIdle(patientPhone);
       let dcText;

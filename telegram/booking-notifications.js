@@ -597,18 +597,76 @@ async function handlePatientConfirmAlternative(bookingId) {
       return { success: false, error: 'No alternative time found for this booking.' };
     }
 
+    // v2.4.5: the agreed alternative must become the booking's ACTUAL
+    // date/time — previously only status+notes were written, so the row kept
+    // the original slot (UVT 2026-11-12: Telegram said "confirmed at 4pm"
+    // while the DB said 10:00, and My Bookings/reminders followed the DB).
+    // Parse the clinic's free-text suggestion with the same SG-anchored
+    // parser the booking flow uses; fall back per-field to the existing
+    // value, and WARN the clinic if nothing parseable was there.
+    let newDate = booking.appointment_date;
+    let newTime = booking.appointment_time;
+    let timeParsed = false;
+    try {
+      const { extractBookingFields } = require('../ai/conversation-state');
+      const fields = extractBookingFields(altTime, []);
+      if (fields.date) { newDate = fields.date; timeParsed = true; }
+      if (fields.time) { newTime = fields.time.length === 5 ? `${fields.time}:00` : fields.time; timeParsed = true; }
+    } catch (parseErr) {
+      console.error('[BOOKING_NOTIFY] alternative time parse failed:', parseErr.message);
+    }
+
     // Update booking: confirmed with alternative time
     const { error: updateErr } = await supabase
       .from('appointments')
       .update({
         status: 'confirmed',
+        appointment_date: newDate,
+        appointment_time: newTime,
         notes: (booking.notes || '') + ` | Patient accepted alternative: ${altTime}`
       })
       .eq('id', bookingId);
-    
+
     if (updateErr) {
       console.error('[BOOKING_NOTIFY] Confirm alternative update error:', updateErr.message, updateErr.details, updateErr.hint);
       return { success: false, error: `Failed to confirm: ${updateErr.message}` };
+    }
+
+    // v2.4.5: sync to Google Calendar — this path never created the event,
+    // so "your calendar invite arrives with the confirmation" was a lie for
+    // every alternative-time booking (UVT 2026-11-12, booking 994c5d90).
+    // Mirrors the /approve flow in telegram/commands/approvals.js.
+    let calendarSynced = false;
+    try {
+      const { data: clientRow } = await supabase
+        .from('clients')
+        .select('id, name, google_calendar_id')
+        .eq('id', booking.client_id)
+        .single();
+      const calendarId = clientRow?.google_calendar_id;
+      if (calendarId) {
+        const { createBookingEvent } = require('../server/calendar-service');
+        const timePart = String(newTime).slice(0, 5);
+        const startISO = `${newDate}T${timePart}:00+08:00`;
+        const [sh, sm] = timePart.split(':').map(Number);
+        const endTotal = sh * 60 + sm + (parseInt(booking.duration) || 60);
+        const endISO = `${newDate}T${String(Math.floor(endTotal / 60)).padStart(2, '0')}:${String(endTotal % 60).padStart(2, '0')}:00+08:00`;
+        const ev = await createBookingEvent(calendarId, {
+          summary: `${booking.service} - ${booking.customer_name}`,
+          description: `Patient: ${booking.customer_name}\nPhone: ${booking.customer_phone}\nTreatment: ${booking.service}\nStatus: Confirmed\nSource: Moon Hands AI`,
+          startISO,
+          endISO,
+          patientPhone: booking.customer_phone,
+          patientName: booking.customer_name,
+          clinicName: clientRow.name || 'Clinic'
+        });
+        if (ev && ev.id) {
+          calendarSynced = true;
+          await supabase.from('appointments').update({ google_event_id: ev.id }).eq('id', bookingId);
+        }
+      }
+    } catch (calErr) {
+      console.error('[BOOKING_NOTIFY] Calendar sync on alternative-accept failed:', calErr.message);
     }
 
     // Notify clinic staff
@@ -619,12 +677,14 @@ async function handlePatientConfirmAlternative(bookingId) {
         `👤 ${escapeMarkdown(booking.customer_name || 'Patient')}\n` +
         `📅 New time: *${escapeMarkdown(altTime)}*\n` +
         `🩺 ${escapeMarkdown(booking.service || 'General consultation')}\n\n` +
-        `Booking confirmed.`,
+        `Booking confirmed.` +
+        (calendarSynced ? '\n✓ Synced to Google Calendar' : '\n⚠ Calendar not synced') +
+        (timeParsed ? '' : `\n⚠ Could not parse "${escapeMarkdown(altTime)}" into a date/time — booking kept its original slot; please verify manually.`),
         { includeAdmin: true }
       );
     }
 
-    return { success: true, booking };
+    return { success: true, booking: { ...booking, appointment_date: newDate, appointment_time: newTime } };
   } catch (err) {
     console.error('[BOOKING_NOTIFY] Patient confirm alternative error:', err.message);
     return { success: false, error: 'Failed to confirm alternative.' };

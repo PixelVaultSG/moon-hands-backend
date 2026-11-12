@@ -456,12 +456,23 @@ async function handleCancelRequest({ clinicConfig, patientPhone }) {
     return `I don't see any upcoming appointments for ${patientPhone}. Could you double-check the number, or would you like me to help you book a new appointment?`;
   }
   
+  // v2.4.5: arm cancel_pending so the reply actually executes — previously
+  // this asked "Reply YES to confirm" / "Reply with the number" with NO
+  // state behind it, and the patient's answer vanished into the AI layer
+  // (gap flagged in the v2.4.4 release). The bot-engine intercept resolves
+  // cancel_pending deterministically: digit = pick from list, YES = confirm
+  // a single-booking cancel.
+  const { setState: setCancelState } = require('./conversation-state');
+  const cancelLabel = (a) => `${a.service || 'Appointment'} - ${a.appointment_date} at ${String(a.appointment_time).slice(0, 5)}`;
+
   if (appointments.length === 1) {
     const appt = appointments[0];
+    setCancelState(patientPhone, 'cancel_pending', { ids: [appt.id], label: [cancelLabel(appt)] });
     return `I found your appointment:\n📅 ${formatDate(appt.appointment_date)} at ${formatTime(appt.appointment_time)}\n💆 ${appt.service || 'Treatment'}\n\nWould you like me to cancel this appointment? (Reply YES to confirm)`;
   }
-  
+
   // Multiple appointments
+  setCancelState(patientPhone, 'cancel_pending', { ids: appointments.map(a => a.id), label: appointments.map(cancelLabel) });
   const list = appointments.map((a, i) => `${i + 1}. ${formatDate(a.appointment_date)} at ${formatTime(a.appointment_time)} — ${a.service || 'Treatment'}`).join('\n');
   return `I found multiple upcoming appointments:\n\n${list}\n\nWhich one would you like to cancel? (Reply with the number)`;
 }

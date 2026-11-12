@@ -188,13 +188,33 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // ─── ADMIN: calendar backfill (v2.4.5) ─────────────────────────
+  // Creates the missing GCal event for a confirmed booking. Guarded by
+  // x-admin-key = SUPABASE_SERVICE_ROLE_KEY inside the handler.
+  if (url.pathname === '/api/admin/calendar-backfill' && req.method === 'POST') {
+    if (isRateLimited('calendar_backfill', 10, 60 * 1000)) {
+      res.writeHead(429, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, message: 'Too many requests. Please wait a minute and try again.' }));
+      return;
+    }
+    try {
+      const { handleCalendarBackfill } = require('./server/calendar-backfill');
+      await handleCalendarBackfill(req, res);
+    } catch (err) {
+      console.error('[SERVER] Calendar backfill error:', err.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'Calendar backfill error' }));
+    }
+    return;
+  }
+
   // Health check — always available
   if (url.pathname === '/health' && req.method === 'GET') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
       status: 'ok',
       service: 'moon-hands',
-      version: '2.4.4',
+      version: '2.4.5',
       webhook: !!webhookHandler,
       telegram: telegramOk,
       calendar: !!process.env.GOOGLE_CALENDAR_KEY,
@@ -406,7 +426,7 @@ setTimeout(async () => {
       return;
     }
     const report = await calendarSelfCheck(clinics || []);
-    const lines = [`🚀 v2.4.4 boot calendar canary`, ''];
+    const lines = [`🚀 v2.4.5 boot calendar canary`, ''];
     for (const c of report.clinics) {
       lines.push(`${c.ok ? '✅' : '❌'} ${c.name} — ${c.detail}`);
       if (!c.ok) console.error(`[BOOT_CANARY] ${c.name}: ${c.detail}`);
