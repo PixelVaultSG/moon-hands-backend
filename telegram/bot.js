@@ -32,7 +32,7 @@ const ADMIN_CHAT_ID = process.env.TELEGRAM_ADMIN_CHAT_ID;
 // v2.2.9: this module previously exported NOTHING — jobs doing
 // require('../telegram/bot').bot got undefined and crashed at send time
 // (daily summary, attendance checks, weekly-loop reports never sent).
-module.exports = { bot };
+module.exports = { bot, getBotTelemetry };
 
 // ─── SECURITY LAYER ──────────────────────────────────────────────
 
@@ -40,6 +40,23 @@ const rateLimiter = new RateLimiter();
 
 // Track command attempts for audit
 const commandLog = [];
+
+// v2.5.2: polling telemetry — surfaced via /health so a deaf bot is VISIBLE
+// remotely instead of looking green. (2026-11-12: all 3 onboarding buttons
+// dead for hours while /health said ok.)
+const botTelemetry = {
+  pollingState: 'boot',        // boot | booting | polling | restarting | dead
+  lastUpdateAt: null,          // last Telegram update that REACHED this process
+  lastPollingError: null,      // { message, code, at }
+  relaunchCount: 0,
+  bootedAt: new Date().toISOString(),
+  lastStateChangeAt: new Date().toISOString()
+};
+function setPollingState(state) {
+  botTelemetry.pollingState = state;
+  botTelemetry.lastStateChangeAt = new Date().toISOString();
+}
+function getBotTelemetry() { return { ...botTelemetry }; }
 
 function auditCommand(userId, command, success, reason = null) {
   const entry = {
@@ -99,6 +116,14 @@ function adminOnly(ctx) {
   ctx.reply('🔒 This area is for Moon Hands admin only.').catch(() => {});
   return false;
 }
+
+// v2.5.2: telemetry tap — FIRST middleware: every update that REACHES this
+// process bumps lastUpdateAt. If buttons ever go quiet again, /health.bot
+// instantly discriminates "updates not arriving" from "handler broken".
+bot.use(async (ctx, next) => {
+  botTelemetry.lastUpdateAt = new Date().toISOString();
+  return next();
+});
 
 bot.use(async (ctx, next) => {
   // Layer 1: Allow admin + linked clinic staff; reject everyone else
@@ -1777,44 +1802,114 @@ bot.catch((err, ctx) => {
 
 // ─── START ───────────────────────────────────────────────────────
 
-// Prevent 409 Conflict on Render redeploys: clear pending updates and handle errors gracefully.
-// Also retry transient network failures (DNS/socket blips at boot) — previously these killed
-// the bot permanently until a manual restart because only 409s were retried.
-const LAUNCH_RETRIES = 8;
+// v2.5.2 launch supervisor.
+// Telegraf 4.16 internals (verified against lib/core/network/polling.js +
+// lib/telegraf.js): bot.launch() AWAITS the polling loop — it rejects when
+// polling DIES (401/409 throw out of telegraf's loop; FetchError/429/5xx are
+// retried inside telegraf). So this one catch handles BOTH boot failures AND
+// mid-life polling death. Side effect of the same design: any log placed
+// AFTER "await bot.launch(...)" only prints at shutdown — v2.5.1's "Bot
+// started" line never printed while healthy.
+//
+// The v2.5.1 flaw that deafened prod (Ash 2026-11-12 — all 3 onboarding card
+// buttons dead for ~6h while /health stayed green): a LIFETIME budget of 8
+// attempts, then "continues without Telegram bot" forever. Now:
+//   • 409 / network errors  → retry FOREVER with capped backoff
+//     (deploy overlaps always end; Render's old instance always dies)
+//   • a launch that survives >= 5 min earns a FRESH budget
+//     (mid-life death is a different failure class than a boot storm)
+//   • 401 (bad token) / unknown errors → alert admin, then process.exit(1)
+//     so Render restarts the whole service — never run green-but-deaf again.
+// dropPendingUpdates stays FALSE (v2.5.1): deploys must not discard in-flight
+// taps/commands. Replay safety: onboarding resolveSubmission only matches
+// status='pending' (replayed taps degrade to "not found"), and confirm_alt_
+// has the v2.4.6 acceptance-marker guard.
+const BOT_VERSION = '2.5.2';
 const RETRY_DELAY_MS = 3000;
+const RETRY_DELAY_CAP_MS = 30000;
+const STABLE_MS = 5 * 60 * 1000;
+
+let currentLaunchToken = null;
+
+// Plain sendMessage — works even while polling is broken (sends don't use
+// getUpdates), so the admin can always be told the bot is in trouble.
+async function alertAdmin(text) {
+  try { await bot.telegram.sendMessage(ADMIN_CHAT_ID, text); }
+  catch (e) { console.error('[TELEGRAM] Admin alert failed:', e.message); }
+}
 
 async function startBot(attempt = 1) {
-  try {
-    // v2.5.1: dropPendingUpdates false — every Render deploy used to DISCARD
-    // in-flight taps/commands (Ash 2026-11-13: Reject button + /rejectclinic
-    // "didn't work" — both landed inside the v2.4.9 deploy window and were
-    // dropped unread). Replay safety: onboarding resolveSubmission only
-    // matches status='pending' (replayed taps degrade to "not found"), and
-    // confirm_alt_ has the v2.4.6 acceptance-marker guard.
-    await bot.launch({ dropPendingUpdates: false });
-    console.log(`[${new Date().toISOString()}] Moon Hands Telegram Bot started (attempt ${attempt})`);
-    console.log(`  Admin: ${ADMIN_CHAT_ID}`);
-    console.log(`  Mode: Polling (dropPendingUpdates: false)`);
-    console.log(`  Security: Rate limiting + Input sanitization + Injection detection ACTIVE`);
-  } catch (err) {
-    const is409 = err.response?.error_code === 409 || err.message?.includes('409');
-    // Network-level failures (no HTTP response object): DNS, socket reset, timeout at boot.
-    const isNetwork = !err.response;
-    if ((is409 || isNetwork) && attempt < LAUNCH_RETRIES) {
-      const waitMs = RETRY_DELAY_MS * attempt; // linear backoff: 3s, 6s, 9s...
-      const kind = is409 ? '409 Conflict' : 'Network error';
-      console.warn(`[TELEGRAM] ${kind} on attempt ${attempt}. Waiting ${waitMs}ms before retry...`);
-      await new Promise(r => setTimeout(r, waitMs));
-      return startBot(attempt + 1);
+  const launchedAt = Date.now();
+  const launchToken = {};
+  currentLaunchToken = launchToken;
+  setPollingState(attempt === 1 && botTelemetry.relaunchCount === 0 ? 'booting' : 'restarting');
+  console.log(`[${new Date().toISOString()}] Moon Hands Telegram Bot launching (attempt ${attempt})`);
+  console.log(`  Admin: ${ADMIN_CHAT_ID}`);
+  console.log(`  Mode: Polling (dropPendingUpdates: false)`);
+  console.log(`  Security: Rate limiting + Input sanitization + Injection detection ACTIVE`);
+
+  // launch() resolves only at shutdown, so polling health can't be awaited.
+  // If this launch survives 60s without rejecting, call polling established
+  // and tell the admin (deploy verification now includes bot state).
+  setTimeout(() => {
+    if (currentLaunchToken === launchToken && botTelemetry.pollingState !== 'dead') {
+      const wasRelaunch = botTelemetry.relaunchCount > 0;
+      setPollingState('polling');
+      alertAdmin(wasRelaunch
+        ? `✅ Moon Hands bot v${BOT_VERSION}: polling re-established after interruption.`
+        : `🤖 Moon Hands bot v${BOT_VERSION} up — polling established.`).catch(() => {});
     }
-    console.error(`[TELEGRAM] Bot failed to start after ${attempt} attempts:`, err.message);
-    // Don't crash the whole server — webhook still works without Telegram
-    console.log('[TELEGRAM] Webhook server continues running without Telegram bot');
+  }, 60000).unref();
+
+  try {
+    await bot.launch({ dropPendingUpdates: false });
+    if (currentLaunchToken === launchToken) setPollingState('dead');
+    console.log(`[${new Date().toISOString()}] Telegram polling loop exited cleanly`);
+  } catch (err) {
+    if (currentLaunchToken !== launchToken) return; // superseded by shutdown
+    currentLaunchToken = null;
+    const code = err.response?.error_code;
+    const is409 = code === 409 || (err.message || '').includes('409');
+    const is401 = code === 401;
+    // Network-level failures (no HTTP response object): DNS, socket reset, timeout.
+    const isNetwork = !err.response;
+    botTelemetry.lastPollingError = { message: err.message, code: code ?? null, at: new Date().toISOString() };
+    botTelemetry.relaunchCount++;
+    setPollingState('restarting');
+
+    const survivedMs = Date.now() - launchedAt;
+    const effectiveAttempt = survivedMs >= STABLE_MS ? 1 : attempt;
+
+    if (is409 || isNetwork) {
+      const waitMs = Math.min(RETRY_DELAY_MS * effectiveAttempt, RETRY_DELAY_CAP_MS);
+      console.warn(`[TELEGRAM] ${is409 ? '409 Conflict (another poller alive — normal during deploys)' : 'Network error'} — survived ${Math.round(survivedMs / 1000)}s, attempt ${effectiveAttempt}, retrying in ${waitMs}ms`);
+      if (effectiveAttempt === 1) {
+        await alertAdmin(`⚠️ Moon Hands bot v${BOT_VERSION}: polling interrupted (${is409 ? '409 conflict' : 'network error'}). Auto-retrying — no action needed unless this repeats.`);
+      }
+      await new Promise(r => setTimeout(r, waitMs));
+      return startBot(effectiveAttempt + 1);
+    }
+
+    // 401 = Telegram rejected the token; anything else = unknown failure
+    // class. Neither is fixable by retrying in-process. Fail LOUD: alert,
+    // then exit so Render restarts the whole service.
+    console.error(`[TELEGRAM] Non-retryable polling failure: ${is401 ? '401 Unauthorized — check TELEGRAM_BOT_TOKEN' : err.message}`);
+    setPollingState('dead');
+    await alertAdmin(`🚨 Moon Hands bot v${BOT_VERSION} DIED: ${is401 ? 'Telegram rejected the bot token (401)' : err.message}. Service exiting so Render restarts it.`);
+    process.exit(1);
   }
 }
 
 startBot();
 
-// Graceful shutdown
-process.once('SIGINT', () => { rateLimiter.destroy(); bot.stop('SIGINT'); });
-process.once('SIGTERM', () => { rateLimiter.destroy(); bot.stop('SIGTERM'); });
+// Graceful shutdown — v2.5.2: actually EXIT after stopping. A lingering old
+// instance extends the deploy-overlap 409 window for its replacement.
+function gracefulShutdown(signal) {
+  currentLaunchToken = null;
+  setPollingState('dead');
+  try { rateLimiter.destroy(); } catch {}
+  try { bot.stop(signal); } catch {}
+  setTimeout(() => process.exit(0), 1500).unref();
+}
+process.once('SIGINT', () => gracefulShutdown('SIGINT'));
+process.once('SIGTERM', () => gracefulShutdown('SIGTERM'));
