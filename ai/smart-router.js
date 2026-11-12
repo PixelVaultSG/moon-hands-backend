@@ -311,11 +311,7 @@ async function routeMessage(message, clinicConfig, patientPhone = null, conversa
   if (primaryIntent.intent === 'service_selected') {
     const treatmentName = message;
     const services = clinicConfig.config?.services || [];
-    const matchedService = services.find(s =>
-      s.name.toLowerCase() === treatmentName.toLowerCase() ||
-      treatmentName.toLowerCase().includes(s.name.toLowerCase()) ||
-      s.name.toLowerCase().includes(treatmentName.toLowerCase())
-    );
+    const matchedService = matchServiceByName(services, treatmentName);
     
     if (matchedService) {
       // Get current selected treatments from state (preserve basket)
@@ -857,8 +853,7 @@ async function startBookingFlow(message, clinicConfig, patientPhone, conversatio
 
   // CRITICAL: If no treatment extracted from fields, try matching message against service names
   if (treatments.length === 0 && services.length > 0) {
-    const msgLower2 = message.toLowerCase();
-    const matchedService = services.find(s => msgLower2.includes(s.name.toLowerCase()));
+    const matchedService = matchServiceByName(services, message);
     if (matchedService) {
       treatments = [matchedService.name];
     }
@@ -1538,6 +1533,18 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
       latency_ms: Date.now() - startTime,
       whatsappInteractive: getEditMenuButtons()
     };
+  }
+
+  // v2.4.4: "cancel MY APPOINTMENT/BOOKING" is NOT a booking-flow abort — it
+  // is a real cancellation request against an existing booking. This guard's
+  // substring match below used to swallow "I want to cancel my appointment"
+  // typed mid-flow (UVT 2026-11-12: patient got "No problem!" and the cancel
+  // vanished). Exit the stale flow and hand the message to the AI layer,
+  // where the cancel functions live.
+  const APPOINTMENT_CANCEL_RE = /(?:cancel|delete|remove)\s+(?:my\s+)?(?:appointment|booking|appt)\b|i\s+(?:want|need|would\s+like)\s+to\s+cancel/i;
+  if (APPOINTMENT_CANCEL_RE.test(message)) {
+    resetIdle(patientPhone);
+    return { text: null, source: 'openai', intents: ['cancel_request'], cost_saved: 0, latency_ms: Date.now() - startTime };
   }
 
   // Check if user wants to cancel the booking flow — includes natural
@@ -2459,7 +2466,7 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
         let totalDuration = 0;
         const matched = [];
         for (const t of treatments) {
-          const svc = services.find(s => s.name.toLowerCase().includes(t.toLowerCase()) || t.toLowerCase().includes(s.name.toLowerCase()));
+          const svc = matchServiceByName(services, t);
           if (svc) { matched.push(svc); totalDuration += parseInt(svc.duration) || 60; }
         }
         const priceSum = sumServicePrices(matched);
@@ -2557,13 +2564,36 @@ async function startConsultQuickBook(clinicConfig, patientPhone, conversationHis
   }
   setState(patientPhone, BOOKING_STATES.AWAITING_DATE, merged);
   const priceBit = [svc.price, svc.duration ? `${svc.duration} min` : null].filter(Boolean).join(', ');
+  // v2.4.4: returning-patient check — "your first visit" assumes a brand-new
+  // patient. Ash's UVT had an existing confirmed booking and the copy lied.
+  // Any prior confirmed/completed visit → neutral framing. Fail-open to the
+  // first-visit copy on error.
+  let isReturning = false;
+  try {
+    const { supabase } = require('../supabase/client');
+    const clinicId = clinicConfig.id || clinicConfig.client_id;
+    const phoneDigits = String(patientPhone || '').replace(/\D/g, '');
+    if (clinicId && phoneDigits) {
+      const { data: priorAppts } = await supabase
+        .from('appointments')
+        .select('id')
+        .eq('client_id', clinicId)
+        .eq('customer_phone', phoneDigits)
+        .in('status', ['confirmed', 'completed'])
+        .limit(1);
+      isReturning = !!(priorAppts && priorAppts.length > 0);
+    }
+  } catch (e) {
+    console.error(`[QUICK_CONSULT] returning-patient check error: ${e.message}`);
+  }
+  const visitFrame = isReturning ? `the ${svc.name}` : `your first visit is the ${svc.name}`;
   try {
     const { getNextAvailableDates } = require('./availability-engine');
     const { getDateButtonOptions } = require('./whatsapp-interactive');
     const dateOptions = await getNextAvailableDates(clinicConfig.id, treatmentNames, clinicConfig, 3);
     if (dateOptions.length > 0) {
       return { ...base,
-        text: `Great — your first visit is the ${svc.name}${priceBit ? ` (${priceBit})` : ''}.\n\nWhich date works for you?`,
+        text: `Great — ${visitFrame}${priceBit ? ` (${priceBit})` : ''}.\n\nWhich date works for you?`,
         whatsappInteractive: getDateButtonOptions(dateOptions) };
     }
   } catch (e) {
@@ -2625,6 +2655,39 @@ function showCategorySelection(clinicConfig, startTime) {
  * Accepts "Sarah", "Sarah Tan", "my name is Sarah Tan".
  * Rejects digits, service names, yes/no answers, and anything implausible.
  */
+// v2.4.4: conservative token-stem service matching. Pure substring matching
+// fails on plural/derivational variants — Ash's UVT typed "Chaps Adjustments"
+// against service "Chiropractic Adjustment" and got nothing. Secondary pass:
+// stem tokens (strip trailing 's' for len>3), drop generic words, and accept
+// only a UNIQUE overlap — ambiguity falls through to the normal
+// list/clarification flow rather than guessing the wrong service. The stem
+// pass is gated to short queries (<=5 tokens): it exists for typed treatment
+// NAMES, not free-form sentences.
+const GENERIC_SERVICE_TOKENS = new Set(['treatment','treatments','session','sessions','therapy','service','services','appointment','appointments','booking','bookings','book','consultation','consultations','consult','visit','visits','package','packages','program','programme','slot','slots','price','prices','cost']);
+function _stemToken(t) { return t.length > 3 ? t.replace(/s+$/, '') : t; }
+function matchServiceByName(services, query) {
+  if (!query) return null;
+  const q = String(query).toLowerCase().trim();
+  if (!q) return null;
+  // Pass 1: legacy exact/substring behaviour — unchanged.
+  const sub = (services || []).find(s =>
+    s.name.toLowerCase() === q ||
+    q.includes(s.name.toLowerCase()) ||
+    s.name.toLowerCase().includes(q));
+  if (sub) return sub;
+  // Pass 2: conservative stem overlap, short queries only, unique hit only.
+  const qTokens = q.split(/[^a-z0-9]+/).filter(Boolean);
+  if (qTokens.length === 0 || qTokens.length > 5) return null;
+  const qStems = new Set(qTokens.map(_stemToken).filter(t => t.length >= 4 && !GENERIC_SERVICE_TOKENS.has(t)));
+  if (qStems.size === 0) return null;
+  const hits = (services || []).filter(s => {
+    const sStems = new Set((s.name || '').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean).map(_stemToken).filter(t => t.length >= 4 && !GENERIC_SERVICE_TOKENS.has(t)));
+    for (const t of qStems) if (sStems.has(t)) return true;
+    return false;
+  });
+  return hits.length === 1 ? hits[0] : null;
+}
+
 function extractValidName(message, services = []) {
   let m = (message || '').trim();
   const prefixed = m.match(/(?:my name is|call me|name is|i am|i'm|its|it's)\s+(.+)/i);
@@ -2706,7 +2769,7 @@ async function buildConfirmationResponse(clinicConfig, patientPhone, date, time,
   const matched = [];
 
   for (const t of treatments) {
-    const svc = services.find(s => s.name.toLowerCase().includes(t.toLowerCase()) || t.toLowerCase().includes(s.name.toLowerCase()));
+    const svc = matchServiceByName(services, t);
     if (svc) {
       matched.push(svc);
       totalDuration += parseInt(svc.duration) || 60;
@@ -2783,10 +2846,7 @@ async function attemptBooking(clinicConfig, patientPhone, fields, conversationHi
   const notFound = [];
   
   for (const req of requestedTreatments) {
-    const matched = services.find(s => 
-      s.name.toLowerCase().includes(req.toLowerCase()) ||
-      req.toLowerCase().includes(s.name.toLowerCase())
-    );
+    const matched = matchServiceByName(services, req);
     if (matched) {
       matchedServices.push(matched);
     } else {
@@ -2974,7 +3034,7 @@ async function buildBookingSummary(clinicConfig, date, time, treatments, service
   let totalDuration = 0;
 
   for (const t of treatments) {
-    const svc = services.find(s => s.name.toLowerCase().includes(t.toLowerCase()) || t.toLowerCase().includes(s.name.toLowerCase()));
+    const svc = matchServiceByName(services, t);
     if (svc) {
       matchedServices.push(svc);
       totalDuration += parseInt(svc.duration) || 60;
@@ -3192,4 +3252,4 @@ async function composeResponse(responses, message, clinicConfig) {
   return responses.join('. ');
 }
 
-module.exports = { routeMessage, composeResponse, findConsultService };
+module.exports = { routeMessage, composeResponse, findConsultService, matchServiceByName };
