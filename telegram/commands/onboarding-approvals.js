@@ -242,16 +242,20 @@ async function handleApproveClinic(ctx) {
       operating_hours: operatingHours,
       faqs: faqs,
       special_notes: submission.special_notes || '',
-      booking_auto_confirm: submission.booking_auto_confirm || false,
+      // v2.4.9: ?? not || — || collapses a clinic's explicit OFF (false) or
+      // "No minimum" (0) back to the default, making those toggles dead in
+      // the real config (Ash UVT 2026-11-12). ?? only defaults when the
+      // submission genuinely lacks the field (old submissions, partial data).
+      booking_auto_confirm: submission.booking_auto_confirm ?? false,
       booking_after_hours_action: submission.booking_after_hours_action || 'hold_for_approval',
-      booking_waitlist_enabled: submission.booking_waitlist_enabled || true,
-      booking_max_advance_days: submission.booking_max_advance_days || 30,
-      booking_min_notice_hours: submission.booking_min_notice_hours || 2,
-      booking_allow_same_day: submission.booking_allow_same_day || true,
-      booking_require_phone: submission.booking_require_phone || true,
-      booking_reminder_24h: submission.booking_reminder_24h || true,
-      booking_reminder_1h: submission.booking_reminder_1h || true,
-      booking_followup_48h: submission.booking_followup_48h || true,
+      booking_waitlist_enabled: submission.booking_waitlist_enabled ?? true,
+      booking_max_advance_days: submission.booking_max_advance_days ?? 30,
+      booking_min_notice_hours: submission.booking_min_notice_hours ?? 2,
+      booking_allow_same_day: submission.booking_allow_same_day ?? true,
+      booking_require_phone: submission.booking_require_phone ?? true,
+      booking_reminder_24h: submission.booking_reminder_24h ?? true,
+      booking_reminder_1h: submission.booking_reminder_1h ?? true,
+      booking_followup_48h: submission.booking_followup_48h ?? true,
       languages: submission.languages || ['en'],
       cancellation_policy: submission.cancellation_policy || '',
     };
