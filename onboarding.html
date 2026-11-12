@@ -369,45 +369,45 @@ function renderClinicInfo() {
 
         <div class="form-group">
             <label class="form-label">Clinic Name *</label>
-            <input class="form-input" placeholder="e.g., Glow Aesthetic Clinic" value="${esc(form.clinicName)}" onchange="form.clinicName=this.value;renderStep();">
+            <input class="form-input" placeholder="e.g., Glow Aesthetic Clinic" value="${esc(form.clinicName)}" oninput="syncField('clinicName',this.value)">
         </div>
         <div class="form-row">
             <div class="form-group">
                 <label class="form-label">Business Reg No (UEN)</label>
-                <input class="form-input" placeholder="e.g., 20154321A" value="${esc(form.businessRegNo)}" onchange="form.businessRegNo=this.value">
+                <input class="form-input" placeholder="e.g., 20154321A" value="${esc(form.businessRegNo)}" oninput="syncField('businessRegNo',this.value)">
             </div>
             <div class="form-group">
                 <label class="form-label">WhatsApp Business *</label>
-                <input class="form-input" placeholder="+65 XXXX XXXX" value="${esc(form.whatsapp)}" onchange="form.whatsapp=this.value;renderStep();">
+                <input class="form-input" placeholder="+65 XXXX XXXX" value="${esc(form.whatsapp)}" oninput="syncField('whatsapp',this.value)">
             </div>
         </div>
         <div class="form-row">
             <div class="form-group">
                 <label class="form-label">Clinic Phone</label>
-                <input class="form-input" placeholder="+65 XXXX XXXX" value="${esc(form.clinicPhone)}" onchange="form.clinicPhone=this.value">
+                <input class="form-input" placeholder="+65 XXXX XXXX" value="${esc(form.clinicPhone)}" oninput="syncField('clinicPhone',this.value)">
             </div>
             <div class="form-group">
                 <label class="form-label">Clinic Email *</label>
-                <input class="form-input" type="email" placeholder="hello@glowclinic.sg" value="${esc(form.clinicEmail)}" onchange="form.clinicEmail=this.value;renderStep();">
+                <input class="form-input" type="email" placeholder="hello@glowclinic.sg" value="${esc(form.clinicEmail)}" oninput="syncField('clinicEmail',this.value)">
             </div>
         </div>
         <div class="form-group">
             <label class="form-label">Address *</label>
-            <textarea class="form-textarea" rows="2" placeholder="e.g., 123 Orchard Road, #05-01, Singapore 238863" onchange="form.address=this.value;renderStep();">${esc(form.address)}</textarea>
+            <textarea class="form-textarea" rows="2" placeholder="e.g., 123 Orchard Road, #05-01, Singapore 238863" oninput="syncField('address',this.value)">${esc(form.address)}</textarea>
         </div>
         <div class="form-row">
             <div class="form-group">
                 <label class="form-label">Postal Code</label>
-                <input class="form-input" placeholder="238863" value="${esc(form.postalCode)}" onchange="form.postalCode=this.value">
+                <input class="form-input" placeholder="238863" value="${esc(form.postalCode)}" oninput="syncField('postalCode',this.value)">
             </div>
             <div class="form-group">
                 <label class="form-label">Nearest MRT</label>
-                <input class="form-input" placeholder="e.g., Orchard MRT (NS22)" value="${esc(form.nearestMrt)}" onchange="form.nearestMrt=this.value">
+                <input class="form-input" placeholder="e.g., Orchard MRT (NS22)" value="${esc(form.nearestMrt)}" oninput="syncField('nearestMrt',this.value)">
             </div>
         </div>
         <div class="form-group">
             <label class="form-label">Parking Information</label>
-            <input class="form-input" placeholder="e.g., Complimentary parking at ION Orchard" value="${esc(form.parkingInfo)}" onchange="form.parkingInfo=this.value">
+            <input class="form-input" placeholder="e.g., Complimentary parking at ION Orchard" value="${esc(form.parkingInfo)}" oninput="syncField('parkingInfo',this.value)">
         </div>
         <!-- Honeypot: invisible to humans, bots auto-fill it. Server drops submissions with this set. -->
         <div style="position:absolute;left:-9999px;top:-9999px;height:1px;width:1px;overflow:hidden;" aria-hidden="true">
@@ -455,16 +455,16 @@ function renderTreatments() {
 function renderCustomTreatmentForm(t,idx) {
     return `<div style="padding:0.75rem;background:rgba(27,58,92,0.1);border:1px solid var(--border);border-radius:8px;margin-bottom:0.5rem;" data-idx="${idx}">
         <div class="form-row" style="margin-bottom:0.5rem">
-            <input class="form-input" placeholder="Treatment name" value="${esc(t.name)}" onchange="updateCustomTreatment(${idx},'name',this.value)">
+            <input class="form-input" placeholder="Treatment name" value="${esc(t.name)}" oninput="updateCustomTreatment(${idx},'name',this.value)">
             <select class="form-select" onchange="updateCustomTreatment(${idx},'category',this.value)">
                 ${(CATEGORY_OPTIONS[form.industry]||CATEGORY_OPTIONS.other).map(c=>`<option ${t.category===c?'selected':''}>${c}</option>`).join('')}
             </select>
         </div>
         <div class="form-row" style="margin-bottom:0.5rem">
-            <input class="form-input" placeholder="Price (S$)" value="${esc(t.price)}" onchange="updateCustomTreatment(${idx},'price',this.value)">
-            <input class="form-input" placeholder="Duration (min)" value="${esc(t.duration)}" onchange="updateCustomTreatment(${idx},'duration',this.value)">
+            <input class="form-input" placeholder="Price (S$)" value="${esc(t.price)}" oninput="updateCustomTreatment(${idx},'price',this.value)">
+            <input class="form-input" placeholder="Duration (min)" value="${esc(t.duration)}" oninput="updateCustomTreatment(${idx},'duration',this.value)">
         </div>
-        <textarea class="form-textarea" rows="2" placeholder="Description..." onchange="updateCustomTreatment(${idx},'description',this.value)">${esc(t.description)}</textarea>
+        <textarea class="form-textarea" rows="2" placeholder="Description..." oninput="updateCustomTreatment(${idx},'description',this.value)">${esc(t.description)}</textarea>
         <button class="btn-remove" onclick="removeCustomTreatment(${idx})" style="margin-top:0.25rem">Remove</button>
     </div>`;
 }
@@ -567,7 +567,7 @@ function renderPersonality() {
 
         <div class="form-group">
             <label class="form-label">Agent Name</label>
-            <input class="form-input" placeholder="e.g., Sophia" value="${esc(form.agentName)}" onchange="form.agentName=this.value">
+            <input class="form-input" placeholder="e.g., Sophia" value="${esc(form.agentName)}" oninput="syncField('agentName',this.value)">
             <p style="font-size:0.7rem;color:var(--muted);margin-top:0.25rem">This is the name patients will see.</p>
         </div>
 
@@ -585,7 +585,7 @@ function renderPersonality() {
 
         <div class="form-group">
             <label class="form-label">Custom Greeting (optional)</label>
-            <textarea class="form-textarea" rows="2" placeholder="Leave blank for default, or write your own..." onchange="form.greeting=this.value">${esc(form.greeting)}</textarea>
+            <textarea class="form-textarea" rows="2" placeholder="Leave blank for default, or write your own..." oninput="syncField('greeting',this.value)">${esc(form.greeting)}</textarea>
         </div>
 
         <div class="form-group">
@@ -654,7 +654,7 @@ function renderBooking() {
 
         <div class="form-group" style="margin-top:1rem">
             <label class="form-label">Cancellation Policy</label>
-            <textarea class="form-textarea" rows="2" onchange="form.cancelPolicy=this.value">${esc(form.cancelPolicy)}</textarea>
+            <textarea class="form-textarea" rows="2" oninput="syncField('cancelPolicy',this.value)">${esc(form.cancelPolicy)}</textarea>
         </div>`;
 }
 
@@ -674,8 +674,8 @@ function renderFAQ() {
         <div id="faqList">
             ${form.faqs.map((f,i)=>`
                 <div style="padding:0.75rem;background:rgba(27,58,92,0.1);border:1px solid var(--border);border-radius:8px;margin-bottom:0.5rem">
-                    <input class="form-input" style="margin-bottom:0.4rem" placeholder="Question..." value="${esc(f.q)}" onchange="form.faqs[${i}].q=this.value">
-                    <textarea class="form-textarea" rows="2" placeholder="Answer..." onchange="form.faqs[${i}].a=this.value">${esc(f.a)}</textarea>
+                    <input class="form-input" style="margin-bottom:0.4rem" placeholder="Question..." value="${esc(f.q)}" oninput="form.faqs[${i}].q=this.value">
+                    <textarea class="form-textarea" rows="2" placeholder="Answer..." oninput="form.faqs[${i}].a=this.value">${esc(f.a)}</textarea>
                     <button class="btn-remove" onclick="removeFAQ(${i})" style="margin-top:0.25rem">Remove</button>
                 </div>
             `).join('')}
@@ -684,7 +684,7 @@ function renderFAQ() {
         <div class="form-group" style="margin-top:1.5rem;border-top:1px solid var(--border);padding-top:1rem">
             <label class="form-label">Special Notes for AI</label>
             <p style="font-size:0.7rem;color:var(--muted);margin-bottom:0.5rem">Important info the AI should always keep in mind.</p>
-            <textarea class="form-textarea" rows="4" placeholder="e.g., All injectable treatments are performed by MOH-certified doctors..." onchange="form.specialNotes=this.value">${esc(form.specialNotes)}</textarea>
+            <textarea class="form-textarea" rows="4" placeholder="e.g., All injectable treatments are performed by MOH-certified doctors..." oninput="syncField('specialNotes',this.value)">${esc(form.specialNotes)}</textarea>
         </div>`;
 }
 
@@ -732,7 +732,7 @@ function renderReview() {
         <div class="form-group" style="margin-top:1rem">
             <label class="form-label">Primary Contact *</label>
             <div class="form-row">
-                <input class="form-input" placeholder="Contact name" value="${esc(form.contactName)}" onchange="form.contactName=this.value;renderStep();">
+                <input class="form-input" placeholder="Contact name" value="${esc(form.contactName)}" oninput="syncField('contactName',this.value)">
                 <select class="form-select" onchange="form.contactRole=this.value">
                     ${['Clinic Owner','Doctor','Manager','Receptionist','Other'].map(r=>`<option ${form.contactRole===r?'selected':''}>${r}</option>`).join('')}
                 </select>
@@ -745,6 +745,15 @@ function renderReview() {
 // ═══════════════════════════════════════════════════════════
 function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 
+// v2.4.8: commit-on-keystroke. Inputs used onchange, which fires only on blur —
+// and iOS Safari does NOT blur a focused input when you tap a non-input element
+// (plan/type/tone cards). Typed values never reached `form`, so the card's
+// renderStep() rebuilt the page from stale state and "purged" them, and
+// Continue stayed disabled (Ash UVT 2026-11-12, iPhone). syncField commits
+// every keystroke and refreshes the button WITHOUT re-rendering (re-rendering
+// per keystroke would drop focus mid-typing).
+function syncField(field,val){form[field]=val;const b=document.getElementById('nextBtn');if(b)b.disabled=!canProceed();}
+
 function toggleDefaultTreatment(name){
     const idx=form.treatments.findIndex(t=>t.name===name&&!t.isCustom);
     if(idx>=0)form.treatments.splice(idx,1);
@@ -752,7 +761,9 @@ function toggleDefaultTreatment(name){
     renderStep();
 }
 function addCustomTreatment(){form.treatments.push({name:'',price:'',unit:'per session',duration:'60',description:'',category:'Other',isCustom:true});renderStep();}
-function updateCustomTreatment(idx,field,val){const c=form.treatments.filter(t=>t.isCustom)[idx];if(c)c[field]=val;renderStep();}
+// v2.4.8: no renderStep here — these fire oninput now, and re-rendering per
+// keystroke would drop focus mid-typing. Add/remove/toggle still renderStep.
+function updateCustomTreatment(idx,field,val){const c=form.treatments.filter(t=>t.isCustom)[idx];if(c)c[field]=val;const b=document.getElementById('nextBtn');if(b)b.disabled=!canProceed();}
 function removeCustomTreatment(idx){const ci=form.treatments.findIndex((t,i)=>t.isCustom&&form.treatments.filter(x=>x.isCustom).indexOf(t)===idx);if(ci>=0)form.treatments.splice(ci,1);renderStep();}
 function toggleDay(i){form.hours[i].isOpen=!form.hours[i].isOpen;renderStep();}
 function setIndustry(id){
@@ -770,8 +781,12 @@ function addFAQ(){form.faqs.push({q:'',a:''});renderStep();}
 function removeFAQ(i){form.faqs.splice(i,1);renderStep();}
 
 function canProceed(){
-    if(step===0)return!!(form.clinicName&&form.whatsapp&&form.clinicEmail&&form.address&&form.contactName);
+    // v2.4.8: gate each step on fields ACTUALLY RENDERED on that step.
+    // contactName lives only on the review step — requiring it here made
+    // step 0's Continue unreachable (Ash UVT 2026-11-12).
+    if(step===0)return!!(form.clinicName&&form.whatsapp&&form.clinicEmail&&form.address);
     if(step===1)return form.treatments.length>0&&form.treatments.every(t=>t.name&&t.price);
+    if(step===STEPS.length-1)return!!form.contactName;
     return true;
 }
 function goToStep(s){step=s;renderStep();}
