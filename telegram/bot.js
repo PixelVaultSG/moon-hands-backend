@@ -648,30 +648,39 @@ bot.action(/^cancelno_(.+)$/, safeHandler('cancelno_btn', async (ctx) => {
 bot.action(/^onboarding_approve:([0-9a-fA-F-]{4,36})$/, safeHandler('onboarding_approve_btn', async (ctx) => {
   const submissionId = ctx.match[1];
   console.log(`[TELEGRAM] Onboarding approve button clicked for submission ${submissionId}`);
-  
+
   if (!adminOnly(ctx)) return;
-  
+
   const { handleApproveClinic } = require('./commands/onboarding-approvals');
   // Mock the ctx.message.text to look like /approveclinic <id>
   ctx.message = { ...ctx.message, text: `/approveclinic ${submissionId}` };
-  await handleApproveClinic(ctx);
-  
-  await ctx.answerCbQuery('✅ Approved');
-  await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
+  // v2.5.1: only toast success + strip the keyboard when the approval
+  // ACTUALLY succeeded — previously both fired unconditionally, so a failed
+  // approve looked identical to a real one (Ash UVT 2026-11-13).
+  const ok = await handleApproveClinic(ctx);
+  if (ok === true) {
+    await ctx.answerCbQuery('✅ Approved');
+    await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
+  } else {
+    await ctx.answerCbQuery('⚠️ Approval did not complete — see message above').catch(() => {});
+  }
 }));
 
 bot.action(/^onboarding_reject:([0-9a-fA-F-]{4,36})$/, safeHandler('onboarding_reject_btn', async (ctx) => {
   const submissionId = ctx.match[1];
   console.log(`[TELEGRAM] Onboarding reject button clicked for submission ${submissionId}`);
-  
+
   if (!adminOnly(ctx)) return;
-  
+
   const { handleRejectClinic } = require('./commands/onboarding-approvals');
   ctx.message = { ...ctx.message, text: `/rejectclinic ${submissionId}` };
-  await handleRejectClinic(ctx);
-  
-  await ctx.answerCbQuery('❌ Rejected');
-  await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
+  const ok = await handleRejectClinic(ctx);
+  if (ok === true) {
+    await ctx.answerCbQuery('❌ Rejected');
+    await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
+  } else {
+    await ctx.answerCbQuery('⚠️ Reject did not complete — see message above').catch(() => {});
+  }
 }));
 
 // ─── DOCTOR CALLBACK BUTTONS (MADS) ──────────────────────────────
@@ -1776,10 +1785,16 @@ const RETRY_DELAY_MS = 3000;
 
 async function startBot(attempt = 1) {
   try {
-    await bot.launch({ dropPendingUpdates: true });
+    // v2.5.1: dropPendingUpdates false — every Render deploy used to DISCARD
+    // in-flight taps/commands (Ash 2026-11-13: Reject button + /rejectclinic
+    // "didn't work" — both landed inside the v2.4.9 deploy window and were
+    // dropped unread). Replay safety: onboarding resolveSubmission only
+    // matches status='pending' (replayed taps degrade to "not found"), and
+    // confirm_alt_ has the v2.4.6 acceptance-marker guard.
+    await bot.launch({ dropPendingUpdates: false });
     console.log(`[${new Date().toISOString()}] Moon Hands Telegram Bot started (attempt ${attempt})`);
     console.log(`  Admin: ${ADMIN_CHAT_ID}`);
-    console.log(`  Mode: Polling (dropPendingUpdates: true)`);
+    console.log(`  Mode: Polling (dropPendingUpdates: false)`);
     console.log(`  Security: Rate limiting + Input sanitization + Injection detection ACTIVE`);
   } catch (err) {
     const is409 = err.response?.error_code === 409 || err.message?.includes('409');
