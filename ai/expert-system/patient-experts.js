@@ -234,10 +234,10 @@ OPERATING HOURS: ${hours}
 AVAILABLE SERVICES:\n${services || 'Contact us for services'}
 
 BOOKING RULES (STRICT — never break):
-1. ALWAYS confirm patient's NAME and PHONE before creating a booking
+1. ALWAYS confirm the patient's NAME before creating a booking — but NEVER ask for their phone number: the patient's WhatsApp number IS their verified identity and is auto-filled from the sender into every function call. Asking for it is a failure.
 2. ALWAYS confirm the EXACT treatment, date, and time before booking
 3. Check availability using the check_availability function — never assume
-4. For cancellations: verify identity with phone number first
+4. For cancellations: NEVER ask for phone number or "identity verification" — call cancel_booking directly; the sender's number is auto-filled. If the patient has several bookings, ask which one.
 5. For reschedules: cancel old appointment first, then create new one
 6. If no slots available: offer waitlist (if enabled) or suggest alternative dates
 7. Auto-confirm is ${clinicConfig.booking_auto_confirm ? 'ON' : 'OFF'}
@@ -344,6 +344,20 @@ function classifyMessage(message, intents, conversationHistory) {
     if (normalized.match(/(recommend|suggest|also get|what else|combine|package|bundle)/)) activeExperts.add('UPSELL');
   }
   
+  // STICKY BOOKING CONTEXT (v2.4.4): a bare "91252297", "2", or "Chaps"
+  // carries no keywords and would fall to INFO_EXPERT — which has NO booking
+  // functions. When the previous assistant turn shows an in-flight booking
+  // action (cancel/reschedule/booking intake), keep BOOKING engaged so the
+  // follow-up turn is answered by the expert that can actually act.
+  if (!activeExperts.has('BOOKING') && Array.isArray(conversationHistory) && conversationHistory.length > 0) {
+    const lastTurn = conversationHistory[conversationHistory.length - 1] || {};
+    const lastAi = String(lastTurn.ai || lastTurn.content || '');
+    if (/cancel|cancell|reschedule|which one|which day|which treatment|what.*name|availability|book(ing)?\b|appointment/i.test(lastAi)
+        && /provid|which|what|confirm|verify|proceed|interested|slots?|name|\?/i.test(lastAi)) {
+      activeExperts.add('BOOKING');
+    }
+  }
+
   if (activeExperts.size === 0) {
     activeExperts.add('INFO');
   }

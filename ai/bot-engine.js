@@ -566,6 +566,79 @@ async function handleCreateBooking(args, clientConfig) {
   return { success: true, appointment_id: appointment.id, status, message };
 }
 
+// ─── DETERMINISTIC CANCELLATION (v2.4.4) ─────────────────────────
+// The expert path used to let the AI *talk* about cancelling without any
+// function ever executing ("I will proceed with the cancellation" — and
+// nothing happened; booking stayed confirmed). These helpers guarantee the
+// cancel actually runs: single booking → cancel now; several → numbered
+// list + 'cancel_pending' state, resolved by a numeric reply (intercepted
+// in processMessage). Returns deterministic text — never an LLM promise.
+async function cancelOneBooking(booking, clientConfig) {
+  await db.supabase.from('appointments')
+    .update({ status: 'cancelled', updated_at: new Date().toISOString() })
+    .eq('id', booking.id);
+
+  // Remove from Google Calendar if connected (best-effort)
+  if (booking.google_event_id && clientConfig.googleCalendarId && clientConfig.googleRefreshToken) {
+    try {
+      const calendar = getCalendarClient(clientConfig.googleRefreshToken);
+      await calendar.events.delete({
+        calendarId: clientConfig.googleCalendarId,
+        eventId: booking.google_event_id
+      });
+      console.log(`[CALENDAR] Event deleted: ${booking.google_event_id}`);
+    } catch (err) {
+      console.error('[CALENDAR] Event deletion error:', err.message);
+    }
+  }
+
+  // Telegram notification to the clinic (best-effort)
+  try {
+    const { notifyBookingCancelled } = require('../telegram/booking-notifications');
+    await notifyBookingCancelled({
+      clinicName: clientConfig.name || 'Your Clinic',
+      patientName: booking.customer_name || 'Unknown',
+      patientPhone: booking.customer_phone || '',
+      service: booking.service || 'Appointment',
+      date: booking.appointment_date,
+      time: booking.appointment_time,
+      client_id: clientConfig.id,
+    }, clientConfig, 'Patient cancelled via WhatsApp');
+  } catch (e) { /* notification is best-effort */ }
+
+  return `✅ Your ${booking.service} appointment on ${booking.appointment_date} at ${String(booking.appointment_time).slice(0, 5)} has been cancelled. We hope to see you again soon!`;
+}
+
+async function deterministicCancelBookings(clientConfig, patientPhone) {
+  const phoneDigits = String(patientPhone || '').replace(/\D/g, '');
+  const { data: bookings, error } = await db.supabase
+    .from('appointments')
+    .select('*')
+    .eq('client_id', clientConfig.id)
+    .eq('customer_phone', phoneDigits)
+    .in('status', ['confirmed', 'pending', 'pending_approval'])
+    .order('appointment_date', { ascending: true });
+
+  if (error) {
+    console.error('[CANCEL] booking lookup failed:', error.message);
+    return { executed: false, awaitingChoice: false, text: null };
+  }
+  if (!bookings || bookings.length === 0) {
+    return { executed: true, awaitingChoice: false,
+      text: "I couldn't find any upcoming bookings under this number — so there's nothing to cancel. If you booked under a different number, please let me know." };
+  }
+  if (bookings.length > 1) {
+    convState.setState(patientPhone, 'cancel_pending', {
+      ids: bookings.map(b => b.id),
+      label: bookings.map(b => `${b.service} - ${b.appointment_date} at ${String(b.appointment_time).slice(0, 5)}`)
+    });
+    return { executed: false, awaitingChoice: true,
+      text: `You have ${bookings.length} upcoming bookings:\n\n${bookings.map((b, i) => `${i + 1}. ${b.service} - ${b.appointment_date} at ${String(b.appointment_time).slice(0, 5)}`).join('\n')}\n\nWhich one should I cancel? Reply with the number.` };
+  }
+  const text = await cancelOneBooking(bookings[0], clientConfig);
+  return { executed: true, awaitingChoice: false, text };
+}
+
 async function handleCancelBooking(args, clientConfig) {
   const { patient_phone, date } = args;
 
@@ -1138,6 +1211,33 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
     // deploys/restarts) before any routing decision reads it ───────────
     try { await convState.hydrateState(patientPhone); } catch (e) { console.error('[BOT_ENGINE] hydrateState failed:', e.message); }
 
+    // ─── CANCEL DISAMBIGUATION (v2.4.4): a bare number answers the
+    // "which booking should I cancel?" list — intercept before any router
+    // or AI layer can misread it as a date, a phone number, or small talk.
+    const cancelPendingState = patientPhone ? convState.getState(patientPhone) : null;
+    if (cancelPendingState?.state === 'cancel_pending' && /^\s*\d{1,2}\s*$/.test(messageText || '')) {
+      const idx = parseInt(messageText.trim(), 10) - 1;
+      const ids = cancelPendingState.data?.ids || [];
+      const labels = cancelPendingState.data?.label || [];
+      convState.resetIdle(patientPhone);
+      let dcText;
+      if (ids[idx]) {
+        const { data: bk } = await db.supabase.from('appointments').select('*').eq('id', ids[idx]).single();
+        dcText = bk
+          ? await cancelOneBooking(bk, clientConfig)
+          : "That booking is no longer available — it may already be cancelled.";
+      } else {
+        dcText = `Please reply with a number from the list:\n\n${labels.map((l, i) => `${i + 1}. ${l}`).join('\n')}`;
+      }
+      await logConversation(clientConfig.id, 'whatsapp', patientPhone, null, messageText, dcText, 'deterministic:cancel_choice');
+      return {
+        text: dcText,
+        function_called: { name: 'cancel_booking' },
+        model: 'deterministic-cancel',
+        latency_ms: Date.now() - startTime
+      };
+    }
+
     // ─── SMART ROUTER: Try hardcoded responses first ($0) ───────────
     console.log(`[BOT_ENGINE] Routing: effectiveText="${effectiveText?.substring(0,60)}", forcedIntents=${JSON.stringify(forcedIntents)}`);
     const routerResult = await routeMessage(effectiveText, clientConfig, patientPhone, conversationHistory, forcedIntents);
@@ -1188,14 +1288,63 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
         
         console.log(`[BOT_ENGINE] Experts: [${expertsUsed.join(', ')}] — cost: $${expertResult.totalCost.toFixed(4)}`);
 
-        // STALL ALARM (v2.2.5): this path returns text without ever executing
-        // the expert's functionCall — a booking action requested here either
-        // silently died (functionCall dropped) or was only talked about.
+        // FUNCTION EXECUTION (v2.4.4): until now this path returned the
+        // expert's functionCall to the webhook as a LOG FIELD and executed
+        // nothing — the AI could say "I will proceed with the cancellation"
+        // while the booking stayed confirmed. Now the call runs for real,
+        // with the same client_id/verified-phone injection as the generalist
+        // path, and the deterministic result replaces the AI's paraphrase.
+        let expertFunctionHandled = false;
         if (expertResult.functionCall) {
-          maybeAlertStall(clientConfig, patientPhone, messageText,
-            `expert requested function "${expertResult.functionCall.name}" but it was not executed`, true);
+          const fnName = expertResult.functionCall.name;
+          let fnArgs = {};
+          try { fnArgs = JSON.parse(expertResult.functionCall.arguments || '{}'); } catch (e) { fnArgs = {}; }
+          fnArgs.client_id = clientConfig.id;
+          if (patientPhone) {
+            const verifiedPhone = patientPhone.replace(/\D/g, '');
+            fnArgs.customer_phone = verifiedPhone;
+            fnArgs.patient_phone = verifiedPhone;
+            fnArgs.phone = verifiedPhone;
+          }
+          let fnResult = null;
+          try {
+            if (fnName === 'cancel_booking') {
+              // Route through the safe deterministic path (disambiguates
+              // multiple bookings instead of auto-cancelling the soonest)
+              const dc = await deterministicCancelBookings(clientConfig, patientPhone);
+              fnResult = dc.text
+                ? { success: true, message: dc.text }
+                : { success: false, error: 'booking lookup failed' };
+            } else {
+              fnResult = await executeFunction(fnName, fnArgs);
+            }
+          } catch (err) {
+            console.error(`[BOT_ENGINE] Expert function execution error for ${fnName}:`, err.message);
+            fnResult = { success: false, error: err.message };
+          }
+          if (fnResult && !fnResult.error && fnResult.success !== false && (fnResult.message || fnResult.success)) {
+            expertResult.text = fnResult.message || expertResult.text;
+            expertFunctionHandled = true;
+          } else {
+            maybeAlertStall(clientConfig, patientPhone, messageText,
+              `expert function "${fnName}" failed: ${(fnResult && fnResult.error) || 'unknown error'}`, true);
+          }
         } else {
           maybeAlertStall(clientConfig, patientPhone, messageText, 'expert replied without taking any action');
+        }
+
+        // STALL RECOVERY (v2.4.4): the patient asked to cancel and STILL
+        // nothing ran (AI didn't emit a function call, or it failed) — act
+        // deterministically. A promised cancellation that never executes is
+        // the worst reply this product can send.
+        if (!expertFunctionHandled &&
+            /(?:cancel|delete|remove)\s+(?:my\s+)?(?:appointment|booking|appt)\b|i\s+(?:want|need|would\s+like)\s+to\s+cancel/i.test(messageText || '')) {
+          const dc = await deterministicCancelBookings(clientConfig, patientPhone);
+          if (dc.text) {
+            expertResult.text = dc.text;
+            maybeAlertStall(clientConfig, patientPhone, messageText,
+              'cancel required deterministic recovery — AI did not act', true);
+          }
         }
         
         // If the reply ends by offering to arrange/book ("Would you like me to
@@ -1473,4 +1622,7 @@ module.exports = {
   // scripts/mads-test.js without touching the live OpenAI budget)
   madsGate,
   handleCallbackChoice,
+  // Exported for testing (v2.4.4 deterministic cancellation)
+  cancelOneBooking,
+  deterministicCancelBookings,
 };
