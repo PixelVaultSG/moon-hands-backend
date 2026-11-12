@@ -597,6 +597,15 @@ async function handlePatientConfirmAlternative(bookingId) {
       return { success: false, error: 'No alternative time found for this booking.' };
     }
 
+    // v2.4.6: idempotency — the confirm_alt_ Telegram button has no status
+    // gate, so a double-tap (or a tap after the patient already said YES on
+    // WhatsApp) would re-run this whole function: duplicate GCal event +
+    // duplicate approval confirmation. The acceptance marker is appended on
+    // first success, so its presence means "already processed".
+    if ((booking.notes || '').includes('Patient accepted alternative:')) {
+      return { success: false, error: 'This alternative was already confirmed.' };
+    }
+
     // v2.4.5: the agreed alternative must become the booking's ACTUAL
     // date/time — previously only status+notes were written, so the row kept
     // the original slot (UVT 2026-11-12: Telegram said "confirmed at 4pm"
@@ -684,7 +693,24 @@ async function handlePatientConfirmAlternative(bookingId) {
       );
     }
 
-    return { success: true, booking: { ...booking, appointment_date: newDate, appointment_time: newTime } };
+    // v2.4.6: fire the SAME approval confirmation the /approve flow sends —
+    // approval text + "Add to Calendar" CTA. v2.3.3 rule: the CTA fires only
+    // at approval — and this path IS an approval (UVT 2026-11-12: Mr Holmes
+    // got neither; the CTA had to be resent manually). The chat reply is
+    // suppressed when this succeeds (smart-router checks approvalSent), so
+    // the patient sees exactly ONE confirmation, identical to /approve.
+    let approvalSent = false;
+    try {
+      const { sendApprovalConfirmation } = require('../jobs/reminders');
+      approvalSent = !!(await sendApprovalConfirmation(bookingId));
+      if (approvalSent) {
+        await supabase.from('appointments').update({ approval_notified: true }).eq('id', bookingId);
+      }
+    } catch (apErr) {
+      console.error('[BOOKING_NOTIFY] approval confirmation on alternative-accept failed:', apErr.message);
+    }
+
+    return { success: true, booking: { ...booking, appointment_date: newDate, appointment_time: newTime }, approvalSent };
   } catch (err) {
     console.error('[BOOKING_NOTIFY] Patient confirm alternative error:', err.message);
     return { success: false, error: 'Failed to confirm alternative.' };

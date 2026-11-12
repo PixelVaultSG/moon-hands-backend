@@ -1251,16 +1251,21 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
     // layers below, but the resume offer rides along on whatever they return.
     const resumePrompt = routerResult?.resumePrompt || null;
     
-    if (routerResult.source === 'hardcoded' && routerResult.text) {
+    // v2.4.6: gate on alreadySent too — the alt-accept path sends the
+    // approval confirmation (text + CTA) itself and returns text:null so the
+    // webhook sends NOTHING further. Without this gate the null-text result
+    // would fall through to the experts and the patient would get a second,
+    // AI-generated reply on top of the approval confirmation.
+    if (routerResult.source === 'hardcoded' && (routerResult.text || routerResult.alreadySent)) {
       const intents = routerResult.intents || [];
-      // Log the hardcoded response for analytics
+      // Log the hardcoded response for analytics (placeholder when suppressed)
       await logConversation(clientConfig.id, 'whatsapp', patientPhone, null,
-        messageText, routerResult.text, `hardcoded:${intents.join(',')}`);
-      
-      console.log(`[BOT_ENGINE] Smart router: ${intents.join(',') || 'none'} — cost saved: $${routerResult.cost_saved.toFixed(4)}, hasInteractive=${!!routerResult.whatsappInteractive}`);
-      
+        messageText, routerResult.text || '[approval confirmation sent]', `hardcoded:${intents.join(',')}`);
+
+      console.log(`[BOT_ENGINE] Smart router: ${intents.join(',') || 'none'} — cost saved: $${routerResult.cost_saved.toFixed(4)}, hasInteractive=${!!routerResult.whatsappInteractive}, alreadySent=${!!routerResult.alreadySent}`);
+
       return {
-        text: routerResult.text,
+        text: routerResult.text || null,
         function_called: null,
         model: 'hardcoded',
         cost_saved: routerResult.cost_saved,
