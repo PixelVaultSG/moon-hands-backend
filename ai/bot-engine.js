@@ -114,6 +114,28 @@ function getCalendarClient(refreshToken) {
 
 // ─── LOAD CLIENT CONFIG ───────────────────────────────────────────
 
+// v2.4.7: demo-config fallback must be LOUD, not one log line — in production
+// it means a real clinic's patients are served the demo clinic's services and
+// prices, and every clinic-scoped query (checkPendingAlternative, reminders,
+// availability) silently misses. Throttled per clinic so a Supabase outage
+// doesn't spam Telegram. Alerting only — the fallback behavior itself is a
+// product decision (serve demo vs. refuse) and is NOT changed here.
+const demoFallbackAlertedAt = new Map();
+function alertDemoConfigFallback(clientId, reason) {
+  const key = String(clientId || 'unknown');
+  const last = demoFallbackAlertedAt.get(key) || 0;
+  if (Date.now() - last < 30 * 60 * 1000) return;
+  demoFallbackAlertedAt.set(key, Date.now());
+  console.error(`[BOT_ENGINE] DEMO CONFIG FALLBACK for clinic ${key}: ${reason}`);
+  try {
+    const { sendAdminAlert } = require('../telegram/alerts');
+    sendAdminAlert(
+      `Clinic ${key.slice(0, 8)} fell back to DEMO config — patients are seeing the demo clinic's services/prices.\nReason: ${reason}\nCheck the clients row + Supabase connectivity.`,
+      'critical'
+    ).catch(() => {});
+  } catch (e) { /* alerting must never break the engine */ }
+}
+
 function getDemoConfig() {
   return {
     id: 'demo',
@@ -182,6 +204,7 @@ async function loadClientConfig(clientId) {
     
     if (error || !data) {
       console.log(`[BOT_ENGINE] Client ${clientId} not found in Supabase — using demo config`);
+      alertDemoConfigFallback(clientId, error ? `clients query error: ${error.message}` : 'no clients row found');
       return getDemoConfig();
     }
 
@@ -232,6 +255,7 @@ async function loadClientConfig(clientId) {
     };
   } catch (err) {
     console.log(`[BOT_ENGINE] Supabase error loading client ${clientId} — using demo config: ${err.message}`);
+    alertDemoConfigFallback(clientId, `exception: ${err.message}`);
     return getDemoConfig();
   }
 }
@@ -1635,4 +1659,6 @@ module.exports = {
   // Exported for testing (v2.4.4 deterministic cancellation)
   cancelOneBooking,
   deterministicCancelBookings,
+  // Exported for testing (v2.4.7 demo-fallback alerting)
+  loadClientConfig,
 };

@@ -58,7 +58,13 @@ function getCategory(s) {
  */
 async function checkPendingAlternative(patientPhone, clientId) {
   try {
-    if (!clientId) return null; // fail-closed: never query cross-clinic
+    // v2.4.7: was a SILENT fail-closed — if clinicConfig.id is missing (demo
+    // fallback, broken row), alternative-confirmations died invisibly and the
+    // message fell through to the AI. Fail-closed stays; now it's loud.
+    if (!clientId) {
+      console.warn('[SMART_ROUTER] checkPendingAlternative called without clinic id — STEP 0 skipped (fail-closed)');
+      return null;
+    }
     const db = require('../supabase/client');
     const { data, error } = await db.supabase
       .from('appointments')
