@@ -411,7 +411,7 @@ function renderClinicInfo() {
         </div>
         <!-- Honeypot: invisible to humans, bots auto-fill it. Server drops submissions with this set. -->
         <div style="position:absolute;left:-9999px;top:-9999px;height:1px;width:1px;overflow:hidden;" aria-hidden="true">
-            <label>Website <input type="text" name="website" tabindex="-1" autocomplete="off" value="" onchange="form.website=this.value"></label>
+            <label>Website <input type="text" name="website" tabindex="-1" autocomplete="off" value="" oninput="syncField('website',this.value)"></label>
         </div>`;
 }
 
@@ -481,9 +481,9 @@ function renderHours() {
                 <span class="day-name">${day}</span>
                 ${form.hours[i].isOpen?`
                     <div class="day-hours">
-                        <input type="time" value="${form.hours[i].open}" onchange="form.hours[${i}].open=this.value">
+                        <input type="time" value="${form.hours[i].open}" onchange="setHour(${i},'open',this.value)">
                         <span style="color:var(--muted);font-size:0.8rem">to</span>
-                        <input type="time" value="${form.hours[i].close}" onchange="form.hours[${i}].close=this.value">
+                        <input type="time" value="${form.hours[i].close}" onchange="setHour(${i},'close',this.value)">
                     </div>
                 `:'<span class="day-closed">Closed</span>'}
             </div>
@@ -494,7 +494,7 @@ function renderHours() {
             <div class="form-row">
                 <div class="form-group">
                     <label class="form-label" style="font-size:0.55rem">Slot Duration</label>
-                    <select class="form-select" onchange="form.slotDuration=this.value">
+                    <select class="form-select" onchange="syncField('slotDuration',this.value)">
                         <option value="15" ${form.slotDuration==='15'?'selected':''}>15 min</option>
                         <option value="30" ${form.slotDuration==='30'?'selected':''}>30 min</option>
                         <option value="45" ${form.slotDuration==='45'?'selected':''}>45 min</option>
@@ -503,7 +503,7 @@ function renderHours() {
                 </div>
                 <div class="form-group">
                     <label class="form-label" style="font-size:0.55rem">Buffer Between</label>
-                    <select class="form-select" onchange="form.bufferMinutes=this.value">
+                    <select class="form-select" onchange="syncField('bufferMinutes',this.value)">
                         <option value="0" ${form.bufferMinutes==='0'?'selected':''}>No buffer</option>
                         <option value="15" ${form.bufferMinutes==='15'?'selected':''}>15 min</option>
                         <option value="30" ${form.bufferMinutes==='30'?'selected':''}>30 min</option>
@@ -511,7 +511,7 @@ function renderHours() {
                 </div>
                 <div class="form-group">
                     <label class="form-label" style="font-size:0.55rem">Max Appts / Day</label>
-                    <input class="form-input" type="number" min="1" max="50" value="${form.maxAppts}" onchange="form.maxAppts=this.value">
+                    <input class="form-input" type="number" min="1" max="50" value="${form.maxAppts}" onchange="syncField('maxAppts',this.value)">
                 </div>
             </div>
         </div>`;
@@ -619,7 +619,7 @@ function renderBooking() {
         ${toggles.map(t=>`
             <div class="toggle-row">
                 <div class="toggle-info"><p>${t.label}</p><p>${t.desc}</p></div>
-                <button class="toggle-btn ${form[t.key]?'on':''}" onclick="form.${t.key}=!form.${t.key};renderStep();"></button>
+                <button class="toggle-btn ${form[t.key]?'on':''}" onclick="toggleBool('${t.key}')"></button>
             </div>
         `).join('')}
 
@@ -640,13 +640,13 @@ function renderBooking() {
         <div class="form-row" style="margin-top:1rem">
             <div class="form-group">
                 <label class="form-label" style="font-size:0.55rem">Min. Notice</label>
-                <select class="form-select" onchange="form.minNotice=this.value">
+                <select class="form-select" onchange="syncField('minNotice',this.value)">
                     ${[['0','No minimum'],['1','1 hour'],['2','2 hours'],['4','4 hours'],['24','24 hours']].map(([v,l])=>`<option value="${v}" ${form.minNotice===v?'selected':''}>${l}</option>`).join('')}
                 </select>
             </div>
             <div class="form-group">
                 <label class="form-label" style="font-size:0.55rem">Max Advance</label>
-                <select class="form-select" onchange="form.maxAdvance=this.value">
+                <select class="form-select" onchange="syncField('maxAdvance',this.value)">
                     ${[['7','7 days'],['14','14 days'],['30','30 days'],['60','60 days'],['90','90 days']].map(([v,l])=>`<option value="${v}" ${form.maxAdvance===v?'selected':''}>${l}</option>`).join('')}
                 </select>
             </div>
@@ -674,8 +674,8 @@ function renderFAQ() {
         <div id="faqList">
             ${form.faqs.map((f,i)=>`
                 <div style="padding:0.75rem;background:rgba(27,58,92,0.1);border:1px solid var(--border);border-radius:8px;margin-bottom:0.5rem">
-                    <input class="form-input" style="margin-bottom:0.4rem" placeholder="Question..." value="${esc(f.q)}" oninput="form.faqs[${i}].q=this.value">
-                    <textarea class="form-textarea" rows="2" placeholder="Answer..." oninput="form.faqs[${i}].a=this.value">${esc(f.a)}</textarea>
+                    <input class="form-input" style="margin-bottom:0.4rem" placeholder="Question..." value="${esc(f.q)}" oninput="setFAQ(${i},'q',this.value)">
+                    <textarea class="form-textarea" rows="2" placeholder="Answer..." oninput="setFAQ(${i},'a',this.value)">${esc(f.a)}</textarea>
                     <button class="btn-remove" onclick="removeFAQ(${i})" style="margin-top:0.25rem">Remove</button>
                 </div>
             `).join('')}
@@ -733,7 +733,7 @@ function renderReview() {
             <label class="form-label">Primary Contact *</label>
             <div class="form-row">
                 <input class="form-input" placeholder="Contact name" value="${esc(form.contactName)}" oninput="syncField('contactName',this.value)">
-                <select class="form-select" onchange="form.contactRole=this.value">
+                <select class="form-select" onchange="syncField('contactRole',this.value)">
                     ${['Clinic Owner','Doctor','Manager','Receptionist','Other'].map(r=>`<option ${form.contactRole===r?'selected':''}>${r}</option>`).join('')}
                 </select>
             </div>
@@ -753,6 +753,17 @@ function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').
 // every keystroke and refreshes the button WITHOUT re-rendering (re-rendering
 // per keystroke would drop focus mid-typing).
 function syncField(field,val){form[field]=val;const b=document.getElementById('nextBtn');if(b)b.disabled=!canProceed();}
+
+// v2.4.9: NEVER reference `form` bare inside an inline handler on a form
+// control. There is no <form> element on this page, so the control's own
+// `.form` DOM property is null — and inline handlers resolve `form` against
+// the element FIRST, shadowing this state object. Every such handler threw
+// TypeError: all 7 booking toggles, every select, the time/number inputs,
+// FAQ fields and even the honeypot were DEAD (Ash UVT 2026-11-12: "are the
+// toggles dead?"). Function indirection closes over the real state object.
+function toggleBool(key){form[key]=!form[key];renderStep();}
+function setHour(i,field,val){form.hours[i][field]=val;}
+function setFAQ(i,field,val){form.faqs[i][field]=val;}
 
 function toggleDefaultTreatment(name){
     const idx=form.treatments.findIndex(t=>t.name===name&&!t.isCustom);

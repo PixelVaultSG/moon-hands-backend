@@ -192,8 +192,11 @@ async function storeInSupabase(data) {
     booking_auto_confirm: data.autoConfirm,
     booking_after_hours_action: data.afterHours,
     booking_waitlist_enabled: data.waitlist,
-    booking_max_advance_days: parseInt(data.maxAdvance) || 30,
-    booking_min_notice_hours: parseInt(data.minNotice) || 2,
+    // v2.4.9: preserve a real 0 — "No minimum" (minNotice '0') must not
+    // collapse to 2 hours (parseInt('0') || 2 === 2). Default only when
+    // the field is absent/blank/unparseable.
+    booking_max_advance_days: (data.maxAdvance === undefined || data.maxAdvance === null || data.maxAdvance === '' || isNaN(parseInt(data.maxAdvance))) ? 30 : parseInt(data.maxAdvance),
+    booking_min_notice_hours: (data.minNotice === undefined || data.minNotice === null || data.minNotice === '' || isNaN(parseInt(data.minNotice))) ? 2 : parseInt(data.minNotice),
     booking_allow_same_day: data.sameDay,
     booking_reminder_24h: data.rem24h,
     booking_reminder_1h: data.rem1h,
