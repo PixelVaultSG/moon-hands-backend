@@ -428,6 +428,39 @@ async function updateBooking({ client_id, appointment_id, date, time, service, d
       return { success: false, error: 'Unable to update the booking. Please try again.' };
     }
 
+    // v2.5.10 (R-3a): a schedule change must not orphan the old calendar
+    // event — the approve path creates a fresh event and overwrites
+    // google_event_id, leaving the old event blocking its slot forever
+    // (B2-2 ghost class on the reschedule path). Delete via the service
+    // account (same pattern as cancel, v2.5.9) and null the reference so
+    // re-approval creates exactly one fresh event on the new slot. The old
+    // slot stays protected by the pending DB row's new slot, and freeing the
+    // old slot immediately is what the patient expects ("I moved off that day").
+    if (scheduleChanged && existing.google_event_id) {
+      try {
+        const { data: clinicRow } = await supabase.from('clients').select('google_calendar_id').eq('id', client_id).single();
+        if (clinicRow?.google_calendar_id) {
+          const { deleteBookingEvent } = require('../../server/calendar-service');
+          const deleted = await deleteBookingEvent(clinicRow.google_calendar_id, existing.google_event_id);
+          if (deleted === true) {
+            await supabase.from('appointments').update({ google_event_id: null }).eq('id', appointment_id);
+            console.log(`[FUNCTION] updateBooking: old event ${existing.google_event_id} deleted after schedule change on ${appointment_id}`);
+          } else {
+            throw new Error('deleteBookingEvent did not confirm deletion');
+          }
+        }
+      } catch (calDelErr) {
+        // Fail-loud, never block the reschedule: the row keeps the old
+        // google_event_id so the approve path's patch fallback (R-3b) can
+        // still move the event onto the new slot.
+        console.error('[FUNCTION] updateBooking old-event delete failed (proceeding):', calDelErr.message);
+        try {
+          const { notifyAdmin } = require('../../monitoring/audit-system');
+          await notifyAdmin(`⚠️ Reschedule calendar ghost risk — old event ${existing.google_event_id} for booking ${appointment_id} could not be deleted: ${calDelErr.message}. Re-approval will attempt a patch; manual cleanup may be needed.`);
+        } catch { /* alerting must never break booking */ }
+      }
+    }
+
     // Notify clinic about the change (real-time Telegram alert)
     if (scheduleChanged || serviceChanged) {
       try {
