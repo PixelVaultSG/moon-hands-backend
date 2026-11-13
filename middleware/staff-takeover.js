@@ -307,10 +307,13 @@ async function handleTakeoverCommand(bot, chatId, text, clinicId) {
 //
 // The notification is sent FROM the bot's WABA number TO the staff.
 
-async function notifyStaffViaWhatsApp(staffPhone, patientPhone, reason, clinicName) {
+async function notifyStaffViaWhatsApp(staffPhone, patientPhone, reason, clinicName, clinicId = null) {
   if (!staffPhone) return { success: false, error: 'No staff WhatsApp configured' };
-  
-  const D360_KEY = process.env.D360_API_KEY;
+
+  // v2.5.6 (F1): staff alert leaves from the clinic's own WABA number when a
+  // per-clinic key exists; shared env key is the fallback.
+  const { resolveD360ApiKey } = require('../utils/d360-keys');
+  const D360_KEY = await resolveD360ApiKey(clinicId);
   if (!D360_KEY) return { success: false, error: 'No D360 API key' };
   
   const ENDPOINT = process.env.D360_API_URL || 'https://waba-v2.360dialog.io/messages';

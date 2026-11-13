@@ -11,6 +11,7 @@
 
 const db = require('../../supabase/client');
 const { sendApprovalConfirmation } = require('../../jobs/reminders');
+const { resolveD360ApiKey } = require('../../utils/d360-keys'); // v2.5.6 (F1): per-clinic outbound keys
 const { formatDateStrDisplay, normalizeTimeStr } = require('../../utils/date-helpers');
 
 // ─── AUTHORIZATION HELPERS ───────────────────────────────────────
@@ -227,7 +228,8 @@ async function handleReject(bot, msg, args) {
       const { sendWhatsAppMessage } = require('../../jobs/reminders');
       await sendWhatsAppMessage(
         booking.customer_phone,
-        `Hi ${booking.customer_name}, we regret to inform you that your ${booking.service} appointment for ${booking.appointment_date} at ${booking.appointment_time} cannot be confirmed.\n\nReason: ${reason}\n\nWould you like to reschedule? Reply here with your preferred date and time.`
+        `Hi ${booking.customer_name}, we regret to inform you that your ${booking.service} appointment for ${booking.appointment_date} at ${booking.appointment_time} cannot be confirmed.\n\nReason: ${reason}\n\nWould you like to reschedule? Reply here with your preferred date and time.`,
+        await resolveD360ApiKey(booking.client_id) // v2.5.6 (F1)
       );
     } catch (notifyErr) {
       console.error('[APPROVALS] Failed to notify patient of rejection:', notifyErr.message);
@@ -471,7 +473,8 @@ async function handleRejectById(appointmentId, adminChatId) {
       // 6:00 PM") — raw DB values ("2026-11-04 at 18:00:00") leaked before.
       patientNotified = (await sendWhatsAppMessage(
         booking.customer_phone,
-        `Hi ${booking.customer_name}, unfortunately your ${booking.service} appointment on ${formatDateStrDisplay(booking.appointment_date)} at ${normalizeTimeStr(booking.appointment_time)} cannot be confirmed.\n\nWould you like to reschedule? Reply here with your preferred date and time.`
+        `Hi ${booking.customer_name}, unfortunately your ${booking.service} appointment on ${formatDateStrDisplay(booking.appointment_date)} at ${normalizeTimeStr(booking.appointment_time)} cannot be confirmed.\n\nWould you like to reschedule? Reply here with your preferred date and time.`,
+        await resolveD360ApiKey(booking.client_id) // v2.5.6 (F1)
       )) === true;
 
       // Set patient state to AWAITING_DATE with treatment preserved for reschedule
@@ -557,7 +560,8 @@ async function handleCancelById(appointmentId, adminChatId, reason = '') {
       const { sendWhatsAppMessage } = require('../../jobs/reminders');
       patientNotified = (await sendWhatsAppMessage(
         booking.customer_phone,
-        `Hi ${booking.customer_name}, we're very sorry — your ${booking.service} appointment on ${booking.appointment_date} at ${String(booking.appointment_time).slice(0, 5)} has been cancelled by the clinic.${reason ? ' Reason: ' + reason + '.' : ''}\n\nReply here and we'll help you find a new time.`
+        `Hi ${booking.customer_name}, we're very sorry — your ${booking.service} appointment on ${booking.appointment_date} at ${String(booking.appointment_time).slice(0, 5)} has been cancelled by the clinic.${reason ? ' Reason: ' + reason + '.' : ''}\n\nReply here and we'll help you find a new time.`,
+        await resolveD360ApiKey(booking.client_id) // v2.5.6 (F1)
       )) === true;
     } catch (notifyErr) {
       console.error('[APPROVALS] Cancel patient notification failed:', notifyErr.message);
