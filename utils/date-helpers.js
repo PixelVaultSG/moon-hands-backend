@@ -121,6 +121,27 @@ function formatDateStrDisplay(dateStr) {
   return `${getDayNameShortSafe(dateStr)}, ${d} ${MONTH_NAMES_SHORT[m - 1]} ${dateStr.slice(0, 4)}`;
 }
 
+/**
+ * v2.5.11 (P-1): LLM prompts must never do their own weekday math — with
+ * only "Today is Friday, 13 Nov 2026" in the prompt, gpt-4o-mini confidently
+ * told a patient "Wednesday is actually the 17th, not the 18th" (false; the
+ * 18th IS Wednesday). Give the model the truth instead: today plus a lookup
+ * table for the next two weeks, built on getDayOfWeekUTC (no timezone traps).
+ * Each row carries the ISO date so function-call date args stay correct too.
+ */
+function getSGDateContext(daysAhead = 14) {
+  const today = getTodaySG(); // YYYY-MM-DD, SG wall-clock
+  const lines = [
+    `Today (Singapore): ${formatDateStrDisplay(today)} (${today}).`,
+    `Upcoming dates — use THIS table for ALL day-of-week reasoning; never compute or "correct" a weekday yourself:`,
+  ];
+  for (let i = 1; i <= daysAhead; i++) {
+    const ds = addDaysToDateStr(today, i);
+    lines.push(`- ${formatDateStrDisplay(ds)} (${ds})`);
+  }
+  return lines.join('\n');
+}
+
 /** Normalize "21:00:00" -> "21:00". */
 function normalizeTimeStr(timeStr) {
   if (!timeStr) return '';
@@ -198,6 +219,7 @@ module.exports = {
   getDayNameShortSafe,
   addDaysToDateStr,
   formatDateStrDisplay,
+  getSGDateContext,
   normalizeTimeStr,
   formatBookingDateTime,
 };
