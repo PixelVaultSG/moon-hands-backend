@@ -270,9 +270,12 @@ async function handleApproveClinic(ctx, refArg) {
       phone: submission.clinic_phone || submission.whatsapp_number || '',
       whatsapp_number: submission.whatsapp_number || '',
       address: submission.clinic_address || '',
-      nearest_mrt: '',
-      landmarks: '',
-      parking_info: '',
+      // v2.5.4: actually carry location aids into the live config — the
+      // engine reads these for "where are you / parking?" answers, and
+      // approvals had hardcoded them blank since day one (Ash 2026-11-13).
+      nearest_mrt: submission.nearest_mrt || '',
+      landmarks: submission.landmarks || '',
+      parking_info: submission.parking_info || '',
       services: services,
       service_categories: buildCategories(services),
       operating_hours: operatingHours,
