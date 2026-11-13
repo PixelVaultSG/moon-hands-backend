@@ -1370,6 +1370,11 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
           } else {
             maybeAlertStall(clientConfig, patientPhone, messageText,
               `expert function "${fnName}" failed: ${(fnResult && fnResult.error) || 'unknown error'}`, true);
+            // v2.5.13 (P-3): after a FORCED function call the model's prose
+            // is empty — never send the patient a blank bubble.
+            if (!expertResult.text || !expertResult.text.trim()) {
+              expertResult.text = "Sorry, I'm having trouble checking our calendar right now. Please try again in a moment, or tell me another day that works for you.";
+            }
           }
         } else {
           maybeAlertStall(clientConfig, patientPhone, messageText, 'expert replied without taking any action');
