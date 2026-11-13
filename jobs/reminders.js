@@ -10,6 +10,7 @@
  */
 
 const db = require('../supabase/client');
+const { resolveD360ApiKey } = require('../utils/d360-keys'); // v2.5.6 (F1): per-clinic outbound keys
 
 const REMINDER_MESSAGES = {
   '24h': (name, treatment, date, time) => 
@@ -200,7 +201,8 @@ async function send24hReminders() {
 
     const sent = await sendWhatsAppMessage(
       apt.customer_phone,
-      message
+      message,
+      await resolveD360ApiKey(apt.client_id) // v2.5.6 (F1): send from the clinic's own number
     );
 
     if (sent) {
@@ -252,7 +254,8 @@ async function send1hReminders() {
 
     const sent = await sendWhatsAppMessage(
       apt.customer_phone,
-      message
+      message,
+      await resolveD360ApiKey(apt.client_id) // v2.5.6 (F1)
     );
 
     if (sent) {
@@ -303,7 +306,8 @@ async function send48hFollowups() {
 
     const sent = await sendWhatsAppMessage(
       apt.customer_phone,
-      message
+      message,
+      await resolveD360ApiKey(apt.client_id) // v2.5.6 (F1)
     );
 
     if (sent) {
@@ -337,7 +341,8 @@ async function sendApprovalConfirmation(appointmentId) {
 
   const sent = await sendWhatsAppMessage(
     apt.customer_phone,
-    message
+    message,
+    await resolveD360ApiKey(apt.client_id) // v2.5.6 (F1): approval confirmation leaves from the clinic's number
   );
 
   // v2.3.3 (Ash): the "Add to Calendar" CTA fires ONLY now — at clinic

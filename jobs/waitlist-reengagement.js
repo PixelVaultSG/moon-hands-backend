@@ -15,6 +15,7 @@ require('dotenv').config();
 const { supabase } = require('../supabase/client');
 const { getTodaySG } = require('../utils/date-helpers');
 const { getPremiumClientIds } = require('../utils/plan-gate');
+const { resolveD360ApiKey } = require('../utils/d360-keys'); // v2.5.6 (F1): per-clinic outbound keys
 
 const CONFIG = {
   CHECK_INTERVAL_MS: 15 * 60 * 1000, // 15 minutes
@@ -180,11 +181,14 @@ async function sendWaitlistNotification(freedSlot, waitlistEntry) {
       ],
     });
 
-    let sent = await sendWhatsAppInteractive(waitlistEntry.customer_phone, buttons);
+    // v2.5.6 (F1): resolve the clinic's own 360dialog key so the offer leaves
+    // from the clinic's WABA number, not the shared demo number.
+    const clinicD360Key = await resolveD360ApiKey(waitlistEntry.client_id);
+    let sent = await sendWhatsAppInteractive(waitlistEntry.customer_phone, buttons, clinicD360Key);
     if (!sent) {
       const textFallback = message.replace('tap below (or reply YES / NO).',
         'reply *YES* to book this slot, or *NO* to leave the waitlist.');
-      sent = await sendWhatsAppMessage(waitlistEntry.customer_phone, textFallback);
+      sent = await sendWhatsAppMessage(waitlistEntry.customer_phone, textFallback, clinicD360Key);
     }
 
     if (sent) {
@@ -366,8 +370,8 @@ function maskPhone(phone) {
 // ─── SEND WHATSAPP MESSAGE ───────────────────────────────────────
 
 // v2.3.0: interactive (button) sender — same D360 endpoint, type interactive
-async function sendWhatsAppInteractive(to, interactivePayload) {
-  const d360Key = process.env.D360_API_KEY;
+async function sendWhatsAppInteractive(to, interactivePayload, apiKey = null) {
+  const d360Key = apiKey || process.env.D360_API_KEY; // v2.5.6 (F1): per-clinic key wins, env fallback
   if (!d360Key) {
     console.warn('[WAITLIST] D360_API_KEY not set');
     return false;
@@ -391,8 +395,8 @@ async function sendWhatsAppInteractive(to, interactivePayload) {
   }
 }
 
-async function sendWhatsAppMessage(to, text) {
-  const d360Key = process.env.D360_API_KEY;
+async function sendWhatsAppMessage(to, text, apiKey = null) {
+  const d360Key = apiKey || process.env.D360_API_KEY; // v2.5.6 (F1): per-clinic key wins, env fallback
   if (!d360Key) {
     console.warn('[WAITLIST] D360_API_KEY not set');
     return false;

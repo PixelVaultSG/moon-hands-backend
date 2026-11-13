@@ -10,6 +10,7 @@
 require('dotenv').config();
 const { formatDateSG, formatTimeSG, getDayName, getTodaySG, addDaysToDateStr } = require('../utils/date-helpers');
 const { supabase } = require('../supabase/client');
+const { resolveD360ApiKey } = require('../utils/d360-keys'); // v2.5.6 (F1): per-clinic outbound keys
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const ADMIN_CHAT_ID = process.env.TELEGRAM_ADMIN_CHAT_ID;
@@ -564,7 +565,8 @@ async function handleClinicSuggestAlternative(staffChatId, alternativeTimeText) 
       `📅 *Alternative Time Suggested*\n\n` +
       `For your ${booking.service || 'appointment'}:\n` +
       `The clinic suggests: *${alternativeTimeText}*\n\n` +
-      `Would this work for you? Reply YES to confirm, or suggest another time.`
+      `Would this work for you? Reply YES to confirm, or suggest another time.`,
+      await resolveD360ApiKey(booking.client_id) // v2.5.6 (F1)
     );
     
     return { success: true, booking, alternativeTime: alternativeTimeText };

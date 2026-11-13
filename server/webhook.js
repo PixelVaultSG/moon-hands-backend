@@ -31,6 +31,7 @@ const { checkMessageRate } = require('../middleware/smart-rate-limiter');
 const { loopDetector } = require('../middleware/loop-protection');
 const { processIncomingMessage, sanitizeInput } = require('../middleware/security');
 const { generateICalFeed } = require('../utils/ical-generator');
+const { resolveD360ApiKey } = require('../utils/d360-keys'); // v2.5.6 (F1): per-clinic outbound keys
 const { recordMessage, recordRateLimit, recordLoop, recordError } = require('../monitoring/uptime-metrics');
 const { checkLimit, trackSpend } = require('../middleware/cost-protection');
 const { logEvent, getDeviceFingerprint, classifyActor } = require('../monitoring/audit-system');
@@ -178,7 +179,7 @@ async function notifyStaffTakeover(clinicId, patientPhone, intent, patientMessag
     const staffWaba = config?.notification_settings?.staff_whatsapp || config?.staff_whatsapp;
     const clinicName = config?.name || 'Your Clinic';
     if (staffWaba) {
-      const wabaResult = await notifyStaffViaWhatsApp(staffWaba, patientPhone, intent, clinicName);
+      const wabaResult = await notifyStaffViaWhatsApp(staffWaba, patientPhone, intent, clinicName, clinicId);
       if (wabaResult.success) {
         console.log(`[STAFF_TAKEOVER] WABA notification sent to staff ${staffWaba.slice(-4)}`);
       }
@@ -595,7 +596,7 @@ async function handleWebhook(req, res, channel, url) {
       // The patient should know WHY they're not getting a full response
       if (channel === 'whatsapp' && message.from && rateCheck.gracefulResponse) {
         try {
-          const sendResult = await sendWhatsAppReply(message.from, rateCheck.gracefulResponse, message.messageId);
+          const sendResult = await sendWhatsAppReply(message.from, rateCheck.gracefulResponse, message.messageId, null, preResolvedClientId);
           console.log(`[RATE_LIMIT] Graceful response sent to ${message.from.slice(-4)}: success=${sendResult.success}`);
           addTrace(message.from, 'RATE_LIMIT_REPLY', sendResult.success ? 'SENT' : 'FAILED', sendResult.error || 'Graceful response delivered');
         } catch (sendErr) {
@@ -648,7 +649,7 @@ async function handleWebhook(req, res, channel, url) {
         if (loopCheck.reason === 'LOOP_BROKEN') {
           const loopMsg = "I've detected an automated response loop. I'll pause responses for 30 minutes to prevent runaway messages. If you need assistance, please call us directly or message again later.";
           if (channel === 'whatsapp' && message.from) {
-            await sendWhatsAppReply(message.from, loopMsg, message.messageId);
+            await sendWhatsAppReply(message.from, loopMsg, message.messageId, null, preResolvedClientId);
           }
           return sendSecurityResponse(res, 200, 'Loop broken', {
             processed: true,
@@ -708,7 +709,7 @@ async function handleWebhook(req, res, channel, url) {
     let matchedIntent = null;
     
     // Send typing indicator for human-like UX
-    sendTypingIndicator(message.from).catch(() => {});
+    sendTypingIndicator(message.from, preResolvedClientId).catch(() => {});
     
     // ─── DIRECT BYPASS: Welcome list buttons ────────────────────────
     // If user tapped a known welcome list button, handle it directly
@@ -773,10 +774,10 @@ async function handleWebhook(req, res, channel, url) {
       try {
         // ── TYPING INDICATOR ─────────────────────────────────────
         // Send "Luna is typing..." for human-like UX (non-blocking)
-        await sendTypingIndicator(message.from);
-        
+        await sendTypingIndicator(message.from, clientId);
+
         addTrace(message.from, 'WHATSAPP', 'SENDING', `text=${response.text?.slice(0,50)}, interactive=${!!response.whatsappInteractive}`);
-        const sendResult = await sendWhatsAppReply(message.from, response.text, message.messageId, response.whatsappInteractive);
+        const sendResult = await sendWhatsAppReply(message.from, response.text, message.messageId, response.whatsappInteractive, clientId);
         replySent = sendResult.success;
         if (replySent) {
           trackSpend(clientId, 0.007);
@@ -788,7 +789,7 @@ async function handleWebhook(req, res, channel, url) {
           if (response.followUp && response.followUp.text) {
             setTimeout(async () => {
               try {
-                await sendWhatsAppReply(message.from, response.followUp.text, null, response.followUp.whatsappInteractive);
+                await sendWhatsAppReply(message.from, response.followUp.text, null, response.followUp.whatsappInteractive, clientId);
                 addTrace(message.from, 'WHATSAPP', 'FOLLOWUP_SENT', `text=${response.followUp.text.slice(0,40)}`);
               } catch (fuErr) {
                 console.error(`[WEBHOOK] Follow-up send failed: ${fuErr.message}`);
@@ -808,7 +809,8 @@ async function handleWebhook(req, res, channel, url) {
       console.warn('[WEBHOOK] No clientId resolved — cannot track cost, but attempting to send reply anyway');
       addTrace(message.from, 'WHATSAPP', 'NO_CLIENTID_TRYING');
       try {
-        const sendResult = await sendWhatsAppReply(message.from, response.text, message.messageId, response.whatsappInteractive);
+        // v2.5.6: clinic unresolved → shared env key (correct semantics: we don't know whose key to use)
+        const sendResult = await sendWhatsAppReply(message.from, response.text, message.messageId, response.whatsappInteractive, null);
         replySent = sendResult.success;
         addTrace(message.from, 'WHATSAPP', replySent ? 'SENT' : 'FAILED', sendResult.error);
       } catch (sendErr) {
@@ -1327,8 +1329,9 @@ function getRateLimitResponse(reason) {
 // Sends "typing..." status before the actual message for human-like UX.
 // 360dialog supports typing indicators via the standard /messages endpoint.
 
-async function sendTypingIndicator(toPhone) {
-  const d360Key = process.env.D360_API_KEY;
+async function sendTypingIndicator(toPhone, clinicId = null) {
+  // v2.5.6 (F1): resolve the clinic's own 360dialog key; env is the shared fallback.
+  const d360Key = await resolveD360ApiKey(clinicId);
   if (!d360Key || !toPhone) return;
   
   const ENDPOINT = process.env.D360_API_URL || 'https://waba-v2.360dialog.io/messages';
@@ -1361,17 +1364,19 @@ async function sendTypingIndicator(toPhone) {
 // - Auto-retry with alternative endpoints on 401
 // Returns { success: boolean, messageId?: string, error?: string }
 
-async function sendWhatsAppReply(toPhone, text, replyToMessageId = null, interactivePayload = null) {
+// v2.5.6 (F1): clinicId is the clinic UUID (clients.id), never the URL slug.
+// The clinic's own 360dialog key wins; the shared env key is the fallback.
+async function sendWhatsAppReply(toPhone, text, replyToMessageId = null, interactivePayload = null, clinicId = null) {
   const TRACE_ID = Math.random().toString(36).substring(2, 8);
-  const d360Key = process.env.D360_API_KEY;
-  
+  const d360Key = await resolveD360ApiKey(clinicId);
+
   console.log(`[360DIALOG:${TRACE_ID}] ══════════════════════════════════════`);
-  console.log(`[360DIALOG:${TRACE_ID}] SEND called to=${toPhone}, text_len=${text?.length}, interactive=${!!interactivePayload}`);
-  console.log(`[360DIALOG:${TRACE_ID}] D360_API_KEY present=${!!d360Key}, len=${d360Key?.length}`);
-  
+  console.log(`[360DIALOG:${TRACE_ID}] SEND called to=${toPhone}, text_len=${text?.length}, interactive=${!!interactivePayload}, clinic=${clinicId || 'shared'}`);
+  console.log(`[360DIALOG:${TRACE_ID}] D360 key resolved present=${!!d360Key}, len=${d360Key?.length}`);
+
   // ── Validation ───────────────────────────────────────────────────
   if (!d360Key) {
-    const err = 'D360_API_KEY not set in environment';
+    const err = 'No 360dialog key resolved (no per-clinic key and D360_API_KEY env not set)';
     console.error(`[360DIALOG:${TRACE_ID}] ❌ ${err}`);
     return { success: false, error: err };
   }
@@ -1510,7 +1515,7 @@ async function sendWhatsAppReply(toPhone, text, replyToMessageId = null, interac
     } else if (buttons.length > 0) {
       fallbackText += '\n\nReply: ' + buttons.map(b => b.replace(/[^\p{L}\p{N} ]/gu, '').trim()).join(' / ');
     }
-    const fallback = await sendWhatsAppReply(toPhone, fallbackText, replyToMessageId, null);
+    const fallback = await sendWhatsAppReply(toPhone, fallbackText, replyToMessageId, null, clinicId);
     if (fallback.success) return fallback;
   }
 
@@ -1538,7 +1543,9 @@ async function processFollowUps() {
 
     for (const { phone, stage, message } of stalled) {
       console.log(`[FOLLOW_UP] Sending stage ${stage} to +${phone.slice(-4)}`);
-      const result = await sendWhatsAppReply(phone, message);
+      // v2.5.6: conversation-state records are keyed by phone only (no clinic id) —
+      // follow-ups use the shared env key until state records carry clinic_id. Tracked in DEPENDENCY-MAP.
+      const result = await sendWhatsAppReply(phone, message, null, null, null);
 
       if (result.success) {
         markFollowUpSent(phone, stage);

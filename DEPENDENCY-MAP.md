@@ -1,0 +1,100 @@
+# DEPENDENCY-MAP — Moon Hands Backend
+**Standing order:** update this file in the same commit as any change that touches a listed module. A map entry that drifts is a bug. Companion: the harness (`test_v220.js`) is the executable half — if a behavior matters, pin it there AND list it here.
+Seeded 2026-11-13 from the booking-flow audit (v2.5.5). Updated v2.5.6 (F1 per-clinic keys closed). Format per module: **Reads / Writes / Breaks-if-you-change / Pinned-by.**
+
+---
+
+## Invariants (never break these)
+
+1. **Hours schema:** engine-consumable `operating_hours` = NAMED `[{day:'Monday',open_time,close_time,isOpen}]`. The form stores POSITIONAL `{open,close,isOpen}` (Mon-first) — only `onboarding-approvals.js` transforms. Any new writer of `operating_hours` MUST write the named schema.
+2. **Config truth:** the engine reads `client_configs.config` **jsonb first**, columns second (bot-engine `loadClientConfig`). Reminders + `/config` read columns. New fields → jsonb AND column, or document why not.
+3. **`??` for falsy-meaningful values:** `false`, `0` are real settings (auto-confirm OFF, 0h notice, 0 buffer). `||` anywhere in a config path is a bug.
+4. **Telegram legacy Markdown:** escape set is `/[_*`\[]/g` only — escaping MarkdownV2 chars (`.` `-` etc.) leaks literal backslashes into messages.
+5. **`ctx.message` is getter-only** (telegraf). Never assign it; pass refs explicitly to handlers.
+6. **`dropPendingUpdates: false`** — deploys must not discard in-flight taps. Replay safety depends on: onboarding resolveSubmission matches `status='pending'` only; `confirm_alt_` has the v2.4.6 marker guard.
+7. **Clinic sleep vocabulary:** asleep = `clients.status != 'active'`. There is no `'asleep'` value. Any new status value must be checked against every `= 'active'` filter (see Cron/jobs below).
+8. **Onboarding containment:** submissions quarantine in `onboarding_submissions` until approval creates NEW `clients`+`client_configs` rows. Nothing in onboarding may UPDATE an existing clinic.
+9. **MADS:** no medical advice, ever — refusal + ER redirect + doctor callback. Non-negotiable regardless of prompt changes.
+10. **Watchdog:** `startBot` retry-on-409/network is infinite by design; non-retryable = alert + `process.exit(1)`. Never reintroduce a give-up-and-run-deaf path.
+11. **Form inline handlers:** no bare `form.*` references in inline handlers on form controls (the `.form` DOM-shadowing trap, v2.4.9) — always function indirection.
+12. **D360 key resolution (v2.5.6):** outbound WhatsApp key = `clients.d360_api_key ?? env D360_API_KEY`, resolved ONLY via `utils/d360-keys.js resolveD360ApiKey(clinicUUID)`. Never pass the URL slug. Never read `process.env.D360_API_KEY` directly in a patient-facing send path. The resolver latches on 42703 (column pre-migration) and fails safe to env — deploy order vs the SQL migration is irrelevant by design. Cache 5 min; rotation takes effect within that window. Two deliberate env-only sends: the onboarding welcome (clinic has no account at approval time) and stalled-conversation follow-ups (state records are phone-keyed, no clinic id — residual).
+
+## Data-flow backbone
+
+```
+onboarding.html (public form)
+  → POST /api/onboarding → server/onboarding-submission.js  [rate-limit, honeypot, sanitize]
+  → onboarding_submissions (status=pending) ─ quarantine
+  → Telegram card (onboarding_approve/reject buttons)
+  → telegram/commands/onboarding-approvals.js  [slug gen, schema transforms, normalizer]
+  → clients + client_configs  →  bot-engine loadClientConfig (jsonb-first)
+  → patient-facing flows
+
+Patient WhatsApp → 360dialog → /webhook/whatsapp?clinic_id&token → server/webhook.js
+  → extractMessage → ai/bot-engine processMessage → ai/smart-router routeMessage
+  → ai/intent-handlers / ai/expert-system/function-handlers
+  → appointments row → telegram/booking-notifications (admin card) → patient reply via D360
+```
+
+## Module map
+
+### server/webhook.js (1960 LOC) — the front door
+- **Reads:** `clients` (webhook_token, status, whatsapp_number), `client_configs` (DIRECT_BYPASS loader), conversation state.
+- **Writes:** security_events, traces; patient replies via D360.
+- **Breaks-if-you-change:** auth order (DDoS → clinic token → parse → signature(skip for WA) → extract); staff-reply auto-pause (`from == clinic WABA`); DIRECT_BYPASS loader returns null on failure (no demo fallback here — cf. F2 inconsistency); reply sends resolve per-clinic keys via Invariant 12.
+- **Pinned-by:** T57/T58 gates, T60s security pins.
+
+### server/onboarding-submission.js — intake
+- **Reads:** POST body. **Writes:** `onboarding_submissions` (+ self-heal retry dropping optional columns), Telegram card.
+- **Breaks-if-you-change:** record keys must match form camelCase (`data.nearestMrt`, `data.contactEmail`); self-heal regex must cover every optional column; industry whitelist collapses non-chiro → aesthetic (F12); escape set (Invariant 4).
+- **Pinned-by:** T66/T67.
+
+### telegram/commands/onboarding-approvals.js — approval forge
+- **Reads:** onboarding_submissions, clients (slug collision). **Writes:** clients, client_configs (jsonb + columns), submission status.
+- **Breaks-if-you-change:** positional→named hours transform; dual-schema services normalizer (dur/desc/cat + duration/description/category + unit); FAQ blank-row filter; jsonb+column sync (v2.5.3); NO WhatsApp on reject (v2.5.5); welcome WA on approve only; handlers take `refArg` (Invariant 5).
+- **Pinned-by:** T67–T72.
+
+### ai/bot-engine.js — brain stem
+- **Reads:** clients+client_configs (loadClientConfig), appointments. **Writes:** appointments, conversation state.
+- **Breaks-if-you-change:** **demo fallback on ANY config-load failure (F2 — decision pending)**; calculateAvailability expects named hours + `config.buffer_time` + per-service duration; loadClientConfig jsonb-first merge (Invariant 2).
+- **Pinned-by:** T57/T58 availability gates.
+
+### ai/smart-router.js (3277 LOC) — flow conductor
+- **Breaks-if-you-change:** STEP 0 pending-alternative check requires clinic id (fail-closed warn, v2.4.7); 1-hour conversation freshness; multi-intent confirm/execute order; matchServiceByName (v2.4.4 cancel path); waitlistHint gates.
+- **Pinned-by:** T57–T64 flow pins.
+
+### telegram/commands/approvals.js + booking-notifications.js — admin booking actions
+- **Reads:** appointments, client_configs (`config.buffer_time ?? buffer_time ?? 15`). **Writes:** appointments status, patient WA (env key, F1), Telegram cards.
+- **Breaks-if-you-change:** approve_/reject_/suggest_alt_ callback contracts; alt-accept idempotency (Invariant 6); cancel is deterministic (v2.4.4).
+
+### jobs/ (scheduler: telegram/scheduler.js — sends only, NEVER polls)
+- reminders.js — **no clinic-status filter (F4)**; reads client_configs columns for toggles; sendWhatsAppMessage chokepoint (per-clinic key threaded v2.5.6).
+- daily-booking-summary / weekly-roundup / weekly-optimization-loop / closing-summary — filter `status='active'` ✓.
+- trial-expiry-checker / waitlist-reengagement — **no status filter (F4)**.
+- **Breaks-if-you-change:** Invariant 7 — every job's client query must respect sleep vocabulary.
+
+### telegram/bot.js — admin surface
+- **Breaks-if-you-change:** launch supervisor (Invariant 10); telemetry tap is FIRST middleware; adminOnly gate; outcome-gated button toasts (v2.5.1); safeHandler catches → "Command failed" (when Ash reports this, a handler threw).
+
+### server/onboarding.js (LEGACY) — live at /api/activate-clinic only (F3)
+- Contains live `||`-collapse bugs. Shadowed for /api/onboarding. Removal decision pending.
+
+## Send-site inventory (v2.5.6 — F1 closed)
+| Path | File | Key |
+|---|---|---|
+| Patient replies (live, incl. typing + interactive fallback) | webhook.js sendWhatsAppReply/sendTypingIndicator | per-clinic ✓ |
+| Reminders 24h/1h/48h + approval confirmation | jobs/reminders.js ×4 | per-clinic ✓ |
+| Booking approve/reject/cancel notify | commands/approvals.js ×3 | per-clinic ✓ |
+| Alt-time suggestion | booking-notifications.js | per-clinic ✓ |
+| Waitlist re-engagement | waitlist-reengagement.js ×2 | per-clinic ✓ |
+| Staff WABA takeover alert | middleware/staff-takeover.js | per-clinic ✓ |
+| Onboarding welcome (approve) | onboarding-approvals.js | env — DELIBERATE (no clinic account yet) |
+| Stalled-conversation follow-ups | webhook.js processFollowUps | env — RESIDUAL (state records lack clinic_id) |
+| Diagnostic /test-360dialog, scripts/* | webhook.js, scripts/ | env — by design |
+| Clinic Telegram alerts | multi-clinic-sender.js | per-clinic chat_ids ✓ (different channel) |
+
+## Schema hot zones
+- `clients`: status (Invariant 7), d360_api_key (Invariant 12 — SQL migration `ALTER TABLE clients ADD COLUMN IF NOT EXISTS d360_api_key text;` runs Ash-side; code is safe either order), webhook_token, google_calendar_id (manual set only — v2.3.9 lesson).
+- `client_configs`: jsonb canonical (Invariant 2); columns display/cache; hours named schema.
+- `onboarding_submissions`: quarantine; optional columns self-heal (contact_email/phone, nearest_mrt, parking_info).
+- `appointments`: status vocabulary {pending, confirmed, cancelled, completed} — reminders select `confirmed`, follow-ups `completed`.
