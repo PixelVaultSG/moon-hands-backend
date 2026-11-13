@@ -1,6 +1,6 @@
 # DEPENDENCY-MAP — Moon Hands Backend
 **Standing order:** update this file in the same commit as any change that touches a listed module. A map entry that drifts is a bug. Companion: the harness (`test_v220.js`) is the executable half — if a behavior matters, pin it there AND list it here.
-Seeded 2026-11-13 from the booking-flow audit (v2.5.5). Updated v2.5.6 (F1 per-clinic keys closed) and v2.5.7 (F2 refusal + /trace observability). Format per module: **Reads / Writes / Breaks-if-you-change / Pinned-by.**
+Seeded 2026-11-13 from the booking-flow audit (v2.5.5). Updated v2.5.6 (F1 keys), v2.5.7 (F2 refusal + /trace), v2.5.8 (B2-1 clinic-id property bug — found by the first synthetic scenario run). Format per module: **Reads / Writes / Breaks-if-you-change / Pinned-by.**
 
 ---
 
@@ -58,7 +58,7 @@ Patient WhatsApp → 360dialog → /webhook/whatsapp?clinic_id&token → server/
 
 ### ai/bot-engine.js — brain stem
 - **Reads:** clients+client_configs (loadClientConfig), appointments. **Writes:** appointments, conversation state.
-- **Breaks-if-you-change:** config failure refusal contract (Invariant 13); calculateAvailability expects named hours + `config.buffer_time` + per-service duration; loadClientConfig jsonb-first merge (Invariant 2).
+- **Breaks-if-you-change:** config failure refusal contract (Invariant 13); calculateAvailability expects named hours + `config.buffer_time` + per-service duration; loadClientConfig jsonb-first merge (Invariant 2); **its GCal freebusy block is DEAD** (guarded on googleRefreshToken which loadClientConfig never returns) — the LIVE availability path is `ai/availability-engine.js` (appointments incl. pending* statuses + mergeExternalBusy SA freebusy, v2.3.9). All cancel paths delete GCal events via calendar-service SA `deleteBookingEvent` (v2.5.9, B2-2) — never the OAuth getCalendarClient path.
 - **Pinned-by:** T57/T58 availability gates.
 
 ### ai/smart-router.js (3277 LOC) — flow conductor

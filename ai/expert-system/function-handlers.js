@@ -506,6 +506,22 @@ async function cancelBooking({ client_id, customer_phone, appointment_id, patien
       return { success: false, error: 'Unable to cancel. Please try again.' };
     }
     
+    // v2.5.9 (B2-2): delete the calendar event via the service-account path —
+    // this expert cancel previously left ghost events blocking the slot.
+    try {
+      const { deleteBookingEvent } = require('../../server/calendar-service');
+      const { data: clinicRow } = await supabase
+        .from('clients')
+        .select('google_calendar_id')
+        .eq('id', client_id)
+        .single();
+      if (target.google_event_id && clinicRow?.google_calendar_id) {
+        await deleteBookingEvent(clinicRow.google_calendar_id, target.google_event_id);
+      }
+    } catch (calErr) {
+      console.error('[FUNCTION] Calendar delete failed:', calErr.message);
+    }
+
     // Send instant Telegram notification to clinic about cancellation
     try {
       const clinic = await getClientConfig(supabase, client_id);
