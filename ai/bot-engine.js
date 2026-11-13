@@ -35,7 +35,7 @@ const { getFunctionDefinitions, executeFunction } = require('./expert-system/fun
 const { detectRedFlag, PATH_A_RESPONSE } = require('./red-flag-detector');
 const { classifyMedicalSafety } = require('./medical-classifier');
 const convState = require('./conversation-state');
-const { getNowSG } = require('../utils/date-helpers');
+const { getNowSG, getSGDateContext } = require('../utils/date-helpers');
 const { notifyBookingStall } = require('../telegram/booking-notifications');
 
 // ─── Booking-stall alarm (v2.2.5) ────────────────────────────────
@@ -1497,7 +1497,12 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
       `- ALL bookings start as PENDING — clinic must approve. Say "request received, clinic will confirm soon"\n` +
       `- Confirm name and phone before creating any booking\n` +
       `- For cancellations: get explicit "CANCEL MY BOOKING" confirmation before proceeding\n` +
-      `- Today is ${getNowSG().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })} (Singapore time, GMT+8). Current day: ${['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][getNowSG().getDay()]}.`;
+      `- Today is ${getNowSG().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })} (Singapore time, GMT+8). Current day: ${['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][getNowSG().getDay()]}.\n` +
+      // v2.5.11 (P-1): same weekday-truth table as the experts path — a bare
+      // "today is Friday" anchor still forced the model to compute forward,
+      // and it computes wrong confidently.
+      `\nDATE TRUTH — never compute or "correct" a weekday yourself; use ONLY this table:\n${getSGDateContext(14)}\n` +
+      `If a patient's day-of-week and date disagree, trust the DATE and answer for it (or ask which they meant).`;
 
     // Build messages array
     // When conversation is recent, add a system signal to the user message

@@ -14,6 +14,7 @@
  */
 
 const { getFunctionsForExpert } = require('./functions');
+const { getSGDateContext } = require('../../utils/date-helpers');
 
 // Lazy-load OpenAI client to allow mocking in tests
 let openai;
@@ -120,11 +121,20 @@ ${p.specialNotes ? `- Special instructions: ${p.specialNotes}` : ''}
 
 RULES FOR ALL RESPONSES:
 - Speak in the ${p.tone} tone consistently
-- GREETING DISCIPLINE: The greeting above is for the patient's VERY FIRST message only.
-  If there is any prior conversation context, NEVER begin your reply with a greeting,
-  with "Welcome to", with the clinic's name, or with your own name — answer directly.
+- GREETING DISCIPLINE (v2.5.11, P-2): The greeting above is ONLY for a first message
+  that is itself a greeting or small talk ("hi", "hello", "good morning"). If the
+  patient's FIRST message already asks a question or makes a request (booking, pricing,
+  availability, directions), ANSWER it — a brief "Welcome!" may open the reply, but the
+  greeting must NEVER replace the answer. If there is any prior conversation context,
+  NEVER begin your reply with a greeting, with "Welcome to", with the clinic's name,
+  or with your own name — answer directly.
 - Never break character — you are ${p.agentName}, not a generic AI
-- Today is ${getTodaySG()}
+
+DATE TRUTH (v2.5.11, P-1):
+${getSGDateContext(14)}
+- If a patient's day-of-week and date disagree, trust the DATE and answer for it (or ask
+  which they meant). NEVER tell a patient their date is wrong unless this table says so —
+  a false "correction" books them onto the wrong day.
 
 ABSOLUTE RED LINE — MEDICAL ADVICE (NEVER CROSS):
 - You are a RECEPTIONIST, not a doctor, nurse, or medical professional.
@@ -503,13 +513,6 @@ function formatHours(hours) {
     return Object.entries(hours).map(([d, t]) => `${d}: ${t}`).join(', ');
   }
   return 'Contact us for hours';
-}
-
-function getTodaySG() {
-  return new Date().toLocaleDateString('en-SG', { 
-    timeZone: 'Asia/Singapore',
-    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
-  });
 }
 
 function estimateCost(usage) {
