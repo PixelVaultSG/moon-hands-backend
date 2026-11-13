@@ -121,6 +121,39 @@ function formatDateStrDisplay(dateStr) {
   return `${getDayNameShortSafe(dateStr)}, ${d} ${MONTH_NAMES_SHORT[m - 1]} ${dateStr.slice(0, 4)}`;
 }
 
+const MONTH_LOOKUP = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+
+/**
+ * v2.5.12 (P-1 hardening): prompt tables alone did NOT stop the hallucination
+ * — with the correct table in context, gpt-4o-mini still insisted "Wednesday,
+ * 18 November falls on a Friday" (parametric memory: 18 Nov 2022 was a Friday).
+ * So the SYSTEM now verifies weekday+date combos deterministically and stamps
+ * the verdict ONTO the patient message before any LLM sees it. The model has
+ * no verification duty left — only a verified fact to reuse.
+ * Handles: "Wednesday 18 November", "Wednesday, 18 Nov 2026",
+ * "wed the 18th of november". Returns { text, found, consistent }.
+ */
+function annotateDateConsistency(message) {
+  if (!message) return { text: message, found: false, consistent: null };
+  const re = /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday),?\s+(?:the\s+)?(\d{1,2})(?:st|nd|rd|th)?\s*(?:of\s+)?(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b\s*(\d{4})?/i;
+  const m = String(message).match(re);
+  if (!m) return { text: message, found: false, consistent: null };
+  const claimedWeekday = m[1].toLowerCase();
+  const day = parseInt(m[2], 10);
+  const month = MONTH_LOOKUP[m[3].toLowerCase()];
+  const nowYear = parseInt(getTodaySG().slice(0, 4), 10);
+  const year = m[4] ? parseInt(m[4], 10) : nowYear;
+  if (!month || day < 1 || day > 31) return { text: message, found: false, consistent: null };
+  const iso = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  const actual = getDayNameSafe(iso);
+  if (!actual) return { text: message, found: false, consistent: null };
+  const consistent = actual.toLowerCase() === claimedWeekday;
+  const note = consistent
+    ? `[SYSTEM DATE CHECK — authoritative, do NOT re-verify: "${m[0]}" is consistent. ${iso} is a ${actual}. Just answer the patient.]`
+    : `[SYSTEM DATE CHECK — authoritative, do NOT re-verify: the patient wrote "${m[0]}" but ${iso} is actually a ${actual}. The DATE is what matters — answer for ${iso} (${actual}) or ask which they meant. NEVER state a different weekday than this check.]`;
+  return { text: `${message}\n\n${note}`, found: true, consistent };
+}
+
 /**
  * v2.5.11 (P-1): LLM prompts must never do their own weekday math — with
  * only "Today is Friday, 13 Nov 2026" in the prompt, gpt-4o-mini confidently
@@ -220,6 +253,7 @@ module.exports = {
   addDaysToDateStr,
   formatDateStrDisplay,
   getSGDateContext,
+  annotateDateConsistency,
   normalizeTimeStr,
   formatBookingDateTime,
 };

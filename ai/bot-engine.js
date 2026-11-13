@@ -35,7 +35,7 @@ const { getFunctionDefinitions, executeFunction } = require('./expert-system/fun
 const { detectRedFlag, PATH_A_RESPONSE } = require('./red-flag-detector');
 const { classifyMedicalSafety } = require('./medical-classifier');
 const convState = require('./conversation-state');
-const { getNowSG, getSGDateContext } = require('../utils/date-helpers');
+const { getNowSG, getSGDateContext, annotateDateConsistency } = require('../utils/date-helpers');
 const { notifyBookingStall } = require('../telegram/booking-notifications');
 
 // ─── Booking-stall alarm (v2.2.5) ────────────────────────────────
@@ -1508,13 +1508,16 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
     // When conversation is recent, add a system signal to the user message
     // to reinforce "no greeting" — this works even when system prompt is long
     const userMessagePrefix = isRecent ? '[CONTINUING — NO GREETING] ' : '';
+    // v2.5.12 (P-1): same system-side weekday+date verification as the
+    // experts path — the model never validates dates on its own again.
+    const { text: annotatedMessageText } = annotateDateConsistency(messageText);
     const messages = [
       { role: 'system', content: systemPrompt },
       ...conversationHistory.slice(-6).flatMap(turn => [
         { role: 'user', content: turn.user },
         { role: 'assistant', content: turn.ai || '' }
       ]),
-      { role: 'user', content: userMessagePrefix + messageText }
+      { role: 'user', content: userMessagePrefix + annotatedMessageText }
     ];
 
     // Call OpenAI with function calling
