@@ -229,7 +229,7 @@ const rateLimiter = new IPRateLimiter();
 
 // ─── MESSAGE TRACE LOG (for diagnostics) ─────────────────────────
 
-const MAX_TRACE_LOG = 50;
+const MAX_TRACE_LOG = 200; // v2.5.7: 50 → 200 so scenario-run evidence survives between /trace polls
 const messageTraceLog = [];
 
 function addTrace(phone, stage, status, detail = '') {
@@ -1606,29 +1606,53 @@ async function logSecurityEvent(event) {
 }
 
 // ─── TRACE DIAGNOSTIC ────────────────────────────────────────────
+// v2.5.7: auth-gated (was UNAUTHENTICATED — info exposure) and enriched into
+// the remote-observability endpoint for synthetic scenario runs: message
+// traces + bot polling telemetry + admin command log + D360 key resolutions.
+// Phones are last-4 by construction; no key material ever leaves this handler.
 
 async function handleTrace(req, res) {
+  if (!checkAuth(req)) {
+    return sendSecurityResponse(res, 401, 'Unauthorized');
+  }
   try {
     const traces = [...messageTraceLog].reverse();
-    
+
     const byPhone = {};
     for (const t of traces) {
       const p = t.phone || 'unknown';
       if (!byPhone[p]) byPhone[p] = [];
       byPhone[p].push(t);
     }
-    
+
+    let bot = { error: 'bot module unavailable' };
+    let commandLog = [];
+    try {
+      const botModule = require('../telegram/bot');
+      bot = botModule.getBotTelemetry();
+      commandLog = botModule.getCommandLog(50);
+    } catch (e) { bot = { error: e.message }; }
+
+    let keyResolutions = [];
+    try {
+      keyResolutions = require('../utils/d360-keys').getD360KeyResolutionLog();
+    } catch (e) { /* resolver ring optional */ }
+
     const payload = {
       status: 'ok',
+      version: '2.5.7',
       total_traces: traces.length,
       by_phone: byPhone,
-      recent: traces.slice(0, 20),
+      recent: traces.slice(0, 50),
+      bot,
+      command_log: commandLog,
+      d360_key_resolutions: keyResolutions,
       summary: {
         trace_buffer_capacity: MAX_TRACE_LOG,
         trace_buffer_used: messageTraceLog.length
       }
     };
-    
+
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(payload));
   } catch (err) {

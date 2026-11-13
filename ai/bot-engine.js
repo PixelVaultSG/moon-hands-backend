@@ -114,23 +114,23 @@ function getCalendarClient(refreshToken) {
 
 // ─── LOAD CLIENT CONFIG ───────────────────────────────────────────
 
-// v2.4.7: demo-config fallback must be LOUD, not one log line — in production
-// it means a real clinic's patients are served the demo clinic's services and
-// prices, and every clinic-scoped query (checkPendingAlternative, reminders,
-// availability) silently misses. Throttled per clinic so a Supabase outage
-// doesn't spam Telegram. Alerting only — the fallback behavior itself is a
-// product decision (serve demo vs. refuse) and is NOT changed here.
+// v2.4.7: demo-config fallback must be LOUD, not one log line.
+// v2.5.7 (F2, Ash-approved): the fallback itself is GONE. A clinic whose
+// config fails to load is REFUSED — the bot never impersonates the demo
+// clinic again. Patients get an honest "temporarily unavailable" and the
+// admin gets this critical alert. Throttled per clinic so a Supabase outage
+// doesn't spam Telegram.
 const demoFallbackAlertedAt = new Map();
 function alertDemoConfigFallback(clientId, reason) {
   const key = String(clientId || 'unknown');
   const last = demoFallbackAlertedAt.get(key) || 0;
   if (Date.now() - last < 30 * 60 * 1000) return;
   demoFallbackAlertedAt.set(key, Date.now());
-  console.error(`[BOT_ENGINE] DEMO CONFIG FALLBACK for clinic ${key}: ${reason}`);
+  console.error(`[BOT_ENGINE] CONFIG LOAD FAILED for clinic ${key} — REFUSING to serve: ${reason}`);
   try {
     const { sendAdminAlert } = require('../telegram/alerts');
     sendAdminAlert(
-      `Clinic ${key.slice(0, 8)} fell back to DEMO config — patients are seeing the demo clinic's services/prices.\nReason: ${reason}\nCheck the clients row + Supabase connectivity.`,
+      `Clinic ${key.slice(0, 8)} CONFIG LOAD FAILED — bot is REFUSING patient messages (no demo impersonation, v2.5.7).\nReason: ${reason}\nPatients see "temporarily unavailable". Check the clients row + Supabase connectivity.`,
       'critical'
     ).catch(() => {});
   } catch (e) { /* alerting must never break the engine */ }
@@ -203,9 +203,9 @@ async function loadClientConfig(clientId) {
       .single();
     
     if (error || !data) {
-      console.log(`[BOT_ENGINE] Client ${clientId} not found in Supabase — using demo config`);
+      console.log(`[BOT_ENGINE] Client ${clientId} not found in Supabase — REFUSING (v2.5.7 F2)`);
       alertDemoConfigFallback(clientId, error ? `clients query error: ${error.message}` : 'no clients row found');
-      return getDemoConfig();
+      return null;
     }
 
     // client_configs is returned as the joined row (or array with 1 element)
@@ -254,9 +254,9 @@ async function loadClientConfig(clientId) {
       }
     };
   } catch (err) {
-    console.log(`[BOT_ENGINE] Supabase error loading client ${clientId} — using demo config: ${err.message}`);
+    console.log(`[BOT_ENGINE] Supabase error loading client ${clientId} — REFUSING (v2.5.7 F2): ${err.message}`);
     alertDemoConfigFallback(clientId, `exception: ${err.message}`);
-    return getDemoConfig();
+    return null;
   }
 }
 
@@ -1069,6 +1069,17 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
     
     const clientConfig = await loadClientConfig(clientId);
     console.log(`[BOT_ENGINE] Config loaded: name=${clientConfig?.name}, industry=${clientConfig?.industry}, services=${clientConfig?.services?.length}, config.services=${clientConfig?.config?.services?.length}`);
+
+    // v2.5.7 (F2): config load failure = honest refusal, never demo impersonation.
+    // The admin has already been alerted (throttled) inside loadClientConfig.
+    if (!clientConfig) {
+      return {
+        text: "I'm sorry — our booking assistant is temporarily unavailable due to a technical issue on our side. The clinic team has been notified. Please try again in a little while, or contact the clinic directly.",
+        function_called: null,
+        model: 'config-refusal',
+        latency_ms: Date.now() - startTime
+      };
+    }
 
     // ─── MADS GATE — before ALL routing (Handoff §17–18) ────────────────
     // A red flag or medical-advice request must never reach booking logic,
