@@ -178,6 +178,12 @@ async function storeInSupabase(data) {
     clinic_phone: data.clinicPhone || data.whatsapp,
     clinic_address: data.address,
     clinic_postal_code: data.postalCode,
+    // v2.5.4: location aids — collected by the form and shown in the summary
+    // text, but never stored (Ash 2026-11-13: "Tanah Merah" lost). Columns
+    // come from a manual migration; until it runs, the insert self-heals
+    // without these keys (see below).
+    nearest_mrt: data.nearestMrt || undefined,
+    parking_info: data.parkingInfo || undefined,
     business_registration_number: data.businessRegNo,
     contact_name: data.contactName,
     contact_role: data.contactRole,
@@ -237,10 +243,12 @@ async function storeInSupabase(data) {
   // v2.5.0 self-heal: if the contact_email/contact_phone migration hasn't run
   // yet, PostgREST rejects the unknown column — strip those keys and retry once
   // rather than losing the whole submission.
-  if (error && /contact_email|contact_phone/.test(error.message || '')) {
-    console.warn('[ONBOARDING] contact_email/contact_phone columns missing — retrying insert without them (run the v2.5.0 migration)');
+  if (error && /contact_email|contact_phone|nearest_mrt|parking_info/.test(error.message || '')) {
+    console.warn('[ONBOARDING] optional columns missing — retrying insert without them (run the v2.5.0 + v2.5.4 migrations)');
     delete record.contact_email;
     delete record.contact_phone;
+    delete record.nearest_mrt;
+    delete record.parking_info;
     ({ data: inserted, error } = await supabase
       .from('onboarding_submissions')
       .insert(record)

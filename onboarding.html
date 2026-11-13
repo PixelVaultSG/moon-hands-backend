@@ -454,12 +454,18 @@ function renderTreatments() {
         </div>`:''}`;
 }
 
-const UNIT_OPTIONS = ['per session','per visit','per treatment','per area','per syringe','full face','4 sessions','6 sessions','10 sessions'];
+// v2.5.4: unit list is industry-aware — a chiro clinic should never see
+// 'per syringe' / 'full face' / 'per area' (Ash 2026-11-13: aesthetic units
+// offered at a chiropractic clinic). Rows still preserve out-of-list values,
+// so switching industry mid-form never clobbers an entered unit.
+const UNIT_OPTIONS_CHIRO = ['per session','per visit','per treatment','4 sessions','6 sessions','10 sessions'];
+const UNIT_OPTIONS_AESTHETIC = ['per session','per visit','per treatment','per area','per syringe','full face','4 sessions','6 sessions','10 sessions'];
+function unitOptions(){ return form.industry==='aesthetic' ? UNIT_OPTIONS_AESTHETIC : UNIT_OPTIONS_CHIRO; }
 
 function renderTreatmentRow(t,idx) {
     const cats = CATEGORY_OPTIONS[form.industry]||CATEGORY_OPTIONS.other;
     const catOpts = (cats.includes(t.cat)?cats:[t.cat,...cats]).filter(Boolean);
-    const unitOpts = (UNIT_OPTIONS.includes(t.unit)?UNIT_OPTIONS:[t.unit,...UNIT_OPTIONS]).filter(Boolean);
+    const unitOpts = (unitOptions().includes(t.unit)?unitOptions():[t.unit,...unitOptions()]).filter(Boolean);
     return `<div style="padding:0.75rem;background:rgba(27,58,92,0.1);border:1px solid var(--border);border-radius:8px;margin-bottom:0.5rem;" data-idx="${idx}">
         <div class="form-row" style="margin-bottom:0.5rem">
             <input class="form-input" placeholder="Treatment name" value="${esc(t.name)}" oninput="updateTreatment(${idx},'name',this.value)">
@@ -704,6 +710,17 @@ function renderFAQ() {
 }
 
 // ── Step 8: Review ──
+// v2.5.4: soft plausibility check on hours — warns, never blocks
+// (Ash UVT 2026-11-13: Saturday 04:00–17:00 — 4 AM — sailed through).
+function hoursWarnings(){
+    const w=[];
+    form.hours.forEach((h,i)=>{
+        if(!h||!h.isOpen) return;
+        if(h.open&&h.open<'07:00') w.push(`${DAYS[i]} opens at ${h.open} — that's very early. Intended?`);
+        if(h.open&&h.close&&h.close<=h.open) w.push(`${DAYS[i]} closes (${h.close}) at or before it opens (${h.open}).`);
+    });
+    return w;
+}
 function renderReview() {
     const selTreatments = form.treatments;
     return `
@@ -732,6 +749,7 @@ function renderReview() {
             <div class="review-header"><span class="review-label">Hours</span><button class="review-edit" onclick="goToStep(2)">Edit</button></div>
             <div class="review-data">
                 ${form.hours.map((h,i)=>`<p>${DAYS[i]}: <strong>${h.isOpen?`${h.open} – ${h.close}`:'Closed'}</strong></p>`).join('')}
+                ${hoursWarnings().map(w=>`<p style="color:var(--gold);font-size:0.75rem;margin-top:0.25rem">⚠️ ${esc(w)}</p>`).join('')}
             </div>
         </div>
 
