@@ -385,6 +385,31 @@ function classifyMessage(message, intents, conversationHistory) {
 
 // ─── EXPERT EXECUTION ─────────────────────────────────────────────
 
+// v2.5.13 (P-3): is this message asking about OUR availability?
+// With function_call:'auto' the model could skip check_availability and
+// improvise ("[After checking] yes, 10am is free" — no check ever ran; a
+// booked slot would have been sold as free, and one reply even claimed the
+// demo clinic "cannot access real-time booking information"). Availability
+// questions now FORCE the function call; the deterministic result replaces
+// the model's prose downstream.
+function isAvailabilityQuestion(message) {
+  const m = String(message || '');
+  if (!m.trim()) return false;
+  if (!/\b(available|availability|free|openings?|slots?|vacanc(?:y|ies)|spaces?)\b/i.test(m)) return false;
+  // "free" as in $0 (pricing question), not availability — only when "free"
+  // sits next to a pricing/service word ("free consultation", "is the
+  // consult free", "free of charge", "how much ... free"). A message like
+  // "is 10am free for an Initial Consultation?" keeps free = SLOT.
+  if (/\bfree\b/i.test(m)
+      && !/\b(available|availability|openings?|slots?|vacanc)\w*\b/i.test(m.replace(/\bfree\b/ig, ''))
+      && /(free\s+(consult|trial|session|assessment|treatment)\w*|(consult|trial|session|assessment|treatment|cost|price|charge|quote)\w*\s+(is\s+|are\s+|be\s+)?free\b|free\s+of\s+charge|how\s+much)/i.test(m)) return false;
+  // Patient stating their OWN availability ("I'm free on Saturday") is an
+  // answer inside the flow, not a request to check ours.
+  if (/\b(i'?m|i am|i'?ll be|i will be|i'?d be|we'?re|we are)\s+(?:also\s+|only\s+)?free\b/i.test(m)
+      && !/\b(are you|is there|do you|have you|got any|any)\b/i.test(m)) return false;
+  return true;
+}
+
 async function executeExpert(expertKey, message, clinicConfig, conversationHistory, patientPhone) {
   const expert = EXPERTS[expertKey];
   if (!expert) throw new Error(`Unknown expert: ${expertKey}`);
@@ -415,7 +440,12 @@ async function executeExpert(expertKey, message, clinicConfig, conversationHisto
   ];
   
   const startTime = Date.now();
-  
+
+  // v2.5.13 (P-3): force the real calendar check for availability questions
+  const forceAvailabilityCheck = Boolean(expert.requiresFunctions)
+    && (expert.allowedFunctions || []).includes('check_availability')
+    && isAvailabilityQuestion(message);
+
   const completion = await getOpenAI().chat.completions.create({
     model: expert.model,
     messages,
@@ -423,7 +453,7 @@ async function executeExpert(expertKey, message, clinicConfig, conversationHisto
     max_tokens: expert.maxTokens,
     ...(expert.requiresFunctions ? {
       functions: getFunctionsForExpert(expert.allowedFunctions),
-      function_call: 'auto'
+      function_call: forceAvailabilityCheck ? { name: 'check_availability' } : 'auto'
     } : {})
   });
   
@@ -534,4 +564,5 @@ module.exports = {
   executeExperts,
   buildExpertPrompt,
   getClinicPersonality,
+  isAvailabilityQuestion,
 };

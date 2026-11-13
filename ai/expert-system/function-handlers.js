@@ -12,6 +12,64 @@ function getSupabase() {
   return db.supabase;
 }
 
+// ─── v2.5.13 (P-3): preferred_time parsing/answering ─────────────
+// The handler always ACCEPTED preferred_time but never used it — a patient
+// asking "is 10am free?" got a bare slot count back.
+function parseTimeToMinutes(t) {
+  const match = String(t || '').match(/(\d{1,2}):?(\d{2})?\s*([ap]\.?m\.?)?/i);
+  if (!match) return null;
+  let hour = parseInt(match[1]);
+  const min = parseInt(match[2]) || 0;
+  const ampm = (match[3] || '').replace(/\./g, '').toLowerCase();
+  if (ampm === 'pm' && hour !== 12) hour += 12;
+  if (ampm === 'am' && hour === 12) hour = 0;
+  if (hour > 23 || min > 59) return null;
+  return hour * 60 + min;
+}
+
+function minutesToDisplay(mins) {
+  let h = Math.floor(mins / 60);
+  const m = mins % 60;
+  const ampm = h >= 12 ? 'pm' : 'am';
+  if (h === 0) h = 12; else if (h > 12) h -= 12;
+  return m === 0 ? `${h}${ampm}` : `${h}:${String(m).padStart(2, '0')}${ampm}`;
+}
+
+function buildPreferredTimeAnswer(preferredTime, slots, dayName, date) {
+  const pt = String(preferredTime || '').trim().toLowerCase();
+  if (!pt) return null;
+  const displayDate = `${dayName}, ${date}`;
+  const WINDOWS = { morning: [0, 720], afternoon: [720, 1020], evening: [1020, 1440] };
+  const slotMins = (slots || []).map(parseTimeToMinutes).filter(m => m !== null);
+  if (Object.prototype.hasOwnProperty.call(WINDOWS, pt)) {
+    const [lo, hi] = WINDOWS[pt];
+    const inWindow = slotMins.filter(m => m >= lo && m < hi);
+    if (inWindow.length > 0) {
+      const shown = inWindow.slice(0, 4).map(minutesToDisplay);
+      return `Yes — ${pt} openings on ${displayDate}: ${shown.join(', ')}${inWindow.length > 4 ? ` (+${inWindow.length - 4} more)` : ''}. Would you like one of those?`;
+    }
+    if (slotMins.length > 0) {
+      const shown = slotMins.slice(0, 4).map(minutesToDisplay);
+      return `No ${pt} openings left on ${displayDate}, but we have: ${shown.join(', ')}. Would any of those work?`;
+    }
+    return null; // fall through to the fully-booked message
+  }
+  const asked = parseTimeToMinutes(pt);
+  if (asked === null) return null; // unparseable preference — generic message
+  if (slotMins.includes(asked)) {
+    return `Yes — ${displayDate} at ${minutesToDisplay(asked)} is available. Would you like me to book it?`;
+  }
+  const nearby = slotMins
+    .map(m => ({ m, d: Math.abs(m - asked) }))
+    .sort((a, b) => a.d - b.d)
+    .slice(0, 3)
+    .map(x => minutesToDisplay(x.m));
+  if (nearby.length > 0) {
+    return `${minutesToDisplay(asked)} on ${displayDate} isn't available. Nearest openings: ${nearby.join(', ')}. Would one of those work?`;
+  }
+  return null; // fully-booked message
+}
+
 // ─── 1. CHECK_AVAILABILITY ────────────────────────────────────────
 /**
  * Check available slots for a specific date and service.
@@ -45,16 +103,24 @@ async function checkAvailability({ client_id, date, service, preferred_time, tre
     const maxAdvance = clinic.booking_max_advance_days || clinic.config?.booking_max_advance_days || 30;
     const minNotice = clinic.booking_min_notice_hours || clinic.config?.booking_min_notice_hours || 2;
     
+    // v2.5.13 (P-3): these are honest ANSWERS, not system failures — return
+    // success:true with an empty slot list + a patient-facing message.
+    // Downstream, success:false keeps the model's prose (empty after a forced
+    // call) and fires a false stall alert; rescheduleBooking's refusal logic
+    // (!success || slot missing) behaves identically either way.
     if (daysDiff < 0) {
-      return { success: false, error: 'Cannot book in the past', slots: [] };
+      return { success: true, date, slots: [], bookedCount: 0,
+        message: `That date (${date}) has already passed — could you pick a future date?` };
     }
     if (daysDiff > maxAdvance) {
-      return { success: false, error: `Cannot book more than ${maxAdvance} days in advance`, slots: [] };
+      return { success: true, date, slots: [], bookedCount: 0,
+        message: `We can only take bookings up to ${maxAdvance} days ahead, and ${date} is further out. Could you pick an earlier date?` };
     }
     if (daysDiff === 0) {
       const hoursUntil = (requestedDate - today) / (1000 * 60 * 60);
       if (hoursUntil < minNotice) {
-        return { success: false, error: `Need at least ${minNotice} hours notice`, slots: [] };
+        return { success: true, date, slots: [], bookedCount: 0,
+          message: `We need at least ${minNotice} hours' notice for same-day bookings. Could you pick a later time or another day?` };
       }
     }
     
@@ -69,14 +135,16 @@ async function checkAvailability({ client_id, date, service, preferred_time, tre
     if (Array.isArray(hours)) {
       const dayRow = hours.find(h => (h.day || '').toLowerCase() === dayName.toLowerCase());
       if (!dayRow || dayRow.isOpen === false || !dayRow.open_time || !dayRow.close_time) {
-        return { success: false, error: `Clinic closed on ${dayName}`, slots: [] };
+        return { success: true, date, dayName, slots: [], bookedCount: 0,
+          message: `We're closed on ${dayName}s, so ${date} isn't possible. Would you like a different day?` };
       }
       openTime = String(dayRow.open_time);
       closeTime = String(dayRow.close_time);
     } else if (typeof hours === 'object' && hours) {
       const dayHours = hours[dayName] || hours[dayName.substring(0, 3)];
       if (!dayHours || dayHours.toLowerCase().includes('closed')) {
-        return { success: false, error: `Clinic closed on ${dayName}`, slots: [] };
+        return { success: true, date, dayName, slots: [], bookedCount: 0,
+          message: `We're closed on ${dayName}s, so ${date} isn't possible. Would you like a different day?` };
       }
       [openTime, closeTime] = dayHours.split('-').map(t => t.trim());
     } else if (typeof hours === 'string') {
@@ -90,10 +158,11 @@ async function checkAvailability({ client_id, date, service, preferred_time, tre
           closeTime = match[2];
         }
       } else {
-        return { success: false, error: `Clinic closed on ${dayName}`, slots: [] };
+        return { success: true, date, dayName, slots: [], bookedCount: 0,
+          message: `We're closed on ${dayName}s, so ${date} isn't possible. Would you like a different day?` };
       }
     }
-    
+
     // Get existing appointments for this date
     const { data: existing, error: existingErr } = await supabase
       .from('appointments')
@@ -124,6 +193,9 @@ async function checkAvailability({ client_id, date, service, preferred_time, tre
     const services = clinic.services || clinic.config?.services || [];
     const slots = generateTimeSlots(openTime, closeTime, bookedPeriods, service, services, bufferMin);
     
+    // v2.5.13 (P-3): if the patient asked about a specific time/window,
+    // answer THAT question instead of returning a bare slot count.
+    const preferredAnswer = buildPreferredTimeAnswer(timePreference, slots, dayName, date);
     return {
       success: true,
       date,
@@ -132,9 +204,9 @@ async function checkAvailability({ client_id, date, service, preferred_time, tre
       closeTime,
       slots,
       bookedCount: bookedPeriods.length, // v2.2.5: was `bookedTimes` (undefined) — that ReferenceError alone made every call fail
-      message: slots.length > 0 
-        ? `We have ${slots.length} slots available on ${date}.` 
-        : `Fully booked on ${date}. Would you like to join the waitlist?`
+      message: preferredAnswer || (slots.length > 0
+        ? `We have ${slots.length} slots available on ${date}.`
+        : `Fully booked on ${date}. Would you like to join the waitlist?`)
     };
     
   } catch (err) {
