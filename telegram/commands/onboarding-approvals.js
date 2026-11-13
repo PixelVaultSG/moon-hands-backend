@@ -459,20 +459,28 @@ async function handleRejectClinic(ctx, refArg) {
       return false;
     }
 
-    // Notify clinic contact
-    try {
-      const { sendWhatsAppMessage } = require('../../jobs/reminders');
-      const rejectMsg = `Hi ${submission.contact_name}, thank you for your interest in Moon Hands.\n\nUnfortunately, we are unable to onboard "${submission.clinic_name}" at this time.\n\nReason: ${reason}\n\nIf you have questions, please contact us at pixelvaultsg@gmail.com`;
-      await sendWhatsAppMessage(submission.whatsapp_number || submission.clinic_phone, rejectMsg);
-    } catch (waErr) {
-      console.error('[ONBOARDING_APPROVALS] WhatsApp reject notification failed:', waErr.message);
-    }
+    // v2.5.5: NO WhatsApp to the rejected submitter (Ash 2026-11-13).
+    // Rejection is the UNVETTED branch — the number/email may be fake or
+    // stolen: a public form + auto-reply made our sender a spam relay
+    // (Meta restricts/bans on recipient reports), the admin's free-text
+    // reason went out verbatim, and the "notified" claim fired even when
+    // the send silently failed. Rejection = silence to the submitter;
+    // the ADMIN follows up manually if warranted. (The approve-path
+    // welcome stays: approval is the human-vetted branch.)
+    const contactBits = [
+      submission.contact_name ? escapeMarkdown(submission.contact_name) : null,
+      submission.contact_role ? `(${escapeMarkdown(submission.contact_role)})` : null,
+      submission.contact_email ? escapeMarkdown(submission.contact_email) : null,
+      submission.contact_phone ? escapeMarkdown(submission.contact_phone) : null,
+      submission.whatsapp_number ? `WA ${escapeMarkdown(submission.whatsapp_number)}` : null,
+    ].filter(Boolean).join(' · ');
 
     ctx.reply(
       `❌ *Submission Rejected*\n\n` +
       `Clinic: ${escapeMarkdown(submission.clinic_name)}\n` +
       `Reason: ${escapeMarkdown(reason)}\n\n` +
-      `The clinic has been notified via WhatsApp.`,
+      `No notification sent to the clinic — contact details are unverified.\n` +
+      (contactBits ? `Manual follow-up if warranted: ${contactBits}` : 'No contact details on file.'),
       { parse_mode: 'Markdown' }
     ).catch(() => {
       ctx.reply(`❌ Submission #${submissionId} rejected. Reason: ${reason}`);

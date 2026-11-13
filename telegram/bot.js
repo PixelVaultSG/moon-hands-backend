@@ -1826,7 +1826,7 @@ bot.catch((err, ctx) => {
 // taps/commands. Replay safety: onboarding resolveSubmission only matches
 // status='pending' (replayed taps degrade to "not found"), and confirm_alt_
 // has the v2.4.6 acceptance-marker guard.
-const BOT_VERSION = '2.5.4';
+const BOT_VERSION = '2.5.5';
 const RETRY_DELAY_MS = 3000;
 const RETRY_DELAY_CAP_MS = 30000;
 const STABLE_MS = 5 * 60 * 1000;
