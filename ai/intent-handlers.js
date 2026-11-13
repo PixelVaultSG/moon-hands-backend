@@ -443,15 +443,20 @@ async function handleCancelRequest({ clinicConfig, patientPhone }) {
   }
   
   // Look up their booking
+  // v2.5.8 (finding B2-1): engine configs carry the clinic UUID as `.id`
+  // (loadClientConfig/DIRECT_BYPASS); `.client_id` is undefined and made the
+  // lookup match nothing — patient cancel/reschedule/check always replied
+  // "no upcoming appointments". Accept both shapes defensively.
+  const clinicId = clinicConfig.client_id || clinicConfig.id;
   const { data: appointments, error } = await supabase
     .from('appointments')
     .select('*')
-    .eq('client_id', clinicConfig.client_id)
+    .eq('client_id', clinicId)
     .eq('customer_phone', patientPhone)
     .in('status', ['confirmed', 'pending'])
     .order('appointment_date', { ascending: true })
     .limit(5);
-  
+
   if (error || !appointments || appointments.length === 0) {
     return `I don't see any upcoming appointments for ${patientPhone}. Could you double-check the number, or would you like me to help you book a new appointment?`;
   }
@@ -483,11 +488,12 @@ async function handleRescheduleRequest({ clinicConfig, patientPhone }) {
   if (!patientPhone) {
     return `I can help you reschedule. Could you please share the phone number you used to book?`;
   }
-  
+
+  const clinicId = clinicConfig.client_id || clinicConfig.id; // v2.5.8 (B2-1)
   const { data: appointments, error } = await supabase
     .from('appointments')
     .select('*')
-    .eq('client_id', clinicConfig.client_id)
+    .eq('client_id', clinicId)
     .eq('customer_phone', patientPhone)
     .in('status', ['confirmed', 'pending'])
     .order('appointment_date', { ascending: true })
@@ -512,11 +518,12 @@ async function handleCheckAppointment({ clinicConfig, patientPhone }) {
   if (!patientPhone) {
     return `I can check your appointment details. Could you please share the phone number you used to book?`;
   }
-  
+
+  const clinicId = clinicConfig.client_id || clinicConfig.id; // v2.5.8 (B2-1)
   const { data: appointments, error } = await supabase
     .from('appointments')
     .select('*')
-    .eq('client_id', clinicConfig.client_id)
+    .eq('client_id', clinicId)
     .eq('customer_phone', patientPhone)
     .in('status', ['confirmed', 'pending'])
     .order('appointment_date', { ascending: true })
