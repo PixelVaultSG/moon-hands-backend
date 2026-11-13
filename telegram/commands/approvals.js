@@ -37,6 +37,36 @@ async function isAuthorizedForBooking(chatId, bookingClientId) {
   return clinicIds.length === 0 || clinicIds.includes(bookingClientId);
 }
 
+// ─── CALENDAR SYNC ON APPROVAL (v2.5.10, R-3b) ───────────────────
+// Approval must never blind-create a second event. A booking that already
+// references one (reschedule re-approval, service-only re-pend) gets its
+// event PATCHED onto the current date/time; create is the fallback for a
+// missing/deleted event. Invariant: one live event per booking, always.
+async function createOrPatchBookingEvent(booking) {
+  const { createBookingEvent, updateBookingEvent } = require('../../server/calendar-service');
+  if (!booking.clients?.google_calendar_id) return { synced: false, eventId: null };
+  const calendarId = booking.clients.google_calendar_id;
+  const startISO = `${booking.appointment_date}T${String(booking.appointment_time).slice(0, 5)}:00+08:00`;
+  const [sh, sm] = String(booking.appointment_time).split(':').map(Number);
+  const endTotal = sh * 60 + sm + (parseInt(booking.duration) || 60);
+  const endISO = `${booking.appointment_date}T${String(Math.floor(endTotal / 60)).padStart(2, '0')}:${String(endTotal % 60).padStart(2, '0')}:00+08:00`;
+  const summary = `${booking.service} - ${booking.customer_name}`;
+  const description = `Patient: ${booking.customer_name}\nPhone: ${booking.customer_phone}\nTreatment: ${booking.service}\nStatus: Confirmed\nSource: Moon Hands AI`;
+
+  if (booking.google_event_id) {
+    const patched = await updateBookingEvent(calendarId, booking.google_event_id, { summary, description, startISO, endISO });
+    if (patched) return { synced: true, eventId: booking.google_event_id };
+    console.warn(`[APPROVALS] Event patch could not confirm for ${booking.google_event_id} — falling back to create`);
+  }
+  const ev = await createBookingEvent(calendarId, {
+    summary, description, startISO, endISO,
+    patientPhone: booking.customer_phone,
+    patientName: booking.customer_name,
+    clinicName: booking.clients.name || 'Clinic'
+  });
+  return { synced: !!(ev && ev.id), eventId: (ev && ev.id) || null };
+}
+
 // ─── /PENDING ─────────────────────────────────────────────────────
 
 async function handlePending(bot, msg) {
@@ -135,27 +165,14 @@ async function handleApprove(bot, msg, args) {
     }
 
     // ── SYNC TO GOOGLE CALENDAR ──
+    // v2.5.10 (R-3b): patch an existing event instead of blind-creating a
+    // duplicate — see createOrPatchBookingEvent.
     let calendarSynced = false;
     try {
-      const { createBookingEvent } = require('../../server/calendar-service');
-      if (booking.clients?.google_calendar_id) {
-        const startISO = `${booking.appointment_date}T${String(booking.appointment_time).slice(0, 5)}:00+08:00`;
-        const [sh, sm] = String(booking.appointment_time).split(':').map(Number);
-        const endTotal = sh * 60 + sm + (parseInt(booking.duration) || 60);
-        const endISO = `${booking.appointment_date}T${String(Math.floor(endTotal / 60)).padStart(2, '0')}:${String(endTotal % 60).padStart(2, '0')}:00+08:00`;
-        const ev = await createBookingEvent(booking.clients.google_calendar_id, {
-          summary: `${booking.service} - ${booking.customer_name}`,
-          description: `Patient: ${booking.customer_name}\nPhone: ${booking.customer_phone}\nTreatment: ${booking.service}\nStatus: Confirmed\nSource: Moon Hands AI`,
-          startISO,
-          endISO,
-          patientPhone: booking.customer_phone,
-          patientName: booking.customer_name,
-          clinicName: booking.clients.name || 'Clinic'
-        });
-        calendarSynced = !!(ev && ev.id);
-        if (ev && ev.id) {
-          await db.supabase.from('appointments').update({ google_event_id: ev.id }).eq('id', booking.id);
-        }
+      const { synced, eventId } = await createOrPatchBookingEvent(booking);
+      calendarSynced = synced;
+      if (eventId && eventId !== booking.google_event_id) {
+        await db.supabase.from('appointments').update({ google_event_id: eventId }).eq('id', booking.id);
       }
     } catch (calErr) {
       console.error('[APPROVALS] Calendar sync failed:', calErr.message);
@@ -349,27 +366,16 @@ async function handleApproveById(appointmentId, adminChatId) {
     console.log(`[APPROVALS] Booking ${appointmentId} updated to confirmed`);
 
     // Sync to Google Calendar
+    // v2.5.10 (R-3b): patch an existing event instead of blind-creating a
+    // duplicate — see createOrPatchBookingEvent.
     let calendarSynced = false;
     try {
-      const { createBookingEvent } = require('../../server/calendar-service');
+      const { synced, eventId } = await createOrPatchBookingEvent(booking);
+      calendarSynced = synced;
+      if (eventId && eventId !== booking.google_event_id) {
+        await db.supabase.from('appointments').update({ google_event_id: eventId }).eq('id', appointmentId);
+      }
       if (booking.clients?.google_calendar_id) {
-        const startISO = `${booking.appointment_date}T${String(booking.appointment_time).slice(0, 5)}:00+08:00`;
-        const [sh, sm] = String(booking.appointment_time).split(':').map(Number);
-        const endTotal = sh * 60 + sm + (parseInt(booking.duration) || 60);
-        const endISO = `${booking.appointment_date}T${String(Math.floor(endTotal / 60)).padStart(2, '0')}:${String(endTotal % 60).padStart(2, '0')}:00+08:00`;
-        const ev = await createBookingEvent(booking.clients.google_calendar_id, {
-          summary: `${booking.service} - ${booking.customer_name}`,
-          description: `Patient: ${booking.customer_name}\nPhone: ${booking.customer_phone}\nTreatment: ${booking.service}\nStatus: Confirmed`,
-          startISO,
-          endISO,
-          patientPhone: booking.customer_phone,
-          patientName: booking.customer_name,
-          clinicName: booking.clients.name
-        });
-        calendarSynced = !!(ev && ev.id);
-        if (ev && ev.id) {
-          await db.supabase.from('appointments').update({ google_event_id: ev.id }).eq('id', appointmentId);
-        }
         console.log(`[APPROVALS] Calendar synced for ${appointmentId}: ${calendarSynced}`);
       }
     } catch (calErr) {

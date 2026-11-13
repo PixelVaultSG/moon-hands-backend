@@ -1957,7 +1957,40 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
       return { text: `${data.date} works. What time would you prefer?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
     
     case BOOKING_STATES.AWAITING_TIME:
+      // v2.5.10 (R-2): a mid-flow DATE change ("actually, Wednesday 18 November")
+      // must REPLACE the stored date — the old early-return dropped fresh fields
+      // and the next "11am" silently booked the stale day. Persist first, then
+      // branch: new date → acknowledge + re-gate the day; anything else with no
+      // time → keep the re-ask, but only after saving any new treatment info.
+      if (!data.time && fields.date && fields.date !== currentState.data?.date) {
+        setState(patientPhone, BOOKING_STATES.AWAITING_TIME, { ...currentState.data, ...fields });
+        const mergedTx = (fields.treatments && fields.treatments.length ? fields.treatments
+          : (fields.treatment ? [fields.treatment]
+          : (currentState.data?.treatments || (currentState.data?.treatment ? [currentState.data.treatment] : []))));
+        const { formatDateStrDisplay: fmtDateChange } = require('../utils/date-helpers');
+        try {
+          const { getAvailableSlots: _getSlotsNewDay } = require('./availability-engine');
+          const newDayAvail = await _getSlotsNewDay(clinicConfig.id, fields.date, mergedTx, clinicConfig);
+          if (!newDayAvail.available || newDayAvail.slots.length === 0) {
+            console.log(`[AWAITING_TIME] date-change day gate BLOCKED — ${fields.date}: ${newDayAvail.reason || 'no slots'}`);
+            return await slotRefusalResponse(clinicConfig, patientPhone, fields.date, null, mergedTx,
+              { reason: newDayAvail.reason || `${fields.date} is fully booked` }, startTime);
+          }
+        } catch (dcErr) {
+          console.error(`[AWAITING_TIME] date-change day check error (fail-open): ${dcErr.message}`);
+          try {
+            const { notifyAdmin } = require('../monitoring/audit-system');
+            await notifyAdmin(`⚠️ Booking gate ERROR (fail-open) — date-change check threw for clinic ${clinicConfig.id} on ${fields.date}: ${dcErr.message}`);
+          } catch { /* alerting must never break booking */ }
+        }
+        return { text: `Got it — ${fmtDateChange(fields.date)}. What time would you prefer?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
+      }
       if (!data.time) {
+        // Persist any freshly-stated treatment so nothing the patient says is dropped
+        const freshBits = {};
+        if (fields.treatments && fields.treatments.length) { freshBits.treatments = fields.treatments; freshBits.treatment = fields.treatments[0]; }
+        else if (fields.treatment) { freshBits.treatment = fields.treatment; freshBits.treatments = [fields.treatment]; }
+        if (Object.keys(freshBits).length > 0) setState(patientPhone, BOOKING_STATES.AWAITING_TIME, { ...currentState.data, ...freshBits });
         return { text: "Sorry, I didn't catch the time. Could you say it again? (e.g., '2pm' or 'morning')", source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
       }
       
