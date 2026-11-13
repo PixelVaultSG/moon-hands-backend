@@ -14,7 +14,7 @@
  */
 
 const { getFunctionsForExpert } = require('./functions');
-const { getSGDateContext } = require('../../utils/date-helpers');
+const { getSGDateContext, annotateDateConsistency } = require('../../utils/date-helpers');
 
 // Lazy-load OpenAI client to allow mocking in tests
 let openai;
@@ -403,10 +403,15 @@ async function executeExpert(expertKey, message, clinicConfig, conversationHisto
     return `${h.role === 'user' ? 'Patient' : 'Assistant'}: ${h.content || ''}`;
   }).join('\n');
   
+  // v2.5.12 (P-1): the SYSTEM verifies weekday+date combos and stamps the
+  // verdict onto the message — the prompt table alone didn't stop the model
+  // from "correcting" patients with training-era weekday memory.
+  const { text: annotatedMessage } = annotateDateConsistency(message);
+
   const messages = [
     { role: 'system', content: systemPrompt },
     ...(recentContext ? [{ role: 'system', content: `Recent conversation:\n${recentContext}` }] : []),
-    { role: 'user', content: message }
+    { role: 'user', content: annotatedMessage }
   ];
   
   const startTime = Date.now();
