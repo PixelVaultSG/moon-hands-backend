@@ -110,8 +110,14 @@ async function handlePendingOnboarding(ctx) {
 
 // ─── /APPROVECLINIC ──────────────────────────────────────────────
 
-async function handleApproveClinic(ctx) {
-  const args = ctx.message.text.split(/\s+/).slice(1);
+// v2.5.3: refArg lets inline buttons pass the submission id EXPLICITLY.
+// The old button path mocked ctx.message — a silent no-op, because telegraf's
+// Context.message is a getter-only prototype accessor (verified in 4.16.3
+// lib/context.js). The assignment never took, ctx.message stayed undefined,
+// and .text threw → safeHandler replied "Command failed". Buttons had NEVER
+// worked (Ash UVT 2026-11-13). Command path (no refArg) parses text as before.
+async function handleApproveClinic(ctx, refArg) {
+  const args = refArg ? [refArg] : ctx.message.text.split(/\s+/).slice(1);
   if (args.length < 1) {
     return ctx.reply('⚠️ Usage: /approveclinic <short_code>\n\nExample: /approveclinic 8ab2e5b4\n\nGet the short code from /pendingonboarding');
   }
@@ -207,6 +213,22 @@ async function handleApproveClinic(ctx) {
       ];
     }
 
+    // v2.5.3: onboarding.html stores hours POSITIONALLY (Mon-first,
+    // {open, close, isOpen}) but the booking engine reads the NAMED schema
+    // ({day, open_time, close_time, isOpen}) — calculateAvailability finds by
+    // h.day and reads open_time/close_time. Untransformed, an approved clinic
+    // answers "we're closed" every day (Ash UVT 2026-11-13: CRACKIN4U-v2).
+    const DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+    operatingHours = operatingHours.map((h, i) => {
+      if (h && h.day) return h; // already named (legacy submissions)
+      return {
+        day: DAY_NAMES[i] || `Day${i}`,
+        isOpen: !!(h && h.isOpen),
+        open_time: (h && (h.open ?? h.open_time)) || null,
+        close_time: (h && (h.close ?? h.close_time)) || null
+      };
+    });
+
     // 6. Parse FAQs
     let faqs = [];
     try {
@@ -272,9 +294,22 @@ async function handleApproveClinic(ctx) {
       booking_followup_48h: submission.booking_followup_48h ?? true,
       languages: submission.languages || ['en'],
       cancellation_policy: submission.cancellation_policy || '',
+      // v2.5.3: these three were mapped to NOTHING at approval — the engine
+      // silently ran on defaults (Ash UVT 2026-11-13: 15min slots became 60,
+      // 5/day became 12, buffer defaulted). ?? — 0 is a real value.
+      appointment_duration_minutes: submission.appointment_duration_minutes ?? 60,
+      max_appointments_per_day: submission.max_appointments_per_day ?? 12,
+      buffer_time: submission.buffer_between_appointments_minutes ?? 15,
+      // Owner contact collected since v2.5.0 — keep it in the runtime config
+      contact_name: submission.contact_name || '',
+      contact_email: submission.contact_email || '',
+      contact_phone: submission.contact_phone || '',
     };
 
     // 8. Create client_configs record
+    // v2.5.3: also SET the top-level columns — the engine reads the jsonb,
+    // but /config displays columns, and approvals left them at defaults
+    // (CRACKIN4U-v2 displayed auto_confirm=false when the jsonb said true).
     const { error: configErr } = await supabase
       .from('client_configs')
       .insert({
@@ -283,6 +318,31 @@ async function handleApproveClinic(ctx) {
         services: services,
         operating_hours: operatingHours,
         faqs: faqs,
+        agent_name: config.agent_name,
+        greeting: config.greeting,
+        tone: submission.preferred_tone || 'friendly',
+        languages: submission.languages || ['en'],
+        special_notes: submission.special_notes || null,
+        appointment_duration: submission.appointment_duration_minutes ?? 60,
+        buffer_time: submission.buffer_between_appointments_minutes ?? 15,
+        max_per_day: submission.max_appointments_per_day ?? 12,
+        booking_auto_confirm: submission.booking_auto_confirm ?? false,
+        booking_after_hours_action: submission.booking_after_hours_action || 'hold_for_approval',
+        booking_waitlist_enabled: submission.booking_waitlist_enabled ?? true,
+        booking_max_advance_days: submission.booking_max_advance_days ?? 30,
+        booking_min_notice_hours: submission.booking_min_notice_hours ?? 2,
+        booking_allow_same_day: submission.booking_allow_same_day ?? true,
+        booking_require_phone: submission.booking_require_phone ?? true,
+        booking_reminder_24h: submission.booking_reminder_24h ?? true,
+        booking_reminder_1h: submission.booking_reminder_1h ?? true,
+        booking_followup_48h: submission.booking_followup_48h ?? true,
+        cancellation_policy: submission.cancellation_policy || '',
+        automations: {
+          reminder1h: submission.booking_reminder_1h ?? true,
+          reminder24h: submission.booking_reminder_24h ?? true,
+          followup48h: submission.booking_followup_48h ?? true,
+          bookingConfirmation: true
+        },
       });
 
     if (configErr) {
@@ -354,8 +414,10 @@ async function handleApproveClinic(ctx) {
 
 // ─── /REJECTCLINIC ───────────────────────────────────────────────
 
-async function handleRejectClinic(ctx) {
-  const args = ctx.message.text.split(/\s+/).slice(1);
+// v2.5.3: refArg — see handleApproveClinic. Button path passes the id
+// directly instead of mocking ctx.message (getter-only, assignment no-op).
+async function handleRejectClinic(ctx, refArg) {
+  const args = refArg ? [refArg] : ctx.message.text.split(/\s+/).slice(1);
   if (args.length < 1) {
     return ctx.reply('⚠️ Usage: /rejectclinic <short_code> [reason]\n\nExample: /rejectclinic 8ab2e5b4 Duplicate submission');
   }
