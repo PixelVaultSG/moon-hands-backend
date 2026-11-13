@@ -603,14 +603,15 @@ async function cancelOneBooking(booking, clientConfig) {
     .eq('id', booking.id);
 
   // Remove from Google Calendar if connected (best-effort)
-  if (booking.google_event_id && clientConfig.googleCalendarId && clientConfig.googleRefreshToken) {
+  // v2.5.9 (finding B2-2): route through calendar-service (service-account
+  // path — the same auth that CREATED the event). The old OAuth path read
+  // clientConfig.googleRefreshToken, which loadClientConfig never returns,
+  // so the guard silently failed and every patient cancel left a GHOST
+  // event blocking the slot (verified live: cancelled 10:00 stayed busy).
+  if (booking.google_event_id && clientConfig.googleCalendarId) {
     try {
-      const calendar = getCalendarClient(clientConfig.googleRefreshToken);
-      await calendar.events.delete({
-        calendarId: clientConfig.googleCalendarId,
-        eventId: booking.google_event_id
-      });
-      console.log(`[CALENDAR] Event deleted: ${booking.google_event_id}`);
+      const { deleteBookingEvent } = require('../server/calendar-service');
+      await deleteBookingEvent(clientConfig.googleCalendarId, booking.google_event_id);
     } catch (err) {
       console.error('[CALENDAR] Event deletion error:', err.message);
     }
@@ -685,15 +686,11 @@ async function handleCancelBooking(args, clientConfig) {
     const booking = bookings[0];
     await db.supabase.from('appointments').update({ status: 'cancelled' }).eq('id', booking.id);
     
-    // Remove from Google Calendar if connected
-    if (booking.google_event_id && clientConfig.googleCalendarId && clientConfig.googleRefreshToken) {
+    // Remove from Google Calendar if connected — v2.5.9 (B2-2): SA path
+    if (booking.google_event_id && clientConfig.googleCalendarId) {
       try {
-        const calendar = getCalendarClient(clientConfig.googleRefreshToken);
-        await calendar.events.delete({
-          calendarId: clientConfig.googleCalendarId,
-          eventId: booking.google_event_id
-        });
-        console.log(`[CALENDAR] Event deleted: ${booking.google_event_id}`);
+        const { deleteBookingEvent } = require('../server/calendar-service');
+        await deleteBookingEvent(clientConfig.googleCalendarId, booking.google_event_id);
       } catch (err) {
         console.error('[CALENDAR] Event deletion error:', err.message);
         // Don't fail cancellation if calendar delete fails
