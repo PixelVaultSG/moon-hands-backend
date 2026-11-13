@@ -32,7 +32,7 @@ const ADMIN_CHAT_ID = process.env.TELEGRAM_ADMIN_CHAT_ID;
 // v2.2.9: this module previously exported NOTHING — jobs doing
 // require('../telegram/bot').bot got undefined and crashed at send time
 // (daily summary, attendance checks, weekly-loop reports never sent).
-module.exports = { bot, getBotTelemetry };
+module.exports = { bot, getBotTelemetry, getCommandLog };
 
 // ─── SECURITY LAYER ──────────────────────────────────────────────
 
@@ -57,6 +57,10 @@ function setPollingState(state) {
   botTelemetry.lastStateChangeAt = new Date().toISOString();
 }
 function getBotTelemetry() { return { ...botTelemetry }; }
+
+// v2.5.7: command audit log surfaced via /trace (auth-gated) — remote scenario
+// verification without Telegram access. Admin userIds/commands only, no secrets.
+function getCommandLog(limit = 50) { return commandLog.slice(-limit).reverse(); }
 
 function auditCommand(userId, command, success, reason = null) {
   const entry = {
@@ -1826,7 +1830,7 @@ bot.catch((err, ctx) => {
 // taps/commands. Replay safety: onboarding resolveSubmission only matches
 // status='pending' (replayed taps degrade to "not found"), and confirm_alt_
 // has the v2.4.6 acceptance-marker guard.
-const BOT_VERSION = '2.5.6';
+const BOT_VERSION = '2.5.7';
 const RETRY_DELAY_MS = 3000;
 const RETRY_DELAY_CAP_MS = 30000;
 const STABLE_MS = 5 * 60 * 1000;

@@ -1,6 +1,6 @@
 # DEPENDENCY-MAP — Moon Hands Backend
 **Standing order:** update this file in the same commit as any change that touches a listed module. A map entry that drifts is a bug. Companion: the harness (`test_v220.js`) is the executable half — if a behavior matters, pin it there AND list it here.
-Seeded 2026-11-13 from the booking-flow audit (v2.5.5). Updated v2.5.6 (F1 per-clinic keys closed). Format per module: **Reads / Writes / Breaks-if-you-change / Pinned-by.**
+Seeded 2026-11-13 from the booking-flow audit (v2.5.5). Updated v2.5.6 (F1 per-clinic keys closed) and v2.5.7 (F2 refusal + /trace observability). Format per module: **Reads / Writes / Breaks-if-you-change / Pinned-by.**
 
 ---
 
@@ -18,6 +18,7 @@ Seeded 2026-11-13 from the booking-flow audit (v2.5.5). Updated v2.5.6 (F1 per-c
 10. **Watchdog:** `startBot` retry-on-409/network is infinite by design; non-retryable = alert + `process.exit(1)`. Never reintroduce a give-up-and-run-deaf path.
 11. **Form inline handlers:** no bare `form.*` references in inline handlers on form controls (the `.form` DOM-shadowing trap, v2.4.9) — always function indirection.
 12. **D360 key resolution (v2.5.6):** outbound WhatsApp key = `clients.d360_api_key ?? env D360_API_KEY`, resolved ONLY via `utils/d360-keys.js resolveD360ApiKey(clinicUUID)`. Never pass the URL slug. Never read `process.env.D360_API_KEY` directly in a patient-facing send path. The resolver latches on 42703 (column pre-migration) and fails safe to env — deploy order vs the SQL migration is irrelevant by design. Cache 5 min; rotation takes effect within that window. Two deliberate env-only sends: the onboarding welcome (clinic has no account at approval time) and stalled-conversation follow-ups (state records are phone-keyed, no clinic id — residual).
+13. **Config failure = REFUSAL (v2.5.7, F2 closed):** `loadClientConfig` returns null on any load failure; `processMessage` replies with an honest "temporarily unavailable" (`model: 'config-refusal'`) and a throttled critical admin alert fires. The demo config is NEVER served to a real clinic's patients. `getDemoConfig()` survives for tooling only — nothing in the serving path may call it.
 
 ## Data-flow backbone
 
@@ -41,7 +42,7 @@ Patient WhatsApp → 360dialog → /webhook/whatsapp?clinic_id&token → server/
 ### server/webhook.js (1960 LOC) — the front door
 - **Reads:** `clients` (webhook_token, status, whatsapp_number), `client_configs` (DIRECT_BYPASS loader), conversation state.
 - **Writes:** security_events, traces; patient replies via D360.
-- **Breaks-if-you-change:** auth order (DDoS → clinic token → parse → signature(skip for WA) → extract); staff-reply auto-pause (`from == clinic WABA`); DIRECT_BYPASS loader returns null on failure (no demo fallback here — cf. F2 inconsistency); reply sends resolve per-clinic keys via Invariant 12.
+- **Breaks-if-you-change:** auth order (DDoS → clinic token → parse → signature(skip for WA) → extract); staff-reply auto-pause (`from == clinic WABA`); DIRECT_BYPASS loader returns null on failure → falls through to processMessage refusal (Invariant 13 — consistent since v2.5.7); reply sends resolve per-clinic keys via Invariant 12; **`/trace` is the auth-gated observability endpoint (v2.5.7)** — message traces (200-ring), bot telemetry, admin command log, D360 key resolutions; keep it behind `checkAuth`, never log key material.
 - **Pinned-by:** T57/T58 gates, T60s security pins.
 
 ### server/onboarding-submission.js — intake
@@ -56,7 +57,7 @@ Patient WhatsApp → 360dialog → /webhook/whatsapp?clinic_id&token → server/
 
 ### ai/bot-engine.js — brain stem
 - **Reads:** clients+client_configs (loadClientConfig), appointments. **Writes:** appointments, conversation state.
-- **Breaks-if-you-change:** **demo fallback on ANY config-load failure (F2 — decision pending)**; calculateAvailability expects named hours + `config.buffer_time` + per-service duration; loadClientConfig jsonb-first merge (Invariant 2).
+- **Breaks-if-you-change:** config failure refusal contract (Invariant 13); calculateAvailability expects named hours + `config.buffer_time` + per-service duration; loadClientConfig jsonb-first merge (Invariant 2).
 - **Pinned-by:** T57/T58 availability gates.
 
 ### ai/smart-router.js (3277 LOC) — flow conductor

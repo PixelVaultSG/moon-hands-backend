@@ -28,12 +28,28 @@ const CACHE_TTL_MS = 5 * 60 * 1000;
 const keyCache = new Map(); // clinicId -> { key, at }
 let columnMissing = false;  // latch: clients.d360_api_key absent (migration pending)
 
+// v2.5.7: resolution observability ring — surfaced via /trace (auth-gated) so
+// F1 per-clinic sends are verifiable remotely. Never logs key material.
+const RESOLUTION_LOG_MAX = 50;
+const resolutionLog = [];
+function logResolution(clinicId, source, keyLen, cached) {
+  resolutionLog.push({ at: new Date().toISOString(), clinic: clinicId || null, source, keyLen: keyLen || 0, cached: !!cached });
+  if (resolutionLog.length > RESOLUTION_LOG_MAX) resolutionLog.shift();
+}
+function getD360KeyResolutionLog() { return [...resolutionLog].reverse(); }
+
 async function resolveD360ApiKey(clinicId) {
   const envKey = process.env.D360_API_KEY || null;
-  if (!clinicId || columnMissing) return envKey;
+  if (!clinicId || columnMissing) {
+    logResolution(clinicId, columnMissing ? 'env-latched' : 'env-no-clinic', envKey ? envKey.length : 0, false);
+    return envKey;
+  }
 
   const hit = keyCache.get(clinicId);
-  if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.key;
+  if (hit && Date.now() - hit.at < CACHE_TTL_MS) {
+    logResolution(clinicId, hit.source, hit.key ? hit.key.length : 0, true);
+    return hit.key;
+  }
 
   try {
     const { data, error } = await supabase
@@ -47,21 +63,26 @@ async function resolveD360ApiKey(clinicId) {
       if (error.code === '42703' || /d360_api_key/i.test(error.message || '')) {
         columnMissing = true;
         console.warn('[D360-KEYS] clients.d360_api_key missing (migration pending) — using shared env key for all clinics');
+        logResolution(clinicId, 'env-latched', envKey ? envKey.length : 0, false);
         return envKey;
       }
       // Any other lookup failure: fail safe to the shared key, never block sends.
       console.error(`[D360-KEYS] lookup failed for clinic ${clinicId}: ${error.message} — falling back to env key`);
+      logResolution(clinicId, 'env-lookup-error', envKey ? envKey.length : 0, false);
       return envKey;
     }
 
     const key = (data && data.d360_api_key) || envKey;
-    keyCache.set(clinicId, { key, at: Date.now() });
+    const source = (data && data.d360_api_key) ? 'per-clinic' : 'env';
+    keyCache.set(clinicId, { key, at: Date.now(), source });
+    logResolution(clinicId, source, key ? key.length : 0, false);
     if (data && data.d360_api_key) {
       console.log(`[D360-KEYS] clinic ${clinicId} using PER-CLINIC key (len=${data.d360_api_key.length})`);
     }
     return key;
   } catch (e) {
     console.error(`[D360-KEYS] resolve error for clinic ${clinicId}: ${e.message} — falling back to env key`);
+    logResolution(clinicId, 'env-exception', envKey ? envKey.length : 0, false);
     return envKey;
   }
 }
@@ -76,4 +97,4 @@ function _resetForTests() {
   columnMissing = false;
 }
 
-module.exports = { resolveD360ApiKey, invalidateD360KeyCache, _resetForTests };
+module.exports = { resolveD360ApiKey, invalidateD360KeyCache, getD360KeyResolutionLog, _resetForTests };
