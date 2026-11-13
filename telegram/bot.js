@@ -677,12 +677,14 @@ bot.action(/^onboarding_approve:([0-9a-fA-F-]{4,36})$/, safeHandler('onboarding_
   if (!adminOnly(ctx)) return;
 
   const { handleApproveClinic } = require('./commands/onboarding-approvals');
-  // Mock the ctx.message.text to look like /approveclinic <id>
-  ctx.message = { ...ctx.message, text: `/approveclinic ${submissionId}` };
+  // v2.5.3: pass the id EXPLICITLY — the old ctx.message mock was a silent
+  // no-op (telegraf Context.message is a getter-only prototype accessor), so
+  // the handler read undefined.text and safeHandler replied "Command failed".
+  // The buttons had never worked (Ash UVT 2026-11-13).
   // v2.5.1: only toast success + strip the keyboard when the approval
   // ACTUALLY succeeded — previously both fired unconditionally, so a failed
   // approve looked identical to a real one (Ash UVT 2026-11-13).
-  const ok = await handleApproveClinic(ctx);
+  const ok = await handleApproveClinic(ctx, submissionId);
   if (ok === true) {
     await ctx.answerCbQuery('✅ Approved');
     await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
@@ -698,8 +700,8 @@ bot.action(/^onboarding_reject:([0-9a-fA-F-]{4,36})$/, safeHandler('onboarding_r
   if (!adminOnly(ctx)) return;
 
   const { handleRejectClinic } = require('./commands/onboarding-approvals');
-  ctx.message = { ...ctx.message, text: `/rejectclinic ${submissionId}` };
-  const ok = await handleRejectClinic(ctx);
+  // v2.5.3: explicit id, no ctx.message mock (getter-only — see approve above).
+  const ok = await handleRejectClinic(ctx, submissionId);
   if (ok === true) {
     await ctx.answerCbQuery('❌ Rejected');
     await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
@@ -1824,7 +1826,7 @@ bot.catch((err, ctx) => {
 // taps/commands. Replay safety: onboarding resolveSubmission only matches
 // status='pending' (replayed taps degrade to "not found"), and confirm_alt_
 // has the v2.4.6 acceptance-marker guard.
-const BOT_VERSION = '2.5.2';
+const BOT_VERSION = '2.5.3';
 const RETRY_DELAY_MS = 3000;
 const RETRY_DELAY_CAP_MS = 30000;
 const STABLE_MS = 5 * 60 * 1000;
