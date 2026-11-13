@@ -354,6 +354,15 @@ function classifyMessage(message, intents, conversationHistory) {
     if (normalized.match(/(recommend|suggest|also get|what else|combine|package|bundle)/)) activeExperts.add('UPSELL');
   }
   
+  // v2.5.14 (P-3 routing): availability questions ("is Sat 10am free?")
+  // matched NO intent and no booking keyword — they fell to INFO (zero
+  // functions) or PRICING (no check_availability), and the model IMPROVISED
+  // availability claims. BOOKING is the only expert that can verify against
+  // the real calendar — always engage it for availability questions so the
+  // forced check in executeExpert can fire. (Detector excludes pricing-free
+  // and own-availability messages, so those routings are unchanged.)
+  if (isAvailabilityQuestion(message)) activeExperts.add('BOOKING');
+
   // STICKY BOOKING CONTEXT (v2.4.4): a bare "91252297", "2", or "Chaps"
   // carries no keywords and would fall to INFO_EXPERT — which has NO booking
   // functions. When the previous assistant turn shows an in-flight booking
