@@ -299,14 +299,20 @@ function getDateButtonOptions(dateOptions, customBody) {
 /**
  * Build time slot buttons (Quick Reply)
  * Shows up to 3 time slots + "Other" as quick reply buttons.
- * Each button ID encodes the actual time: `time_HH:MM`
+ * v2.5.30: button IDs are SELF-DESCRIBING — when forDate (ISO YYYY-MM-DD,
+ * the date these slots were fetched for) is supplied, each ID encodes both
+ * date and time: `time_YYYY-MM-DD_HH-MM`. The tap handler re-validates the
+ * embedded date against the patient's current flow, so a tap on an OLD list
+ * can never silently book a stale slot. Without forDate the legacy undated
+ * `time_HH-MM` format is emitted (defensive — never ship a broken ID).
  * NOTE: when an interactive payload is sent, the plain reply text is NOT
  * delivered — any explanation (e.g. "we close at 2pm on Saturdays") MUST be
  * passed via customBody or the patient never sees it.
  */
-function getTimeSlotButtons(timeSlots, operatingHours, customBody) {
+function getTimeSlotButtons(timeSlots, operatingHours, customBody, forDate = null) {
+  const isoDate = (typeof forDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(forDate)) ? forDate : null;
   const buttons = timeSlots.map(t => ({
-    id: `time_${t.replace(/:/g, '-')}`,
+    id: isoDate ? `time_${isoDate}_${t.replace(/:/g, '-')}` : `time_${t.replace(/:/g, '-')}`,
     title: formatDisplayTime(t)
   }));
   if (buttons.length < 3) {

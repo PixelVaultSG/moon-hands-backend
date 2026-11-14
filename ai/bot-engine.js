@@ -1230,6 +1230,9 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
     
     let effectiveText = messageText;
     let forcedIntents = null;
+    // v2.5.30: set when a stale time-button tap is superseded — the honesty
+    // note is prepended to the router's response (and its card body) below.
+    let staleTapNote = null;
     
     if (interactiveId) {
       // ── STATIC MAP: Pre-defined button IDs ─────────────────────────
@@ -1253,17 +1256,65 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
         console.log(`[BOT_ENGINE] Interactive date ID "${interactiveId}" → date: ${dateVal}`);
       }
       // ── DYNAMIC MAP: Time selection buttons ────────────────────────
-      // Format: time_HH-MM  (e.g., time_10-00)
+      // Formats: time_YYYY-MM-DD_HH-MM (v2.5.30 self-describing) and the
+      // legacy undated time_HH-MM (buttons sent before v2.5.30).
       else if (interactiveId.startsWith('time_')) {
-        const timeVal = interactiveId.replace('time_', '').replace(/-/g, ':');
-        if (timeVal === 'other') {
+        const rawTimeId = interactiveId.replace('time_', '');
+        if (rawTimeId === 'other') {
           effectiveText = 'other time';
           forcedIntents = ['time_selected'];
+          console.log(`[BOT_ENGINE] Interactive time ID "${interactiveId}" → other time`);
         } else {
-          effectiveText = timeVal; // Pass raw time to smart-router
-          forcedIntents = ['time_selected'];
+          const datedTap = rawTimeId.match(/^(\d{4}-\d{2}-\d{2})_(\d{2}-\d{2})$/);
+          if (!datedTap) {
+            // Legacy undated ID — unchanged pre-2.5.30 behavior: pass the
+            // raw time through and let the booking-state handler validate it.
+            const timeVal = rawTimeId.replace(/-/g, ':');
+            effectiveText = timeVal;
+            forcedIntents = ['time_selected'];
+            console.log(`[BOT_ENGINE] Interactive time ID "${interactiveId}" → time: ${timeVal} (legacy undated ID)`);
+          } else {
+            const tappedDate = datedTap[1];
+            const tappedTime = datedTap[2].replace('-', ':');
+            // ── STALE-TAP SUPERSEDE GUARD (v2.5.30) ──────────────────
+            // The list this button came from may be OLDER than the patient's
+            // current flow (they picked a different date since, or the list
+            // is from an earlier session). Never silently accept a stale
+            // tap: re-anchor on the CURRENT flow date and refresh the list,
+            // with an honesty note so the patient knows what happened.
+            let flowDate = null;
+            try {
+              // Hydrate first — after a cold start the flow state may only
+              // exist in kv_store, and an unread flow date would misroute a
+              // mid-flow tap as "idle". No-op when memory is already fresh.
+              if (patientPhone) await convState.hydrateState(patientPhone);
+              const tapState = patientPhone ? convState.getState(patientPhone) : null;
+              if (tapState && tapState.data && typeof tapState.data.date === 'string') flowDate = tapState.data.date;
+            } catch (tapErr) {
+              console.error('[BOT_ENGINE] stale-tap state read failed (fail-open):', tapErr.message);
+            }
+            if (flowDate && flowDate !== tappedDate) {
+              // STALE: re-state the CURRENT date → smart-router's same-date
+              // refresh re-fetches today's real slots for the flow date.
+              effectiveText = flowDate;
+              forcedIntents = ['date_selected'];
+              staleTapNote = `⏰ That time list was out of date — here are the latest times for your booking:`;
+              console.log(`[BOT_ENGINE] STALE TAP superseded: "${interactiveId}" list date ${tappedDate} ≠ flow date ${flowDate} → refresh`);
+            } else if (flowDate) {
+              // FRESH: button date matches the flow date — normal time pick.
+              effectiveText = tappedTime;
+              forcedIntents = ['time_selected'];
+              console.log(`[BOT_ENGINE] Interactive time ID "${interactiveId}" → time: ${tappedTime} (date ${tappedDate} verified against flow)`);
+            } else {
+              // IDLE: no active flow date (old list, no booking in progress).
+              // Feed BOTH date and time so extractBookingFields picks them up
+              // and the tap-time availability gates decide — never assumed.
+              effectiveText = `${tappedDate} ${tappedTime}`;
+              forcedIntents = ['booking_request'];
+              console.log(`[BOT_ENGINE] Interactive time ID "${interactiveId}" → idle tap, date+time routed: ${effectiveText}`);
+            }
+          }
         }
-        console.log(`[BOT_ENGINE] Interactive time ID "${interactiveId}" → time: ${timeVal}`);
       }
       // ── DYNAMIC MAP: Category selection ────────────────────────────
       // Format: cat_CategoryName  (e.g., cat_Injectables)
@@ -1378,6 +1429,16 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
     // AI-generated reply on top of the approval confirmation.
     if (routerResult.source === 'hardcoded' && (routerResult.text || routerResult.alreadySent)) {
       const intents = routerResult.intents || [];
+      // v2.5.30: a superseded stale tap must TELL the patient the list was
+      // refreshed. The note rides the reply text AND the interactive card
+      // body — WhatsApp drops the plain text when a card is attached, so
+      // body-only is where the patient actually reads it.
+      if (staleTapNote) {
+        routerResult.text = `${staleTapNote}\n\n${routerResult.text || ''}`.trim();
+        if (routerResult.whatsappInteractive && routerResult.whatsappInteractive.interactive && routerResult.whatsappInteractive.interactive.body && routerResult.whatsappInteractive.interactive.body.text) {
+          routerResult.whatsappInteractive.interactive.body.text = `${staleTapNote}\n\n${routerResult.whatsappInteractive.interactive.body.text}`;
+        }
+      }
       // Log the hardcoded response for analytics (placeholder when suppressed)
       await logConversation(clientConfig.id, 'whatsapp', patientPhone, null,
         messageText, routerResult.text || '[approval confirmation sent]', `hardcoded:${intents.join(',')}`);
@@ -1395,6 +1456,9 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
       };
     }
     
+    // v2.5.30: a stale-tap note should never reach the expert path (dated
+    // taps route into the booking flow, which is hardcoded). Warn if it does.
+    if (staleTapNote) console.warn('[BOT_ENGINE] staleTapNote reached expert path — note NOT prepended (unexpected route)');
     console.log(`[BOT_ENGINE] Smart router → Expert System (intents: ${(routerResult.intents || []).join(',') || 'none'})`);
     
     // ─── EXPERT SYSTEM: Route to specialized experts ────────────────
