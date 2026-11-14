@@ -778,7 +778,7 @@ async function handleWebhook(req, res, channel, url) {
 
         addTrace(message.from, 'WHATSAPP', 'SENDING', `text=${response.text?.slice(0,50)}, interactive=${!!response.whatsappInteractive}, bubbles=${Array.isArray(response.messages) ? response.messages.length : 1}`);
 
-        // ── MULTI-BUBBLE SEND (v2.5.28) ──────────────────────────
+        // ── MULTI-BUBBLE SEND (v2.5.29) ──────────────────────────
         // A multi-intent turn arrives as ordered bubbles — each goes out as
         // its OWN WhatsApp message, ~400ms apart, reading like a human
         // typing. The interactive card rides on the FINAL bubble only (the
@@ -1305,7 +1305,7 @@ async function routeToAI(text, message, channel, preResolvedClientId = null, int
       console.log(`[SANITIZER] Cleaned: "${result.text.substring(0, 60)}..." → "${sanitizedText.substring(0, 60)}..."`);
     }
     
-    // v2.5.28 (multi-bubble): pass the ordered bubbles through, each
+    // v2.5.29 (multi-bubble): pass the ordered bubbles through, each
     // sanitized like a standalone message. If the card's body still holds
     // the PRE-sanitize last-bubble text, sync it to the sanitized text so
     // the patient never sees a phrase the sanitizer stripped elsewhere.
@@ -1709,7 +1709,7 @@ async function handleTrace(req, res) {
 
     const payload = {
       status: 'ok',
-      version: '2.5.28',
+      version: '2.5.29',
       total_traces: traces.length,
       by_phone: byPhone,
       recent: traces.slice(0, 50),
