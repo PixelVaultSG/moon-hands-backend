@@ -49,7 +49,8 @@ async function recordVisit({ clinicId, patientPhone, patientName, treatment, vis
   if (!clinicId || !patientPhone) throw new Error('recordVisit requires clinicId and patientPhone');
   const phone = normalizePhone(patientPhone);
   const existing = await getPatientHistory(clinicId, phone);
-  const today = visitDate || new Date().toISOString().split('T')[0];
+  // v2.5.25 (A-3): SG calendar day for the visit-date fallback
+  const today = visitDate || require('../utils/date-helpers').getTodaySG();
 
   if (!existing) {
     const { data, error } = await supabase

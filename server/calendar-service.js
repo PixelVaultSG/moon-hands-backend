@@ -391,13 +391,15 @@ async function getUpcomingAvailability(calendarId, operatingHours, maxDays = 14)
     if (!isCalendarEnabled(calendarId)) return [];
 
     const results = [];
-    const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+    // v2.5.25 (A-3): walk SG calendar days — the old new-Date + toISOString
+    // loop started the window on UTC "today" (SG yesterday before 8am).
+    const { sgNowParts, addDaysToDateStr, getDayNameSafe } = require('../utils/date-helpers');
+    const sgToday = sgNowParts().todayStr;
 
     for (let i = 0; i < maxDays; i++) {
-        const d = new Date();
-        d.setDate(d.getDate() + i);
-        const dateStr = d.toISOString().split('T')[0];
-        const dayName = days[d.getDay()];
+        const dateStr = addDaysToDateStr(sgToday, i);
+        const dayName = getDayNameSafe(dateStr);
 
         const dayConfig = operatingHours.find(h => h.day === dayName);
         if (!dayConfig || !dayConfig.isOpen) continue;

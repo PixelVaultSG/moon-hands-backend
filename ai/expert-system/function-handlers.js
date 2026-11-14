@@ -6,10 +6,44 @@
 
 const db = require('../../supabase/client');
 const { notifyBookingCreated, notifyBookingCancelled, notifyBookingRescheduled, sendWeeklyRoundup } = require('../../telegram/booking-notifications');
+const { getTodaySG, sgNowParts } = require('../../utils/date-helpers');
 
 // ─── HELPER: Get Supabase client ──────────────────────────────────
 function getSupabase() {
   return db.supabase;
+}
+
+// ─── v2.5.25 (A-1): SGT booking-window helpers ───────────────────
+// Invariant 19 read order: config jsonb is canonical (nested wins); the
+// flat column is the fallback for rows whose jsonb predates the sync
+// (v2.5.19). ?? not || — 0 and false are real settings (v2.4.9 lesson).
+function resolveBookingPref(clinic, key, fallback) {
+  const nested = clinic?.config?.[key];
+  if (nested !== undefined && nested !== null) return nested;
+  const flat = clinic?.[key];
+  if (flat !== undefined && flat !== null) return flat;
+  return fallback;
+}
+
+// Calendar-day difference in whole Singapore days: 0 = same SG day,
+// 1 = tomorrow, -1 = yesterday. Both inputs are YYYY-MM-DD strings compared
+// as UTC midnights — immune to server-TZ drift. (The pre-v2.5.25 bug:
+// new Date(date) is UTC midnight, so "today" measured NEGATIVE hours from
+// 8am SGT onwards and every same-day request failed the min-notice check.)
+function daysDiffSG(dateStr, todayStr) {
+  const DAY = 24 * 60 * 60 * 1000;
+  return Math.round((Date.parse(dateStr + 'T00:00:00Z') - Date.parse(todayStr + 'T00:00:00Z')) / DAY);
+}
+
+// Drop same-day slots starting before now + minNotice (SG wall clock).
+// Mirrors availability-engine's per-slot min-notice gate so CHECK and BOOK
+// give the same answer.
+function filterSlotsByMinNotice(slots, nowMinutes, minNoticeHours) {
+  const earliest = nowMinutes + minNoticeHours * 60;
+  return (slots || []).filter(s => {
+    const [h, m] = String(s).split(':').map(Number);
+    return h * 60 + m >= earliest;
+  });
 }
 
 // ─── v2.5.13 (P-3): preferred_time parsing/answering ─────────────
@@ -126,14 +160,24 @@ async function checkAvailability({ client_id, date, service, preferred_time, tre
       return { success: false, error: 'Clinic not found', slots: [] };
     }
     
-    // Validate date is within allowed range
-    const today = new Date();
-    const requestedDate = new Date(date);
-    const daysDiff = Math.ceil((requestedDate - today) / (1000 * 60 * 60 * 24));
-    
-    // v2.2.5: these settings also live in config jsonb if set — flat columns never existed
-    const maxAdvance = clinic.booking_max_advance_days || clinic.config?.booking_max_advance_days || 30;
-    const minNotice = clinic.booking_min_notice_hours || clinic.config?.booking_min_notice_hours || 2;
+    // v2.5.25 (A-1): all day math in Singapore time. The old code compared
+    // UTC-midnight of the requested date against the live clock, so a
+    // same-day request had NEGATIVE "hours until" for most of the SG day and
+    // was rejected with a bogus min-notice message from 8am SGT onwards.
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date || ''))) {
+      return { success: true, date, slots: [], bookedCount: 0,
+        message: `I couldn't read that date ("${date}"). Could you give a day and month, e.g. 21 November?` };
+    }
+    const todayStr = getTodaySG();
+    const daysDiff = daysDiffSG(date, todayStr);
+    const requestedDate = new Date(date + 'T00:00:00Z');
+
+    // v2.5.25: the clinic's own booking preferences — jsonb canonical
+    // (Invariant 19), flat column fallback. Editable by the clinic via
+    // /req_booking or by Moon Hands admin via /setbooking.
+    const maxAdvance = resolveBookingPref(clinic, 'booking_max_advance_days', 30);
+    const minNotice = resolveBookingPref(clinic, 'booking_min_notice_hours', 2);
+    const allowSameDay = resolveBookingPref(clinic, 'booking_allow_same_day', true);
     
     // v2.5.13 (P-3): these are honest ANSWERS, not system failures — return
     // success:true with an empty slot list + a patient-facing message.
@@ -148,12 +192,10 @@ async function checkAvailability({ client_id, date, service, preferred_time, tre
       return { success: true, date, slots: [], bookedCount: 0,
         message: `We can only take bookings up to ${maxAdvance} days ahead, and ${date} is further out. Could you pick an earlier date?` };
     }
-    if (daysDiff === 0) {
-      const hoursUntil = (requestedDate - today) / (1000 * 60 * 60);
-      if (hoursUntil < minNotice) {
-        return { success: true, date, slots: [], bookedCount: 0,
-          message: `We need at least ${minNotice} hours' notice for same-day bookings. Could you pick a later time or another day?` };
-      }
+    if (daysDiff === 0 && !allowSameDay) {
+      // Clinic's own preference (control panel / Moon Hands admin): no same-day.
+      return { success: true, date, slots: [], bookedCount: 0,
+        message: `We don't take same-day bookings — could you pick tomorrow or a later date?` };
     }
     
     // Check if clinic is open on this day
@@ -223,8 +265,19 @@ async function checkAvailability({ client_id, date, service, preferred_time, tre
     // Generate available slots (30-min intervals, duration+buffer aware)
     // v2.2.5: services live in config jsonb — the flat column never existed.
     const services = clinic.services || clinic.config?.services || [];
-    const slots = generateTimeSlots(openTime, closeTime, bookedPeriods, service, services, bufferMin);
-    
+    let slots = generateTimeSlots(openTime, closeTime, bookedPeriods, service, services, bufferMin);
+
+    // v2.5.25 (A-1): for same-day requests, drop slots starting before
+    // now + minNotice (SG wall clock). generateTimeSlots itself has no clock
+    // awareness — without this it offered 9am slots at 3pm.
+    let sameDayWindowClosed = false;
+    if (daysDiff === 0) {
+      const { nowMinutes } = sgNowParts();
+      const before = slots.length;
+      slots = filterSlotsByMinNotice(slots, nowMinutes, minNotice);
+      sameDayWindowClosed = before > 0 && slots.length === 0;
+    }
+
     // v2.5.13 (P-3): if the patient asked about a specific time/window,
     // answer THAT question instead of returning a bare slot count.
     const preferredAnswer = buildPreferredTimeAnswer(timePreference, slots, dayName, date);
@@ -236,9 +289,11 @@ async function checkAvailability({ client_id, date, service, preferred_time, tre
       closeTime,
       slots,
       bookedCount: bookedPeriods.length, // v2.2.5: was `bookedTimes` (undefined) — that ReferenceError alone made every call fail
-      message: preferredAnswer || (slots.length > 0
-        ? `We have ${slots.length} slots available on ${date}.`
-        : `Fully booked on ${date}. Would you like to join the waitlist?`)
+      message: preferredAnswer || (sameDayWindowClosed
+        ? `Today's remaining slots all start within our ${minNotice}-hour notice window, so the earliest I can offer is tomorrow. Shall I check tomorrow for you?`
+        : slots.length > 0
+          ? `We have ${slots.length} slots available on ${date}.`
+          : `Fully booked on ${date}. Would you like to join the waitlist?`)
     };
     
   } catch (err) {
@@ -331,9 +386,11 @@ async function createBooking({ client_id, customer_name, customer_phone, service
       return { success: false, error: 'Clinic configuration not found' };
     }
     
-    // Check if same-day is allowed
-    const today = new Date().toISOString().split('T')[0];
-    if (apptDate === today && clinic.booking_allow_same_day === false) {
+    // Check if same-day is allowed — SGT calendar day (v2.5.25: the old
+    // UTC-date compare let same-day bookings slip through from midnight to
+    // 8am SGT) + clinic preference, jsonb canonical.
+    const today = getTodaySG();
+    if (apptDate === today && resolveBookingPref(clinic, 'booking_allow_same_day', true) === false) {
       return { success: false, error: 'Same-day booking not available. Please book at least 1 day in advance.' };
     }
     
@@ -1013,6 +1070,9 @@ async function notifyAdmin(supabase, client_id, eventType, data) {
 module.exports = {
   checkAvailability,
   createBooking,
+  resolveBookingPref,
+  daysDiffSG,
+  filterSlotsByMinNotice,
   updateBooking,
   cancelBooking,
   rescheduleBooking,

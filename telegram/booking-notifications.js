@@ -8,7 +8,7 @@
  */
 
 require('dotenv').config();
-const { formatDateSG, formatTimeSG, getDayName, getTodaySG, addDaysToDateStr } = require('../utils/date-helpers');
+const { formatDateSG, formatTimeSG, getDayName, getTodaySG, addDaysToDateStr, sgNowParts } = require('../utils/date-helpers');
 const { supabase } = require('../supabase/client');
 const { resolveD360ApiKey } = require('../utils/d360-keys'); // v2.5.6 (F1): per-clinic outbound keys
 
@@ -427,10 +427,10 @@ async function sendDailyClosingSummary(clinicConfig, supabase) {
     return;
   }
   
-  // Get tomorrow's date (Singapore time)
-  const tomorrow = new Date();
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  const tomorrowStr = tomorrow.toISOString().split('T')[0];
+  // Get tomorrow's date (Singapore time) — v2.5.25 (A-3): real SG clock,
+  // the old new-Date-plus-one + toISOString math returned the wrong date
+  // between midnight and 8am SGT.
+  const tomorrowStr = sgNowParts().tomorrowStr;
   
   // Fetch tomorrow's bookings
   const { data: bookings, error } = await supabase

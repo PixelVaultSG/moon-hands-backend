@@ -447,6 +447,35 @@ async function handleUpdateHours(ctx) {
   }
 }
 
+// v2.5.25 (A-1): admin direct-apply for the clinic's booking preferences
+// (same-day on/off, min notice, max advance). Clinic self-service path is
+// /req_booking → change request → Moon Hands approval → same helper.
+async function handleSetBooking(ctx) {
+  const args = ctx.message.text.split(/\s+/);
+  if (args.length < 4) {
+    return ctx.reply('⚠️ Usage: `/setbooking <slug> <setting> <value>`\n\nSettings:\n• `booking_allow_same_day` — on/off\n• `booking_min_notice_hours` — 0-48\n• `booking_max_advance_days` — 1-90\n\nExample: `/setbooking spine-co-chiropractic-demo booking_allow_same_day off`', { parse_mode: 'Markdown' });
+  }
+
+  const [_, slug, field, value] = args;
+  const client = await db.getClientBySlug(slug);
+  if (!client) return ctx.reply(`❌ Client "${slug}" not found. Use /clients to see all slugs.`);
+
+  const result = await db.updateBookingSettings(client.id, field, value);
+
+  if (result.success) {
+    const shown = result.value === true ? 'ON' : result.value === false ? 'OFF' : result.value;
+    await safeReplyMD(ctx,
+      `✅ *Booking Setting Updated*\n\n` +
+      `Client: ${escapeMarkdown(client.name)}\n` +
+      `Setting: ${escapeMarkdown(result.field)}\n` +
+      `New value: ${escapeMarkdown(shown)}\n\n` +
+      `Live from the next patient message\\.`
+    );
+  } else {
+    await ctx.reply(`❌ Error: ${result.error}`);
+  }
+}
+
 async function handleAddFaq(ctx) {
   const args = ctx.message.text.split(/\s+/);
   if (args.length < 3) {
@@ -592,7 +621,8 @@ async function handleUsage(ctx, providedSlug = null) {
   const client = await db.getClientBySlug(slug);
   if (!client) return ctx.reply(`❌ Client "${slug}" not found. Use /clients to see available slugs.`);
 
-  const today = new Date().toISOString().split('T')[0];
+  // v2.5.25 (A-3): SG calendar day — matches incrementDailyUsage's bucket
+  const today = require('../../utils/date-helpers').getTodaySG();
   const usage = await db.getDailyUsage(today);
   const clientUsage = usage.find(u => u.client_id === client.id);
 
@@ -1030,6 +1060,7 @@ module.exports = {
   handleUpdatePrice,
   handleRemoveService,
   handleUpdateHours,
+  handleSetBooking,
   handleAddFaq,
   handleRemoveFaq,
   handleUpdateVoice,
