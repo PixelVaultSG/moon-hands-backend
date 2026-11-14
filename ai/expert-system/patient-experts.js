@@ -540,6 +540,23 @@ function pickSurvivingFunctionCall(callResults) {
   return sorted[0].functionCall;
 }
 
+// v2.5.28 (multi-bubble): a multi-intent turn used to be stitched into ONE
+// message by a merge LLM — an extra paid call that could blend an
+// unverified paraphrase into a deterministic answer, and that silently
+// swallowed answers when the surviving function call replaced the merged
+// text (B-1 live: the price question went unanswered). Now each expert's
+// answer rides as its OWN WhatsApp bubble. Fixed, deterministic order —
+// no question-order guessing: EMPATHY (acknowledgment) first,
+// informational answers next, BOOKING prose last so the action/button
+// bubble lands at the bottom, right above the deterministic result.
+const MAX_BUBBLES = 3;
+
+function orderBubbles(proseResults, cap = MAX_BUBBLES) {
+  const rank = (r) => r.expert === 'EMPATHY_EXPERT' ? 0 : (r.expert === 'BOOKING_EXPERT' ? 2 : 1);
+  const sorted = [...(proseResults || [])].sort((a, b) => rank(a) - rank(b));
+  return sorted.slice(0, Math.max(1, cap));
+}
+
 async function executeExperts(expertKeys, message, clinicConfig, conversationHistory, patientPhone) {
   // Run in parallel for speed
   const results = await Promise.all(
@@ -571,50 +588,33 @@ async function executeExperts(expertKeys, message, clinicConfig, conversationHis
   const baseCost = validResults.reduce((sum, r) => sum + r.cost, 0);
   const expertsUsed = validResults.map(r => r.expert);
 
-  // No prose anywhere → skip the merge LLM entirely; the executed call's
-  // deterministic result IS the reply (Invariant 17). One prose result →
-  // no merge needed either (also saves an LLM call).
+  // No prose anywhere → skip composition entirely; the executed call's
+  // deterministic result IS the reply (Invariant 17).
   if (proseResults.length === 0) {
     return { text: '', expertsUsed, totalCost: baseCost, functionCall: survivingCall };
   }
-  if (proseResults.length === 1) {
+
+  // v2.5.28 (multi-bubble): bubbleCount = prose answers + 1 when a function
+  // call survives (its deterministic result becomes the final bubble in
+  // bot-engine). ONE thing to say → the untouched single-reply path.
+  // TWO OR MORE → return the prose bubbles as an ordered list (texts);
+  // bot-engine appends the action bubble, runs the honesty guards per
+  // bubble, and the webhook sends each bubble as its own WhatsApp message.
+  const bubbleCount = proseResults.length + (survivingCall ? 1 : 0);
+  if (bubbleCount === 1) {
     return { text: proseResults[0].text, expertsUsed, totalCost: baseCost, functionCall: survivingCall };
   }
 
-  // Multi-expert: compose naturally via a composition prompt
-  const individualResponses = proseResults.map(r => `[${r.expertName}]: ${r.text}`).join('\n\n');
-
-  // Use the clinic's tone to merge responses naturally
-  const p = getClinicPersonality(clinicConfig);
-  const mergePrompt = `You are ${p.agentName} from ${p.clinicName}. Merge these expert responses into ONE natural, flowing message. Remove any repetition. Ensure transitions are smooth. Keep the ${p.tone} tone throughout.
-
-EXPERT RESPONSES TO MERGE:
-${individualResponses}
-
-RULES:
-- Combine into ONE response (not a list of expert answers)
-- Remove any "[Expert Name]" labels
-- Use natural transitions like "Also, ", "In addition, ", "Regarding that, "
-- End with a warm call-to-action if appropriate
-- Never mention that multiple experts were involved`;
-
-  const mergeCompletion = await getOpenAI().chat.completions.create({
-    model: 'gpt-4o-mini',
-    messages: [
-      { role: 'system', content: mergePrompt },
-      { role: 'user', content: 'Merge these into one natural response.' }
-    ],
-    temperature: 0.3,
-    max_tokens: 500,
-  });
-  
-  const mergedText = mergeCompletion.choices[0].message.content;
-  const mergeCost = estimateCost(mergeCompletion.usage);
-
+  const proseCap = survivingCall ? MAX_BUBBLES - 1 : MAX_BUBBLES;
+  const ordered = orderBubbles(proseResults, proseCap);
+  if (proseResults.length > ordered.length) {
+    console.log(`[EXPERT] multi-bubble cap: ${proseResults.length} prose answers, keeping ${ordered.length} — dropped: ${proseResults.filter(r => !ordered.includes(r)).map(r => r.expert).join(', ')}`);
+  }
   return {
-    text: mergedText,
+    text: ordered[0].text,
+    texts: ordered.map(r => ({ expert: r.expert, expertName: r.expertName, text: r.text })),
     expertsUsed,
-    totalCost: baseCost + mergeCost,
+    totalCost: baseCost,
     functionCall: survivingCall,
   };
 }
@@ -655,4 +655,6 @@ module.exports = {
   MULTILINGUAL_AVAILABILITY,
   pickSurvivingFunctionCall,
   CALL_PRIORITY,
+  orderBubbles,
+  MAX_BUBBLES,
 };

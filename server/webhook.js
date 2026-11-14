@@ -776,7 +776,55 @@ async function handleWebhook(req, res, channel, url) {
         // Send "Luna is typing..." for human-like UX (non-blocking)
         await sendTypingIndicator(message.from, clientId);
 
-        addTrace(message.from, 'WHATSAPP', 'SENDING', `text=${response.text?.slice(0,50)}, interactive=${!!response.whatsappInteractive}`);
+        addTrace(message.from, 'WHATSAPP', 'SENDING', `text=${response.text?.slice(0,50)}, interactive=${!!response.whatsappInteractive}, bubbles=${Array.isArray(response.messages) ? response.messages.length : 1}`);
+
+        // ── MULTI-BUBBLE SEND (v2.5.28) ──────────────────────────
+        // A multi-intent turn arrives as ordered bubbles — each goes out as
+        // its OWN WhatsApp message, ~400ms apart, reading like a human
+        // typing. The interactive card rides on the FINAL bubble only (the
+        // card's body IS that bubble's text; sendWhatsAppReply ignores the
+        // text arg when a card is present, so nothing is duplicated).
+        // Partial failure: bubbles already sent STAND, the rest are dropped
+        // and admin is alerted — never resend the batch (the patient would
+        // get duplicates).
+        if (Array.isArray(response.messages) && response.messages.length > 1) {
+          const bubbles = response.messages;
+          let sentCount = 0;
+          for (let i = 0; i < bubbles.length; i++) {
+            const isLast = i === bubbles.length - 1;
+            try {
+              const r = await sendWhatsAppReply(
+                message.from,
+                bubbles[i].text,
+                i === 0 ? message.messageId : null,
+                isLast ? response.whatsappInteractive : null,
+                clientId);
+              if (!r.success) throw new Error(r.error || '360dialog send failed');
+              sentCount++;
+              trackSpend(clientId, 0.007);
+              addTrace(message.from, 'WHATSAPP', 'BUBBLE_SENT', `bubble ${i + 1}/${bubbles.length}, msgId=${r.messageId}`);
+              if (!isLast) await new Promise(resolve => setTimeout(resolve, 400));
+            } catch (bubbleErr) {
+              console.error(`[WEBHOOK] Bubble ${i + 1}/${bubbles.length} FAILED (${sentCount} already sent — they stand): ${bubbleErr.message}`);
+              addTrace(message.from, 'WHATSAPP', 'BUBBLE_FAILED', `bubble ${i + 1}/${bubbles.length}: ${bubbleErr.message}`);
+              recordError(`Multi-bubble partial failure: ${sentCount}/${bubbles.length} sent — ${bubbleErr.message}`);
+              break;
+            }
+          }
+          replySent = sentCount > 0;
+          recordMessage(sentCount === bubbles.length, sentCount === bubbles.length ? null : 'partial multi-bubble send');
+
+          if (sentCount === bubbles.length && response.followUp && response.followUp.text) {
+            setTimeout(async () => {
+              try {
+                await sendWhatsAppReply(message.from, response.followUp.text, null, response.followUp.whatsappInteractive, clientId);
+                addTrace(message.from, 'WHATSAPP', 'FOLLOWUP_SENT', `text=${response.followUp.text.slice(0, 40)}`);
+              } catch (fuErr) {
+                console.error(`[WEBHOOK] Follow-up send failed: ${fuErr.message}`);
+              }
+            }, response.followUp.delayMs || 1500);
+          }
+        } else {
         const sendResult = await sendWhatsAppReply(message.from, response.text, message.messageId, response.whatsappInteractive, clientId);
         replySent = sendResult.success;
         if (replySent) {
@@ -799,6 +847,7 @@ async function handleWebhook(req, res, channel, url) {
         } else {
           addTrace(message.from, 'WHATSAPP', 'FAILED_360DIALOG', sendResult.error);
           recordMessage(false, sendResult.error);
+        }
         }
       } catch (sendErr) {
         console.error(`[WEBHOOK] Failed to send WhatsApp reply to ${message.from}: ${sendErr.message}`);
@@ -1256,14 +1305,34 @@ async function routeToAI(text, message, channel, preResolvedClientId = null, int
       console.log(`[SANITIZER] Cleaned: "${result.text.substring(0, 60)}..." → "${sanitizedText.substring(0, 60)}..."`);
     }
     
+    // v2.5.28 (multi-bubble): pass the ordered bubbles through, each
+    // sanitized like a standalone message. If the card's body still holds
+    // the PRE-sanitize last-bubble text, sync it to the sanitized text so
+    // the patient never sees a phrase the sanitizer stripped elsewhere.
+    let passMessages = null;
+    let passInteractive = result.whatsappInteractive || null;
+    if (Array.isArray(result.messages) && result.messages.length > 1) {
+      passMessages = result.messages.map(m => ({
+        text: sanitizerLoaded
+          ? sanitizeResponse(m.text, { intent: result.intent, isFirstContact: history.length === 0 })
+          : m.text
+      }));
+      const lastRaw = String(result.messages[result.messages.length - 1].text || '');
+      const lastClean = passMessages[passMessages.length - 1].text;
+      if (passInteractive?.interactive?.body?.text === lastRaw && lastClean !== lastRaw) {
+        passInteractive.interactive.body.text = lastClean;
+      }
+    }
+
     return {
       text: sanitizedText,
       channel: channel,
       ai_processed: true,
       function_called: result.function_called || null,
       model: result.model || 'gpt-4o-mini',
-      whatsappInteractive: result.whatsappInteractive || null,
-      followUp: result.followUp || null
+      whatsappInteractive: passInteractive,
+      followUp: result.followUp || null,
+      ...(passMessages ? { messages: passMessages } : {})
     };
   } catch (err) {
     console.error('[AI_ROUTING] Bot engine error:', err.message);
@@ -1640,7 +1709,7 @@ async function handleTrace(req, res) {
 
     const payload = {
       status: 'ok',
-      version: '2.5.27',
+      version: '2.5.28',
       total_traces: traces.length,
       by_phone: byPhone,
       recent: traces.slice(0, 50),
