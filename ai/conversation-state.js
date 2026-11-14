@@ -74,7 +74,7 @@ async function hydrateState(phone) {
 
 const BOOKING_STATES = {
   IDLE: 'idle',
-  MULTI_INTENT_CONFIRM: 'multi_intent_confirm',
+  // v2.5.29: MULTI_INTENT_CONFIRM removed with the multi-intent gate
   BOOKING_OFFERED: 'booking_offered',
   AWAITING_DATE: 'awaiting_date',
   AWAITING_TIME: 'awaiting_time',

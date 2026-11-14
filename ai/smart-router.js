@@ -184,22 +184,9 @@ async function routeMessage(message, clinicConfig, patientPhone = null, conversa
     return await handleBookingFlow(message, clinicConfig, patientPhone, currentState, conversationHistory, startTime);
   }
   
-  // Handle multi-intent confirmation state
-  if (currentState.state === BOOKING_STATES.MULTI_INTENT_CONFIRM) {
-    if (isConfirmation(message)) {
-      // User confirmed — execute each pending intent
-      const pendingIntents = currentState.data.pendingIntents || [];
-      resetIdle(phone);
-      return await executeMultiIntents(pendingIntents, message, clinicConfig, patientPhone, conversationHistory, startTime);
-    } else if (isDenial(message)) {
-      resetIdle(phone);
-      return { text: "No worries! What can I help you with?", source: 'hardcoded', cost_saved: 1 };
-    } else {
-      // User said something else — treat as new message
-      resetIdle(phone);
-      // Fall through to normal processing
-    }
-  }
+  // (v2.5.29: the MULTI_INTENT_CONFIRM state branch was removed with the
+  // gate — no state is ever set to it anymore, and stale states from
+  // before the deploy simply fall through to normal processing.)
   
   // ── STEP 1c: IDLE compare / what-is → deterministic menu-data answer ──
   // Comparisons aren't only asked mid-booking — patients fire them right
@@ -263,21 +250,27 @@ async function routeMessage(message, clinicConfig, patientPhone = null, conversa
     matchedIntents = matchIntents(message, conversationHistory, shouldGreet);
   }
   
-  // ── STEP 3: Multi-intent handling ───────────────────────────────
-  // Only trigger multi-intent confirmation when 2+ HIGH-confidence
-  // (>=0.85) intents match. Prevents "What services do you offer?"
-  // from being treated as multi-intent (service_list + service_inquiry).
+  // ── STEP 3: Multi-intent handling (v2.5.29 — gate REMOVED) ──────
+  // The old multi-intent confirmation gate (the "reply yes to confirm" one)
+  // was a pre-multi-bubble artifact: it wasted a round trip, produced
+  // garbled text ("pricing for the and" — it parsed "the" as a treatment),
+  // and CRASHED on execution (combineResponses assumed string answers;
+  // service list/info handlers return interactive card OBJECTS — the
+  // combiner's .toLowerCase() threw and the patient got "I'm having
+  // trouble right now"). Ash live test 2026-11-14. Now compound questions
+  // go straight to the expert system, where v2.5.28 multi-bubble answers
+  // each question as its OWN bubble — no confirmation round trip.
+  // Single-intent messages keep their $0 hardcoded paths below.
   const confidentIntents = matchedIntents.filter(m => m.confidence >= 0.85);
-  
-  // Require at least 2 high-confidence AND they must be different
-  // substantive intents (not e.g. greeting + booking)
+
   const SUBSTANTIVE_INTENTS = ['booking_request', 'pricing_specific', 'pricing_general',
     'service_inquiry', 'service_list', 'treatment_enquiry', 'treatment_info',
     'operating_hours', 'location', 'check_appointment'];
   const substantiveMatches = confidentIntents.filter(m => SUBSTANTIVE_INTENTS.includes(m.intent));
-  
+
   if (substantiveMatches.length >= 2) {
-    return await handleMultiIntentConfirmation(substantiveMatches, message, clinicConfig, patientPhone);
+    console.log(`[SMART_ROUTER] Multi-intent compound (${substantiveMatches.map(m => m.intent).join(', ')}) → expert system (multi-bubble)`);
+    return await routeToOpenAI(message, clinicConfig, conversationHistory, matchedIntents, startTime);
   }
   
   // ── STEP 4: Single intent routing ───────────────────────────────
@@ -707,98 +700,10 @@ function handleClarification(message, clinicConfig, patientPhone, conversationHi
   };
 }
 
-// ─── MULTI-INTENT CONFIRMATION ───────────────────────────────────
-
-async function handleMultiIntentConfirmation(intents, message, clinicConfig, patientPhone) {
-  // Store pending intents
-  setState(patientPhone || 'unknown', BOOKING_STATES.MULTI_INTENT_CONFIRM, {
-    pendingIntents: intents.map(i => i.intent),
-    originalMessage: message
-  });
-  
-  // Build natural confirmation message
-  const intentDescriptions = intents.map((m, i) => {
-    const num = i + 1;
-    switch (m.intent) {
-      case 'book_appointment': return `${num}) a booking request`;
-      case 'check_availability': return `${num}) a slot availability check`;
-      case 'pricing_general': return `${num}) pricing information`;
-      case 'pricing_specific': return `${num}) pricing for ${m.params?.treatment || 'a specific treatment'}`;
-      case 'treatment_enquiry': return `${num}) information about ${m.params?.treatment || 'a treatment'}`;
-      case 'operating_hours': return `${num}) our operating hours`;
-      case 'location': return `${num}) our location`;
-      case 'cancel_booking': return `${num}) a booking cancellation`;
-      case 'greeting': return `${num}) a greeting (hi there!)`;
-      default: return `${num}) ${m.intent.replace(/_/g, ' ')}`;
-    }
-  });
-  
-  const confirmText = `I see that you have ${intentDescriptions.join(' and ')}. Is that accurate? Anything else you'd like to ask before I provide information on those? Just reply "yes" to confirm, or let me know what else you need!`;
-  
-  return {
-    text: confirmText,
-    source: 'hardcoded',
-    intents: intents.map(i => i.intent),
-    cost_saved: 1,
-    latency_ms: 0
-  };
-}
-
-async function executeMultiIntents(intents, message, clinicConfig, patientPhone, conversationHistory, startTime) {
-  // Execute each intent and combine responses
-  const responses = [];
-  
-  for (const intentName of intents) {
-    try {
-      // Skip greeting in multi-intent (just handle the substantive requests)
-      if (intentName === 'greeting') continue;
-      
-      const response = await executeHandler(intentName, {
-        message,
-        clinicConfig,
-        patientPhone,
-        params: {},
-        conversationHistory
-      });
-      if (response) responses.push(response);
-    } catch (err) {
-      console.error(`[MULTI_INTENT] Handler error for ${intentName}:`, err.message);
-    }
-  }
-  
-  if (responses.length === 0) {
-    return await routeToOpenAI(message, clinicConfig, conversationHistory, intents.map(i => ({ intent: i })), startTime);
-  }
-  
-  if (responses.length === 1) {
-    return {
-      text: responses[0],
-      source: 'hardcoded',
-      intents,
-      cost_saved: 1,
-      latency_ms: Date.now() - startTime
-    };
-  }
-  
-  // Combine multiple responses naturally
-  const combined = combineResponses(responses);
-  return {
-    text: combined,
-    source: 'hardcoded',
-    intents,
-    cost_saved: 1,
-    latency_ms: Date.now() - startTime
-  };
-}
-
-function combineResponses(responses) {
-  if (responses.length === 2) {
-    return `${responses[0]}\n\nAlso, ${responses[1].toLowerCase()}`;
-  }
-  const last = responses.pop();
-  const joined = responses.join('. ');
-  return `${joined}. And ${last.toLowerCase()}`;
-}
+// ─── MULTI-INTENT CONFIRMATION — REMOVED v2.5.29 ─────────────────
+// handleMultiIntentConfirmation / executeMultiIntents / combineResponses
+// were deleted with the gate (see STEP 3 above). Compound questions route
+// to the expert system, which answers each intent as its own bubble.
 
 // ─── BOOKING STATE MACHINE ───────────────────────────────────────
 
