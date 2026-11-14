@@ -32,7 +32,7 @@ const memory = require('../memory'); // Episodic memory — loads relevant proje
 const { classifyMessage, executeExperts } = require('./expert-system/patient-experts');
 const { matchIntents } = require('./intent-matcher');
 const { getFunctionDefinitions, executeFunction } = require('./expert-system/functions');
-const { detectRedFlag, PATH_A_RESPONSE } = require('./red-flag-detector');
+const { detectRedFlag, PATH_A_RESPONSE, PATH_A_RESPONSES } = require('./red-flag-detector');
 const { classifyMedicalSafety } = require('./medical-classifier');
 const convState = require('./conversation-state');
 const { getNowSG, getSGDateContext, annotateDateConsistency } = require('../utils/date-helpers');
@@ -1108,11 +1108,13 @@ async function madsGate(messageText, clientConfig, patientPhone, startTime) {
   const redFlag = detectRedFlag(messageText);
   if (redFlag.isRedFlag) {
     console.log(`[MADS] RED FLAG (regex) for phone=...${String(patientPhone || '').slice(-4)}: ${redFlag.matchedPattern}`);
+    // v2.5.24: the patient hears the emergency referral in THEIR language.
+    const pathA = PATH_A_RESPONSES[detectPatientLanguage(messageText)] || PATH_A_RESPONSE;
     await sendClinicNotification(clientConfig.id,
       `🚨 *Red flag detected*\n\nPatient: +${String(patientPhone).replace(/\D/g, '')}\nMessage: "${String(messageText).slice(0, 200)}"\n\nNo booking offered. Patient advised to visit A&E/GP.${escLine}`
     ).catch(e => console.error('[MADS] red-flag alert failed:', e.message));
-    await logConversation(clientConfig.id, 'whatsapp', patientPhone, null, messageText, PATH_A_RESPONSE, 'mads:red_flag');
-    return { text: PATH_A_RESPONSE, function_called: null, model: 'mads-red-flag', latency_ms: Date.now() - startLabel };
+    await logConversation(clientConfig.id, 'whatsapp', patientPhone, null, messageText, pathA, 'mads:red_flag');
+    return { text: pathA, function_called: null, model: 'mads-red-flag', latency_ms: Date.now() - startLabel };
   }
 
   // Layer 2: LLM classifier
@@ -1120,11 +1122,12 @@ async function madsGate(messageText, clientConfig, patientPhone, startTime) {
   console.log(`[MADS] Classification: ${classification.category} (source=${classification.source})`);
 
   if (classification.isRedFlag) {
+    const pathA = PATH_A_RESPONSES[detectPatientLanguage(messageText)] || PATH_A_RESPONSE;
     await sendClinicNotification(clientConfig.id,
       `🚨 *Red flag detected (classifier)*\n\nPatient: +${String(patientPhone).replace(/\D/g, '')}\nMessage: "${String(messageText).slice(0, 200)}"\n\nNo booking offered. Patient advised to visit A&E/GP.${escLine}`
     ).catch(e => console.error('[MADS] red-flag alert failed:', e.message));
-    await logConversation(clientConfig.id, 'whatsapp', patientPhone, null, messageText, PATH_A_RESPONSE, 'mads:red_flag_llm');
-    return { text: PATH_A_RESPONSE, function_called: null, model: 'mads-red-flag', latency_ms: Date.now() - startLabel };
+    await logConversation(clientConfig.id, 'whatsapp', patientPhone, null, messageText, pathA, 'mads:red_flag_llm');
+    return { text: pathA, function_called: null, model: 'mads-red-flag', latency_ms: Date.now() - startLabel };
   }
 
   if (classification.isMedicalAdvice) {
