@@ -169,7 +169,11 @@ function detectPatientLanguage(text) {
   const t = String(text || '');
   if (/[\u4e00-\u9fff]/.test(t)) return 'zh';
   if (/[\u0b80-\u0bff]/.test(t)) return 'ta';
-  if (/\b(saya|nak|anda|boleh|tempah|tempahan|temujanji|konsultasi|esok|pukul|hari|tidak|adakah|berapa)\b/i.test(t)) return 'ms';
+  // v2.5.23: widened after the live replay — "Ya, tolong tempahkan"
+  // detected as English and the honest hold-for-approval reply went out
+  // untranslated. Malay weekdays are strong signals; inflected booking
+  // verbs (tempahkan/menempah) and polite particles (tolong/sila) too.
+  if (/\b(saya|nak|anda|boleh|tempah|tempahan|tempahkan|menempah|temujanji|konsultasi|esok|pukul|hari|tidak|adakah|berapa|tolong|sila|ketersediaan|isnin|selasa|rabu|khamis|jumaat|sabtu|ahad)\b/i.test(t)) return 'ms';
   return 'en';
 }
 
