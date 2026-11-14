@@ -470,6 +470,13 @@ async function createBooking({ client_id, customer_name, customer_phone, service
     
     if (insertErr) {
       console.error('[FUNCTION] createBooking insert error:', insertErr.message);
+      // v2.5.26 (A-4): the DB exclusion constraint no_overlapping_active_bookings
+      // is the hard wall against the check-then-insert race — 23P01 means
+      // another booking won this slot between our conflict check and this
+      // write. Honest answer, never "try again" (retrying changes nothing).
+      if (insertErr.code === '23P01') {
+        return { success: false, error: 'That slot was just taken by another booking at the same moment. Please pick a different time.', slotTaken: true };
+      }
       return { success: false, error: 'Unable to create booking. Please try again.' };
     }
     
@@ -596,6 +603,10 @@ async function updateBooking({ client_id, appointment_id, date, time, service, d
 
     if (updErr) {
       console.error('[FUNCTION] updateBooking update error:', updErr.message);
+      // v2.5.26 (A-4): 23P01 = the new slot was taken between check and write.
+      if (updErr.code === '23P01') {
+        return { success: false, error: 'That new slot was just taken by another booking. Please pick a different time.', slotTaken: true };
+      }
       return { success: false, error: 'Unable to update the booking. Please try again.' };
     }
 
