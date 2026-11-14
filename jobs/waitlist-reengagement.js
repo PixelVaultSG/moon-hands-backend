@@ -170,6 +170,20 @@ async function findMatchingWaitlistEntries(freedSlot) {
 
 async function sendWaitlistNotification(freedSlot, waitlistEntry) {
   try {
+    // v2.5.31: never interrupt a staff takeover with an automated offer.
+    // Skipping leaves the entry un-notified (cooldown untouched), so a
+    // LATER freed slot can still be offered — only this one is skipped.
+    // Fail-safe: a check error suppresses rather than risk the interruption.
+    try {
+      const { isStaffActive } = require('../middleware/staff-takeover');
+      if (isStaffActive(waitlistEntry.customer_phone).active) {
+        console.log(`[WAITLIST] Offer suppressed — staff conversation active for ${String(waitlistEntry.customer_phone || '').slice(-4)}`);
+        return false;
+      }
+    } catch (pauseErr) {
+      console.error('[WAITLIST] pause check failed, suppressing offer (fail-safe):', pauseErr.message);
+      return false;
+    }
     // Get clinic details
     const { data: clinic } = await supabase
       .from('clients')

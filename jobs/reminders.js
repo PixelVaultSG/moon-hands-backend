@@ -320,6 +320,20 @@ async function send48hFollowups() {
   if (!appointments || appointments.length === 0) return;
 
   for (const apt of appointments) {
+    // v2.5.31: never interrupt a staff takeover with an automated follow-up.
+    // Skip WITHOUT marking followup_48h_sent — this job runs every 15 min,
+    // so a later run the same day can still deliver it once staff resumes.
+    // Fail-safe: a check error suppresses rather than risk the interruption.
+    try {
+      const { isStaffActive } = require('../middleware/staff-takeover');
+      if (isStaffActive(apt.customer_phone).active) {
+        console.log(`[REMINDERS] 48h follow-up suppressed — staff conversation active for ${String(apt.customer_phone || '').slice(-4)}`);
+        continue;
+      }
+    } catch (pauseErr) {
+      console.error('[REMINDERS] pause check failed, suppressing follow-up (fail-safe):', pauseErr.message);
+      continue;
+    }
     const message = REMINDER_MESSAGES['followup'](
       apt.customer_name,
       apt.service,
