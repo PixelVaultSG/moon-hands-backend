@@ -348,6 +348,10 @@ async function handleApproveClinic(ctx, refArg) {
         },
       });
 
+    // v2.5.17 (F7): config failure used to be a console line nobody saw while
+    // the admin card still said "LIVE" — and since v2.5.7 a missing config
+    // means the bot REFUSES every patient. Surface it in the card.
+    const configFailed = Boolean(configErr);
     if (configErr) {
       console.error('[ONBOARDING_APPROVALS] Config insert error:', configErr.message);
       // Don't fail — client is created, config can be fixed manually
@@ -359,7 +363,30 @@ async function handleApproveClinic(ctx, refArg) {
       .update({ status: 'approved', approved_at: new Date().toISOString(), approved_by: ctx.from.id })
       .eq('id', submissionId);
 
-    // 10. Send success message to admin
+    // 10. Send welcome WhatsApp to clinic contact — gated + outcome-reported
+    // (v2.5.17, F7): deliberately KEPT on the approve path (vetted submission,
+    // unlike the silent reject path) and on the shared env D360 key (clinic has
+    // no account/key yet). Was sent AFTER the admin "LIVE" card with failures
+    // only console-logged, and no recipient guard (undefined phone → silent
+    // throw). The admin card must carry the REAL outcome.
+    let welcomeStatus;
+    const welcomeTo = submission.whatsapp_number || submission.clinic_phone;
+    if (!welcomeTo) {
+      welcomeStatus = '⚠️ skipped — no clinic WhatsApp number on file';
+      console.warn(`[ONBOARDING_APPROVALS] No welcome recipient for submission ${submissionId}`);
+    } else {
+      try {
+        const { sendWhatsAppMessage } = require('../../jobs/reminders');
+        const welcomeMsg = `Welcome to Moon Hands! 🌙\n\nYour clinic "${submission.clinic_name}" has been approved and is now live.\n\nYour AI assistant ${config.agent_name} is ready to handle patient inquiries 24/7.\n\nNeed help? Contact us at pixelvaultsg@gmail.com`;
+        const sent = await sendWhatsAppMessage(welcomeTo, welcomeMsg);
+        welcomeStatus = sent ? 'sent ✅' : 'FAILED — send manually ⚠️';
+      } catch (waErr) {
+        console.error('[ONBOARDING_APPROVALS] WhatsApp welcome failed:', waErr.message);
+        welcomeStatus = `FAILED (${String(waErr.message).slice(0, 60)}) — send manually ⚠️`;
+      }
+    }
+
+    // 11. Send success message to admin — with the REAL config + welcome outcomes
     const msg = [
       `✅ *CLINIC APPROVED*`,
       ``,
@@ -376,6 +403,8 @@ async function handleApproveClinic(ctx, refArg) {
       `🤖 AI Agent: ${escapeMarkdown(config.agent_name)}`,
       `💉 Treatments: ${services.length}`,
       `🕐 Hours: ${operatingHours.filter(h => h.isOpen).length} days configured`,
+      `📨 Welcome WA: ${welcomeStatus}`,
+      configFailed ? `⚠️ *CONFIG INSERT FAILED* — bot REFUSES all patients until config is fixed manually: ${escapeMarkdown(String(configErr.message).slice(0, 120))}` : ``,
       ``,
       `✅ Clinic is now LIVE.`,
       `Next steps:`,
@@ -396,16 +425,7 @@ async function handleApproveClinic(ctx, refArg) {
       ctx.reply(msg.replace(/[*_`]/g, ''));
     });
 
-    // 11. Send welcome WhatsApp to clinic contact
-    try {
-      const { sendWhatsAppMessage } = require('../../jobs/reminders');
-      const welcomeMsg = `Welcome to Moon Hands! 🌙\n\nYour clinic "${submission.clinic_name}" has been approved and is now live.\n\nYour AI assistant ${config.agent_name} is ready to handle patient inquiries 24/7.\n\nNeed help? Contact us at pixelvaultsg@gmail.com`;
-      await sendWhatsAppMessage(submission.whatsapp_number || submission.clinic_phone, welcomeMsg);
-    } catch (waErr) {
-      console.error('[ONBOARDING_APPROVALS] WhatsApp welcome failed:', waErr.message);
-    }
-
-    console.log(`[ONBOARDING_APPROVALS] Approved submission ${submissionId} → clinic ${newClient.id} (${slug})`);
+    console.log(`[ONBOARDING_APPROVALS] Approved submission ${submissionId} → clinic ${newClient.id} (${slug}); welcome: ${welcomeStatus}; configFailed: ${configFailed}`);
     return true; // v2.5.1: buttons need the real outcome
 
   } catch (err) {
