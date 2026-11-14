@@ -1416,11 +1416,17 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
       // Invariant 20) and fell through to the generalist, which re-ran the
       // same function at double cost and paraphrased freely (it even asked
       // a WhatsApp patient for their phone number, live Malay test).
+      // v2.5.28 (multi-bubble): executeExperts returns texts[] when the turn
+      // has 2+ things to say (prose answers + an action). The bubbles are
+      // assembled at the end of this block and logged as ONE joined row.
+      const isMultiBubble = Array.isArray(expertResult.texts) && expertResult.texts.length > 0;
       if (expertResult.text || expertResult.functionCall) {
         // Log the expert response
         const expertsUsed = expertResult.expertsUsed || [];
-        await logConversation(clientConfig.id, 'whatsapp', patientPhone, null,
-          messageText, expertResult.text || '[forced function call]', `experts:${expertsUsed.join(',')}`);
+        if (!isMultiBubble) {
+          await logConversation(clientConfig.id, 'whatsapp', patientPhone, null,
+            messageText, expertResult.text || '[forced function call]', `experts:${expertsUsed.join(',')}`);
+        }
         
         console.log(`[BOT_ENGINE] Experts: [${expertsUsed.join(', ')}] — cost: $${expertResult.totalCost.toFixed(4)}`);
 
@@ -1432,6 +1438,7 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
         // path, and the deterministic result replaces the AI's paraphrase.
         let expertFunctionHandled = false;
         let bookingWriteSucceeded = false; // Invariant 20 (v2.5.20)
+        let actionBubble = null; // v2.5.28: deterministic result bubble (multi-bubble turns)
         if (expertResult.functionCall) {
           const fnName = expertResult.functionCall.name;
           let fnArgs = {};
@@ -1462,9 +1469,12 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
           if (fnResult && !fnResult.error && fnResult.success !== false && (fnResult.message || fnResult.success)) {
             // v2.5.21: deterministic messages are English — localize them for
             // zh/ms/ta patients with facts preserved (falls back to English).
-            expertResult.text = fnResult.message
+            // v2.5.28: on multi-bubble turns the deterministic result becomes
+            // the FINAL bubble (actionBubble) instead of replacing the text.
+            const deterministicText = fnResult.message
               ? await localizeDeterministicMessage(fnResult.message, messageText)
               : (expertResult.text || "Sorry, I'm having trouble with that right now — please try again shortly.");
+            if (isMultiBubble) { actionBubble = deterministicText; } else { expertResult.text = deterministicText; }
             expertFunctionHandled = true;
             if (fnName === 'create_booking') bookingWriteSucceeded = true;
           } else {
@@ -1473,10 +1483,13 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
             // v2.5.13 (P-3): after a FORCED function call the model's prose
             // is empty — never send the patient a blank bubble.
             // v2.5.21: localized — non-English patients get it in their language.
-            if (!expertResult.text || !expertResult.text.trim()) {
-              expertResult.text = await localizeDeterministicMessage(
+            // v2.5.28: on multi-bubble turns the honest failure becomes the
+            // action bubble — the patient asked; they must hear it failed.
+            if (isMultiBubble ? !actionBubble : (!expertResult.text || !expertResult.text.trim())) {
+              const failText = await localizeDeterministicMessage(
                 "Sorry, I'm having trouble checking our calendar right now. Please try again in a moment, or tell me another day that works for you.",
                 messageText);
+              if (isMultiBubble) { actionBubble = failText; } else { expertResult.text = failText; }
             }
           }
         } else {
@@ -1491,7 +1504,7 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
             /(?:cancel|delete|remove)\s+(?:my\s+)?(?:appointment|booking|appt)\b|i\s+(?:want|need|would\s+like)\s+to\s+cancel/i.test(messageText || '')) {
           const dc = await deterministicCancelBookings(clientConfig, patientPhone);
           if (dc.text) {
-            expertResult.text = dc.text;
+            if (isMultiBubble) { actionBubble = dc.text; } else { expertResult.text = dc.text; }
             maybeAlertStall(clientConfig, patientPhone, messageText,
               'cancel required deterministic recovery — AI did not act', true);
           }
@@ -1504,7 +1517,9 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
         // role-played the whole flow). Replace it with an honest handoff in
         // the patient's language and alert admin; the fnResult replacement
         // above already handles the successful-write case.
-        if (!bookingWriteSucceeded && claimsBookingConfirmation(expertResult.text)) {
+        // (v2.5.28: multi-bubble turns run this guard per bubble in the
+        // assembly below — expertResult.text only holds the FIRST bubble.)
+        if (!isMultiBubble && !bookingWriteSucceeded && claimsBookingConfirmation(expertResult.text)) {
           console.error(`[BOT_ENGINE] FALSE CONFIRMATION intercepted (no successful create_booking this turn) — replacing with honest handoff`);
           maybeAlertStall(clientConfig, patientPhone, messageText,
             'expert claimed a booking confirmation with NO successful write — replaced (Invariant 20)', true);
@@ -1515,11 +1530,65 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
         // arrange that?"), park the conversation in BOOKING_OFFERED so a bare
         // "yes please" next turn starts the booking flow deterministically
         // instead of falling through to the LLM and getting a greeting back.
-        if (!resumePrompt && patientPhone && /would you like me to (arrange|book|help you book)|shall i (book|arrange|help you book)|want me to (book|arrange)/i.test(expertResult.text)) {
+        // (v2.5.28: multi-bubble turns run this on the LAST bubble in the
+        // assembly — expertResult.text only holds the first.)
+        if (!isMultiBubble && !resumePrompt && patientPhone && /would you like me to (arrange|book|help you book)|shall i (book|arrange|help you book)|want me to (book|arrange)/i.test(expertResult.text)) {
           convState.setState(patientPhone, 'booking_offered', {});
           console.log('[BOT_ENGINE] Expert offered booking — state set to booking_offered');
         }
         
+        // ─── MULTI-BUBBLE ASSEMBLY (v2.5.28) ──────────────────────
+        // Prose bubbles arrive in fixed order (empathy → info → booking).
+        // The deterministic action bubble goes LAST (Invariant 17: it
+        // replaces the booking expert's paraphrase, so booking prose is
+        // dropped when an action bubble exists). The interactive card
+        // rides on the final bubble ONLY — its body IS that bubble's text
+        // (the webhook sends no separate plain text for it).
+        if (isMultiBubble) {
+          let bubbles = expertResult.texts
+            .filter(t => !(actionBubble !== null && t.expert === 'BOOKING_EXPERT'))
+            .map(t => t.text);
+          if (actionBubble) bubbles.push(actionBubble);
+          // Invariant 20 per bubble: no bubble may claim a booking
+          // confirmation unless create_booking succeeded THIS turn.
+          if (!bookingWriteSucceeded) {
+            bubbles = bubbles.map(b => {
+              if (claimsBookingConfirmation(b)) {
+                console.error(`[BOT_ENGINE] FALSE CONFIRMATION in multi-bubble turn (no successful create_booking) — bubble replaced (Invariant 20)`);
+                maybeAlertStall(clientConfig, patientPhone, messageText,
+                  'multi-bubble turn claimed a booking confirmation with NO successful write — replaced (Invariant 20)', true);
+                return honestBookingHandoff(messageText);
+              }
+              return b;
+            });
+          }
+          if (bubbles.length === 0) {
+            bubbles = [await localizeDeterministicMessage(
+              "Sorry, I'm having trouble with that right now — please try again shortly.",
+              messageText)];
+          }
+          bubbles[bubbles.length - 1] = bubbles[bubbles.length - 1] + (resumePrompt || '');
+          const lastBubble = bubbles[bubbles.length - 1];
+          if (!resumePrompt && patientPhone && /would you like me to (arrange|book|help you book)|shall i (book|arrange|help you book)|want me to (book|arrange)/i.test(lastBubble)) {
+            convState.setState(patientPhone, 'booking_offered', {});
+            console.log('[BOT_ENGINE] Expert offered booking — state set to booking_offered');
+          }
+          const joinedText = bubbles.join('\n\n');
+          await logConversation(clientConfig.id, 'whatsapp', patientPhone, null,
+            messageText, joinedText, `experts:${expertsUsed.join(',')}`);
+          const multiFooter = withActionFooter(lastBubble, clientConfig, matchedIntents, resumePrompt);
+          return {
+            text: joinedText,
+            messages: bubbles.map(b => ({ text: b })),
+            whatsappInteractive: multiFooter || undefined,
+            function_called: expertResult.functionCall,
+            model: 'gpt-4o-mini-experts',
+            experts_used: expertsUsed,
+            total_cost: expertResult.totalCost,
+            latency_ms: Date.now() - startTime
+          };
+        }
+
         const expertFooter = withActionFooter(expertResult.text, clientConfig, matchedIntents, resumePrompt);
         return {
           text: expertResult.text + (resumePrompt || ''),
