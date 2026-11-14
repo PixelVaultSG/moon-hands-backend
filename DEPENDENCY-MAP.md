@@ -12,7 +12,7 @@ Seeded 2026-11-13 from the booking-flow audit (v2.5.5). Updated v2.5.6 (F1 keys)
 4. **Telegram legacy Markdown:** escape set is `/[_*`\[]/g` only — escaping MarkdownV2 chars (`.` `-` etc.) leaks literal backslashes into messages.
 5. **`ctx.message` is getter-only** (telegraf). Never assign it; pass refs explicitly to handlers.
 6. **`dropPendingUpdates: false`** — deploys must not discard in-flight taps. Replay safety depends on: onboarding resolveSubmission matches `status='pending'` only; `confirm_alt_` has the v2.4.6 marker guard.
-7. **Clinic sleep vocabulary:** asleep = `clients.status != 'active'`. There is no `'asleep'` value. Any new status value must be checked against every `= 'active'` filter (see Cron/jobs below).
+7. **Clinic sleep vocabulary:** asleep = `clients.status != 'active'`. ~~There is no `'asleep'` value~~ — F6 introduced a literal `status='asleep'` (Pixel Vault Aesthetics carries it); the `!= 'active'` comparison remains the contract. Any new status value must be checked against every `= 'active'` filter (see Cron/jobs below). **F4 closed (v2.5.15):** reminders.js (24h/1h/48h — `filterActiveClientIds`), trial-expiry-checker.js (all 3 queries), waitlist-reengagement.js (findRecentlyCancelledAppointments) all filter `status='active'`, fail-closed on filter error (a skipped cycle retries; a message from a sleeping clinic does not unsend).
 8. **Onboarding containment:** submissions quarantine in `onboarding_submissions` until approval creates NEW `clients`+`client_configs` rows. Nothing in onboarding may UPDATE an existing clinic.
 9. **MADS:** no medical advice, ever — refusal + ER redirect + doctor callback. Non-negotiable regardless of prompt changes.
 10. **Watchdog:** `startBot` retry-on-409/network is infinite by design; non-retryable = alert + `process.exit(1)`. Never reintroduce a give-up-and-run-deaf path.
@@ -73,9 +73,9 @@ Patient WhatsApp → 360dialog → /webhook/whatsapp?clinic_id&token → server/
 - **Breaks-if-you-change:** approve_/reject_/suggest_alt_ callback contracts; alt-accept idempotency (Invariant 6); cancel is deterministic (v2.4.4).
 
 ### jobs/ (scheduler: telegram/scheduler.js — sends only, NEVER polls)
-- reminders.js — **no clinic-status filter (F4)**; reads client_configs columns for toggles; sendWhatsAppMessage chokepoint (per-clinic key threaded v2.5.6).
+- reminders.js — clinic-status filter ✓ (F4 closed v2.5.15); reads client_configs columns for toggles; sendWhatsAppMessage chokepoint (per-clinic key threaded v2.5.6).
 - daily-booking-summary / weekly-roundup / weekly-optimization-loop / closing-summary — filter `status='active'` ✓.
-- trial-expiry-checker / waitlist-reengagement — **no status filter (F4)**.
+- trial-expiry-checker / waitlist-reengagement — status filter ✓ (F4 closed v2.5.15).
 - **Breaks-if-you-change:** Invariant 7 — every job's client query must respect sleep vocabulary.
 
 ### telegram/bot.js — admin surface

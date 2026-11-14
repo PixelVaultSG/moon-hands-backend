@@ -12,6 +12,25 @@
 const db = require('../supabase/client');
 const { resolveD360ApiKey } = require('../utils/d360-keys'); // v2.5.6 (F1): per-clinic outbound keys
 
+// v2.5.15 (F4): Invariant 7 — asleep clinics send NOTHING. client_configs
+// rows persist when a clinic sleeps, so toggle-based recipient lists still
+// include them; filter to status='active' before messaging their patients.
+// Fail-closed: if the filter query itself errors, skip the cycle — a missed
+// reminder retries next run; a message from a sleeping clinic does not unsend.
+async function filterActiveClientIds(clientIds) {
+  if (!clientIds || clientIds.length === 0) return [];
+  const { data: active, error } = await db.supabase
+    .from('clients')
+    .select('id')
+    .in('id', clientIds)
+    .eq('status', 'active');
+  if (error) {
+    console.error('[REMINDERS] active-clinic filter failed:', error.message);
+    return [];
+  }
+  return (active || []).map(c => c.id);
+}
+
 const REMINDER_MESSAGES = {
   '24h': (name, treatment, date, time) => 
     `Hi ${name}! This is a friendly reminder about your upcoming appointment:\n\n` +
@@ -178,7 +197,8 @@ async function send24hReminders() {
 
   if (!configs || configs.length === 0) return;
 
-  const clientIds = configs.map(c => c.client_id);
+  const clientIds = await filterActiveClientIds(configs.map(c => c.client_id)); // v2.5.15 (F4)
+  if (clientIds.length === 0) return;
 
   // Get appointments for tomorrow
   const { data: appointments } = await db.supabase
@@ -229,7 +249,8 @@ async function send1hReminders() {
 
   if (!configs || configs.length === 0) return;
 
-  const clientIds = configs.map(c => c.client_id);
+  const clientIds = await filterActiveClientIds(configs.map(c => c.client_id)); // v2.5.15 (F4)
+  if (clientIds.length === 0) return;
 
   // Get appointments ~1 hour from now (within 15 min window)
   const { data: appointments } = await db.supabase
@@ -283,7 +304,8 @@ async function send48hFollowups() {
 
   if (!configs || configs.length === 0) return;
 
-  const clientIds = configs.map(c => c.client_id);
+  const clientIds = await filterActiveClientIds(configs.map(c => c.client_id)); // v2.5.15 (F4)
+  if (clientIds.length === 0) return;
   const aftercareByClient = {};
   for (const c of configs) aftercareByClient[c.client_id] = c.aftercare_instructions;
 

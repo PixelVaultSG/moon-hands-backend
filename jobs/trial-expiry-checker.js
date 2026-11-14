@@ -29,10 +29,13 @@ async function checkTrialExpiries() {
   console.log(`[TRIAL_CHECK] Running at ${now.toISOString()}`);
   
   // ── Check 1: Trials expiring in 3 days ──
+  // v2.5.15 (F4): Invariant 7 — only ACTIVE clinics; already-paused/asleep
+  // clinics must not generate "collect payment" warnings or be re-paused.
   const { data: warning3d, error: err3d } = await supabase
     .from('clients')
     .select('id, name, slug, contact_name, contact_email, trial_expires_at, telegram_chat_id')
     .eq('is_trial', true)
+    .eq('status', 'active')
     .lte('trial_expires_at', in3Days.toISOString())
     .gt('trial_expires_at', in1Day.toISOString());
   
@@ -48,6 +51,7 @@ async function checkTrialExpiries() {
     .from('clients')
     .select('id, name, slug, contact_name, contact_email, trial_expires_at, telegram_chat_id')
     .eq('is_trial', true)
+    .eq('status', 'active')
     .lte('trial_expires_at', in1Day.toISOString())
     .gt('trial_expires_at', now.toISOString());
   
@@ -62,6 +66,7 @@ async function checkTrialExpiries() {
     .from('clients')
     .select('id, name, slug, contact_name, contact_email, trial_expires_at')
     .eq('is_trial', true)
+    .eq('status', 'active')
     .lte('trial_expires_at', now.toISOString());
   
   if (expired && expired.length > 0) {
