@@ -103,9 +103,28 @@ async function findRecentlyCancelledAppointments() {
     return [];
   }
 
+  // v2.5.15 (F4): Invariant 7 — never re-engage waitlist patients for a
+  // sleeping clinic; a cancelled slot there frees nothing sellable.
+  // Fail-closed: filter query error → skip the run (retries next cycle).
+  const clinicIds = [...new Set((data || []).map(a => a.client_id))];
+  let activeIds = new Set();
+  if (clinicIds.length > 0) {
+    const { data: activeRows, error: actErr } = await supabase
+      .from('clients')
+      .select('id')
+      .in('id', clinicIds)
+      .eq('status', 'active');
+    if (actErr) {
+      console.error('[WAITLIST] active-clinic filter failed:', actErr.message);
+      return [];
+    }
+    activeIds = new Set((activeRows || []).map(r => r.id));
+  }
+
   // Deduplicate: same client + date + time = one freed slot
   const seen = new Set();
   return (data || []).filter(a => {
+    if (!activeIds.has(a.client_id)) return false;
     const key = `${a.client_id}:${a.appointment_date}:${a.appointment_time}`;
     if (seen.has(key)) return false;
     seen.add(key);
