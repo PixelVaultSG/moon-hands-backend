@@ -161,6 +161,11 @@ async function handleApprove(bot, msg, args) {
       .eq('id', booking.id);
 
     if (error) {
+      // v2.5.26 (A-4): 23P01 = confirming would double-book the slot — the
+      // database itself refused. Say so plainly; never show raw SQL.
+      if (error.code === '23P01') {
+        return bot.sendMessage(chatId, `⚠️ Cannot approve: this slot overlaps another active booking — the database blocked it. Reject this booking or reschedule it first.`);
+      }
       return bot.sendMessage(chatId, `Error approving booking: ${error.message}`);
     }
 
@@ -361,6 +366,10 @@ async function handleApproveById(appointmentId, adminChatId) {
 
     if (updateErr) {
       console.error('[APPROVALS] Update failed:', updateErr.message, updateErr.details, updateErr.hint);
+      // v2.5.26 (A-4): 23P01 = confirming would double-book the slot.
+      if (updateErr.code === '23P01') {
+        return { success: false, error: 'Cannot approve: this slot overlaps another active booking — blocked by the database. Reject or reschedule instead.' };
+      }
       return { success: false, error: `Update failed: ${updateErr.message}` };
     }
     console.log(`[APPROVALS] Booking ${appointmentId} updated to confirmed`);
