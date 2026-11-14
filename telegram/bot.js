@@ -839,6 +839,7 @@ bot.command('addservice', adminCmd('/addservice', commands.handleAddService));
 bot.command('updateprice', adminCmd('/updateprice', commands.handleUpdatePrice));
 bot.command('removeservice', adminCmd('/removeservice', commands.handleRemoveService));
 bot.command('updatehours', adminCmd('/updatehours', commands.handleUpdateHours));
+bot.command('setbooking', adminCmd('/setbooking', commands.handleSetBooking));
 bot.command('addfaq', adminCmd('/addfaq', commands.handleAddFaq));
 bot.command('removefaq', adminCmd('/removefaq', commands.handleRemoveFaq));
 bot.command('updatevoice', adminCmd('/updatevoice', commands.handleUpdateVoice));
@@ -1035,6 +1036,34 @@ bot.command('req_voice', safeHandler('/req_voice', async (ctx) => {
   const field = args[0].toLowerCase();
   const value = args.slice(1).join(' ').replace(/^[“"]/, '').replace(/[”"]$/g, '');
   await submitChangeRequest(ctx, 'update_voice', { field, value });
+}));
+
+// v2.5.25 (A-1): clinic self-service for booking preferences — same
+// approve-then-apply flow as every other change request.
+bot.command('req_booking', safeHandler('/req_booking', async (ctx) => {
+  const args = ctx.message.text.split(/\s+/).slice(1);
+  if (args.length < 2) {
+    return ctx.reply(
+      '⚠️ Format: `/req_booking <setting> <value>`\n\n' +
+      'Settings:\n' +
+      '• `same_day` — on/off (allow same-day bookings)\n' +
+      '• `min_notice` — hours of notice needed (0-48)\n' +
+      '• `max_advance` — how far ahead patients can book, in days (1-90)\n\n' +
+      'Example: `/req_booking same_day off`',
+      { parse_mode: 'Markdown' }
+    );
+  }
+  const ALIAS = {
+    same_day: 'booking_allow_same_day',
+    min_notice: 'booking_min_notice_hours',
+    max_advance: 'booking_max_advance_days',
+  };
+  const field = ALIAS[args[0].toLowerCase()] || args[0].toLowerCase();
+  const value = args.slice(1).join(' ');
+  const { validateBookingSetting } = require('../supabase/client');
+  const check = validateBookingSetting(field, value);
+  if (!check.ok) return ctx.reply(`❌ ${check.error}`);
+  await submitChangeRequest(ctx, 'update_booking_settings', { field, value: check.value });
 }));
 
 // ─── TEST CLOSING SUMMARY ────────────────────────────────────────
@@ -1458,7 +1487,9 @@ bot.hears('📋 My Bookings', safeHandler('📋 My Bookings', async (ctx) => {
     .contains('telegram_chat_ids', [chatId]);
   const clinicIds = (linked || []).map(c => c.id);
 
-  const today = new Date().toISOString().split('T')[0];
+  // v2.5.25 (A-3): SG calendar day — UTC "today" listed yesterday's
+  // appointments between midnight and 8am SGT
+  const today = require('../utils/date-helpers').getTodaySG();
   let query = supabase
     .from('appointments')
     .select('*, clients(name)')
@@ -1830,7 +1861,7 @@ bot.catch((err, ctx) => {
 // taps/commands. Replay safety: onboarding resolveSubmission only matches
 // status='pending' (replayed taps degrade to "not found"), and confirm_alt_
 // has the v2.4.6 acceptance-marker guard.
-const BOT_VERSION = '2.5.24';
+const BOT_VERSION = '2.5.25';
 const RETRY_DELAY_MS = 3000;
 const RETRY_DELAY_CAP_MS = 30000;
 const STABLE_MS = 5 * 60 * 1000;

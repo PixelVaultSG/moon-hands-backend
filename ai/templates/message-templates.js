@@ -192,9 +192,11 @@ function getDeliveryStatus(messageId) {
   return deliveryTracking.get(messageId) || null;
 }
 
-function getDeliveryReport(clinicId, date = new Date().toISOString().split('T')[0]) {
+function getDeliveryReport(clinicId, date = require('../../utils/date-helpers').getTodaySG()) {
+  // v2.5.25 (A-3): sentAt is a UTC ISO string — bucket by its SG calendar
+  // day so "today's delivery report" means the SG day.
   const entries = Array.from(deliveryTracking.values())
-    .filter(r => r.sentAt.startsWith(date));
+    .filter(r => new Date(r.sentAt).toLocaleDateString('en-CA', { timeZone: 'Asia/Singapore' }) === date);
 
   const total = entries.length;
   const delivered = entries.filter(r => r.status === 'delivered' || r.status === 'read').length;

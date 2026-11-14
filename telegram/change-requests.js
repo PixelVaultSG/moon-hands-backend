@@ -23,6 +23,7 @@ const ACTION_LABELS = {
   update_hours: '🕐 Update Hours',
   add_faq: '❓ Add FAQ',
   update_voice: '🎤 Update Brand Voice',
+  update_booking_settings: '📅 Update Booking Settings',
 };
 
 function esc(text) {
@@ -41,6 +42,15 @@ function describePayload(action, p = {}) {
       return `Q: ${esc(p.question)}\nA: ${esc(p.answer)}`;
     case 'update_voice':
       return `Field: ${esc(p.field)}\nValue: ${esc(p.value)}`;
+    case 'update_booking_settings': {
+      const FRIENDLY = {
+        booking_allow_same_day: 'Same-day booking',
+        booking_min_notice_hours: 'Minimum notice (hours)',
+        booking_max_advance_days: 'Max advance booking (days)',
+      };
+      const v = p.value === true ? 'ON' : p.value === false ? 'OFF' : p.value;
+      return `Setting: ${esc(FRIENDLY[p.field] || p.field)}\nNew value: ${esc(v)}`;
+    }
     default:
       return esc(JSON.stringify(p));
   }
@@ -150,6 +160,9 @@ async function applyChangeRequest(id, approverId) {
       break;
     case 'update_voice':
       result = await db.updateBrandVoice(req.client_id, p.field, p.value);
+      break;
+    case 'update_booking_settings':
+      result = await db.updateBookingSettings(req.client_id, p.field, p.value);
       break;
     default:
       result = { success: false, error: `Unknown action: ${req.action}` };

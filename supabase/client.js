@@ -218,6 +218,49 @@ async function updateBrandVoice(clientId, field, value) {
   return { success: !error, error: error?.message };
 }
 
+// ─── BOOKING SETTINGS (v2.5.25, A-1) ─────────────────────────────
+// The clinic's own booking preferences: same-day allowed, min notice,
+// max advance. Both write paths land here — the clinic's /req_booking
+// (after Moon Hands approval) and admin /setbooking — so column and config
+// jsonb can never drift (Invariant 19: one atomic update, jsonb canonical).
+const BOOKING_SETTING_FIELDS = {
+  booking_allow_same_day:     { type: 'boolean' },
+  booking_min_notice_hours:   { type: 'int', min: 0, max: 48 },
+  booking_max_advance_days:   { type: 'int', min: 1, max: 90 },
+};
+
+function validateBookingSetting(field, value) {
+  const spec = BOOKING_SETTING_FIELDS[field];
+  if (!spec) return { ok: false, error: `Unknown setting "${field}". Valid: ${Object.keys(BOOKING_SETTING_FIELDS).join(', ')}` };
+  if (spec.type === 'boolean') {
+    if (value === true || value === false) return { ok: true, value };
+    const s = String(value).trim().toLowerCase();
+    if (['true', 'on', 'yes', '1'].includes(s)) return { ok: true, value: true };
+    if (['false', 'off', 'no', '0'].includes(s)) return { ok: true, value: false };
+    return { ok: false, error: `"${value}" isn't a yes/no value. Use on/off.` };
+  }
+  const n = parseInt(value, 10);
+  if (isNaN(n) || n < spec.min || n > spec.max) {
+    return { ok: false, error: `"${value}" isn't a valid number for ${field} (${spec.min}–${spec.max}).` };
+  }
+  return { ok: true, value: n };
+}
+
+async function updateBookingSettings(clientId, field, value) {
+  const check = validateBookingSetting(field, value);
+  if (!check.ok) return { success: false, error: check.error };
+
+  const config = await getClientConfig(clientId);
+  if (!config) return { success: false, error: 'Client not found' };
+
+  const { error } = await supabase
+    .from('client_configs')
+    .update({ [field]: check.value, config: syncConfigJsonb(config, { [field]: check.value }), updated_at: new Date().toISOString() })
+    .eq('client_id', clientId);
+
+  return { success: !error, error: error?.message, field, value: check.value };
+}
+
 // ─── CLIENT STATUS OPERATIONS ────────────────────────────────────
 
 async function pauseClient(clientId) {
@@ -256,7 +299,9 @@ async function getDailyUsage(date) {
  */
 async function incrementDailyUsage(clientId, { isAI = false, cost = 0 } = {}) {
   if (!clientId) return;
-  const today = new Date().toISOString().split('T')[0];
+  // v2.5.25 (A-3): bucket usage by SG calendar day, not UTC — the daily
+  // report, /usage and this writer must all agree on what "today" means.
+  const { todayStr: today } = require('../utils/date-helpers').sgNowParts();
   try {
     const { data: existing } = await supabase
       .from('daily_usage')
@@ -302,7 +347,9 @@ async function getMonthlyUsage(month) {
 // ─── APPOINTMENT OPERATIONS ──────────────────────────────────────
 
 async function getFutureAppointments(customerPhone, clientId) {
-  const today = new Date().toISOString().split('T')[0];
+  // v2.5.25 (A-3): SG calendar day — UTC "today" leaked same-day
+  // appointments into the "future" list between midnight and 8am SGT
+  const today = require('../utils/date-helpers').getTodaySG();
   const { data, error } = await supabase
     .from('appointments')
     .select('*')
@@ -390,6 +437,9 @@ module.exports = {
   addFaq,
   removeFaq,
   updateBrandVoice,
+  updateBookingSettings,
+  validateBookingSetting,
+  BOOKING_SETTING_FIELDS,
   pauseClient,
   resumeClient,
   getDailyUsage,

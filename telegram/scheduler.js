@@ -17,8 +17,8 @@ const ADMIN_CHAT_ID = process.env.TELEGRAM_ADMIN_CHAT_ID;
 
 async function sendDailyUsageReport() {
   try {
-    const now = new Date();
-    const today = now.toISOString().split('T')[0];
+    // v2.5.25 (A-3): SG calendar day, not UTC (daily_usage is keyed by SGT date)
+    const { todayStr: today } = require('../utils/date-helpers').sgNowParts();
     const month = today.substring(0, 7); // YYYY-MM
 
     const usageData = await db.getDailyUsage(today);
@@ -65,8 +65,8 @@ async function sendDailyUsageReport() {
 
 async function sendDailyHealthReport() {
   try {
-    const now = new Date();
-    const today = now.toISOString().split('T')[0];
+    // v2.5.25 (A-3): SG calendar day, not UTC
+    const { todayStr: today } = require('../utils/date-helpers').sgNowParts();
 
     const healthChecks = await db.getRecentHealthChecks(24);
     const clients = await db.getAllClients();
@@ -136,8 +136,8 @@ async function runSecurityCheck() {
 
 async function sendDailySecurityReport() {
   try {
-    const now = new Date();
-    const today = now.toISOString().split('T')[0];
+    // v2.5.25 (A-3): SG calendar day, not UTC
+    const { todayStr: today } = require('../utils/date-helpers').sgNowParts();
     
     // Get today's security events
     const { data: todaysEvents } = await db.supabase
