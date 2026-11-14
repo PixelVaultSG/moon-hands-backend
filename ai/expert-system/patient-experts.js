@@ -509,6 +509,37 @@ async function executeExpert(expertKey, message, clinicConfig, conversationHisto
 
 // ─── MULTI-EXPERT COMPOSITION ─────────────────────────────────────
 
+// v2.5.27 (B-1): a multi-expert turn used to keep only the FIRST function
+// call and silently drop the rest — then the merge LLM stitched a reply
+// from EMPTY expert texts (function-call turns return null prose), which
+// let it invent unverified answers for the dropped intents. Now at most one
+// call survives, chosen by a deterministic priority: real booking actions
+// before lookups.
+const CALL_PRIORITY = [
+  'create_booking',
+  'check_availability',
+  'reschedule_booking',
+  'update_booking',
+  'cancel_booking',
+  'check_existing_booking',
+  'add_to_waitlist',
+  'get_pricing',
+  'get_treatment_info',
+];
+
+function pickSurvivingFunctionCall(callResults) {
+  if (!callResults || callResults.length === 0) return null;
+  const rank = (name) => {
+    const i = CALL_PRIORITY.indexOf(name);
+    return i === -1 ? 99 : i;
+  };
+  const sorted = [...callResults].sort((a, b) => rank(a.functionCall.name) - rank(b.functionCall.name));
+  if (sorted.length > 1) {
+    console.log(`[EXPERT] B-1: ${sorted.length} function calls in one turn — executing ${sorted[0].functionCall.name}, dropping: ${sorted.slice(1).map(r => r.functionCall.name).join(', ')}`);
+  }
+  return sorted[0].functionCall;
+}
+
 async function executeExperts(expertKeys, message, clinicConfig, conversationHistory, patientPhone) {
   // Run in parallel for speed
   const results = await Promise.all(
@@ -532,9 +563,27 @@ async function executeExperts(expertKeys, message, clinicConfig, conversationHis
     };
   }
   
+  // v2.5.27 (B-1): at most ONE function call survives (deterministic
+  // priority), and only experts with real prose join the merge — a
+  // function-call turn returns empty text and has nothing to merge.
+  const survivingCall = pickSurvivingFunctionCall(validResults.filter(r => r.functionCall));
+  const proseResults = validResults.filter(r => (r.text || '').trim().length > 0);
+  const baseCost = validResults.reduce((sum, r) => sum + r.cost, 0);
+  const expertsUsed = validResults.map(r => r.expert);
+
+  // No prose anywhere → skip the merge LLM entirely; the executed call's
+  // deterministic result IS the reply (Invariant 17). One prose result →
+  // no merge needed either (also saves an LLM call).
+  if (proseResults.length === 0) {
+    return { text: '', expertsUsed, totalCost: baseCost, functionCall: survivingCall };
+  }
+  if (proseResults.length === 1) {
+    return { text: proseResults[0].text, expertsUsed, totalCost: baseCost, functionCall: survivingCall };
+  }
+
   // Multi-expert: compose naturally via a composition prompt
-  const individualResponses = validResults.map(r => `[${r.expertName}]: ${r.text}`).join('\n\n');
-  
+  const individualResponses = proseResults.map(r => `[${r.expertName}]: ${r.text}`).join('\n\n');
+
   // Use the clinic's tone to merge responses naturally
   const p = getClinicPersonality(clinicConfig);
   const mergePrompt = `You are ${p.agentName} from ${p.clinicName}. Merge these expert responses into ONE natural, flowing message. Remove any repetition. Ensure transitions are smooth. Keep the ${p.tone} tone throughout.
@@ -561,12 +610,12 @@ RULES:
   
   const mergedText = mergeCompletion.choices[0].message.content;
   const mergeCost = estimateCost(mergeCompletion.usage);
-  
+
   return {
     text: mergedText,
-    expertsUsed: validResults.map(r => r.expert),
-    totalCost: validResults.reduce((sum, r) => sum + r.cost, 0) + mergeCost,
-    functionCall: validResults.find(r => r.functionCall)?.functionCall || null,
+    expertsUsed,
+    totalCost: baseCost + mergeCost,
+    functionCall: survivingCall,
   };
 }
 
@@ -604,4 +653,6 @@ module.exports = {
   isAvailabilityQuestion,
   MULTILINGUAL_BOOKING,
   MULTILINGUAL_AVAILABILITY,
+  pickSurvivingFunctionCall,
+  CALL_PRIORITY,
 };
