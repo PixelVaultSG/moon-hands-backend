@@ -150,8 +150,11 @@ function claimsBookingConfirmation(text) {
   return (
     // English: "your booking is confirmed", "you're all booked", "I've locked in your appointment"
     /(?:your (?:booking|appointment|appt)[^.!?]{0,40}(?:is|has been|'s) (?:confirmed|booked|secured|reserved|locked in|scheduled))|(?:booking (?:is )?confirmed)|(?:appointment (?:is )?confirmed)|(?:you'?re (?:all )?(?:booked|confirmed|locked in|scheduled))|(?:i'?ve (?:booked|confirmed|secured|locked in|reserved) your)/i.test(t) ||
-    // Malay: "tempahan anda telah disahkan", "sudah ditempah"
-    /(?:tempahan|temujanji)[^.!?]{0,40}(?:disahkan|ditempah|dikunci|berjaya)|(?:disahkan|ditempah)[^.!?]{0,40}(?:tempahan|temujanji)|anda sudah (?:ditempah|disahkan)/i.test(t) ||
+    // Malay: "tempahan anda telah disahkan", "sudah ditempah",
+    // "Saya telah mengesahkan janji temu anda" (v2.5.22 — a LIVE model
+    // phrasing that slipped through: "mengesahkan" ≠ "disahkan", and
+    // "janji temu" is two words)
+    /(?:tempahan|temujanji|janji ?temu)[^.!?]{0,40}(?:disahkan|ditempah|dikunci|berjaya)|(?:disahkan|ditempah|mengesahkan|mengunci)[^.!?]{0,40}(?:tempahan|temujanji|janji ?temu)|anda sudah (?:ditempah|disahkan)|(?:telah|sudah) mengesahkan/i.test(t) ||
     // Chinese: 已确认 / 预约成功 / 订好了 / 约好了
     /(?:已确认|确认成功|预约成功|预订成功|已预订|已预约|订好了|约好了|帮你订了|为您预约了)/.test(t) ||
     // Tamil: உறுதி செய்யப்பட்டது / முன்பதிவு செய்யப்பட்டது
