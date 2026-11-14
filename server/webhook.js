@@ -1640,7 +1640,7 @@ async function handleTrace(req, res) {
 
     const payload = {
       status: 'ok',
-      version: '2.5.18',
+      version: '2.5.19',
       total_traces: traces.length,
       by_phone: byPhone,
       recent: traces.slice(0, 50),

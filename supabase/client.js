@@ -65,6 +65,36 @@ async function getClientConfig(clientId) {
   return data;
 }
 
+// ─── CONFIG SYNC (v2.5.19, F8) ───────────────────────────────────
+// The bot reads the config JSONB first (getConfig: nested wins); the
+// top-level columns are the /config DISPLAY mirror. Before v2.5.19 every
+// mutation helper below wrote ONLY the column — the bot kept answering with
+// stale data while /config showed the clinic their change "worked". Now
+// every write updates column + jsonb in ONE atomic .update(). Both clinic
+// self-service commands (telegram/commands/index.js) and Moon Hands admin
+// change-requests (telegram/change-requests.js) flow through these helpers,
+// so both paths stay in sync. Every write stays scoped
+// .eq('client_id', clientId) — cross-clinic containment is non-negotiable.
+
+function buildServiceCategories(services) {
+  const cats = new Map();
+  for (const s of services || []) {
+    const cat = s.category || 'Other';
+    if (!cats.has(cat)) cats.set(cat, { id: cat, name: cat, count: 0 });
+    cats.get(cat).count++;
+  }
+  return Array.from(cats.values());
+}
+
+// Merge `patch` (field → value) into the row's config jsonb; returns the
+// new jsonb. services patches also refresh derived service_categories.
+function syncConfigJsonb(row, patch) {
+  const cfg = { ...(row.config || {}) };
+  for (const [k, v] of Object.entries(patch)) cfg[k] = v;
+  if (patch.services) cfg.service_categories = buildServiceCategories(patch.services);
+  return cfg;
+}
+
 // ─── SERVICE OPERATIONS ───────────────────────────────────────────
 
 async function addService(clientId, service) {
@@ -81,7 +111,7 @@ async function addService(clientId, service) {
     : [...existing, service];
   const { error } = await supabase
     .from('client_configs')
-    .update({ services, updated_at: new Date().toISOString() })
+    .update({ services, config: syncConfigJsonb(config, { services }), updated_at: new Date().toISOString() })
     .eq('client_id', clientId);
 
   return { success: !error, error: error?.message };
@@ -99,7 +129,7 @@ async function updateServicePrice(clientId, serviceName, newPrice) {
 
   const { error } = await supabase
     .from('client_configs')
-    .update({ services, updated_at: new Date().toISOString() })
+    .update({ services, config: syncConfigJsonb(config, { services }), updated_at: new Date().toISOString() })
     .eq('client_id', clientId);
 
   return { success: !error, error: error?.message };
@@ -115,7 +145,7 @@ async function removeService(clientId, serviceName) {
 
   const { error } = await supabase
     .from('client_configs')
-    .update({ services, updated_at: new Date().toISOString() })
+    .update({ services, config: syncConfigJsonb(config, { services }), updated_at: new Date().toISOString() })
     .eq('client_id', clientId);
 
   return { success: !error, error: error?.message };
@@ -135,7 +165,7 @@ async function updateOperatingHours(clientId, day, openTime, closeTime) {
 
   const { error } = await supabase
     .from('client_configs')
-    .update({ operating_hours: hours, updated_at: new Date().toISOString() })
+    .update({ operating_hours: hours, config: syncConfigJsonb(config, { operating_hours: hours }), updated_at: new Date().toISOString() })
     .eq('client_id', clientId);
 
   return { success: !error, error: error?.message };
@@ -150,7 +180,7 @@ async function addFaq(clientId, question, answer) {
   const faqs = [...(config.faqs || []), { question, answer }];
   const { error } = await supabase
     .from('client_configs')
-    .update({ faqs, updated_at: new Date().toISOString() })
+    .update({ faqs, config: syncConfigJsonb(config, { faqs }), updated_at: new Date().toISOString() })
     .eq('client_id', clientId);
 
   return { success: !error, error: error?.message };
@@ -163,7 +193,7 @@ async function removeFaq(clientId, index) {
   const faqs = (config.faqs || []).filter((_, i) => i !== index);
   const { error } = await supabase
     .from('client_configs')
-    .update({ faqs, updated_at: new Date().toISOString() })
+    .update({ faqs, config: syncConfigJsonb(config, { faqs }), updated_at: new Date().toISOString() })
     .eq('client_id', clientId);
 
   return { success: !error, error: error?.message };
@@ -177,9 +207,12 @@ async function updateBrandVoice(clientId, field, value) {
     return { success: false, error: `Invalid field. Valid: ${validFields.join(', ')}` };
   }
 
+  const config = await getClientConfig(clientId);
+  if (!config) return { success: false, error: 'Client not found' };
+
   const { error } = await supabase
     .from('client_configs')
-    .update({ [field]: value, updated_at: new Date().toISOString() })
+    .update({ [field]: value, config: syncConfigJsonb(config, { [field]: value }), updated_at: new Date().toISOString() })
     .eq('client_id', clientId);
 
   return { success: !error, error: error?.message };
