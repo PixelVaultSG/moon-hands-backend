@@ -35,6 +35,38 @@ function minutesToDisplay(mins) {
   return m === 0 ? `${h}${ampm}` : `${h}:${String(m).padStart(2, '0')}${ampm}`;
 }
 
+// ─── v2.5.16 (F5): strict format gate at the LLM function-call boundary ──
+// Model-generated args used to reach the DB raw — "next Friday" as a date or
+// "25:99" as a time would land in appointments and poison reminders, calendar
+// sync, and slot math. Smart-router values are already well-formed; this gate
+// only bites malformed (i.e. model-hallucinated) input.
+function isValidDateStr(d) {
+  const s = String(d || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  const [y, m, dd] = s.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, dd));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === dd;
+}
+
+function isValidTimeStr(t) {
+  return /^([01]\d|2[0-3]):[0-5]\d$/.test(String(t || ''));
+}
+
+function normalizeTo24h(t) {
+  const s = String(t || '').trim().toLowerCase();
+  const ampm = s.match(/^(\d{1,2})(?::(\d{2}))?\s*([ap])\.?m\.?$/);
+  if (ampm) {
+    let h = parseInt(ampm[1]);
+    const min = ampm[2] || '00';
+    if (ampm[3] === 'p' && h !== 12) h += 12;
+    if (ampm[3] === 'a' && h === 12) h = 0;
+    return `${String(h).padStart(2, '0')}:${min}`;
+  }
+  const hms = s.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/); // strips seconds
+  if (hms) return `${hms[1].padStart(2, '0')}:${hms[2]}`;
+  return String(t || '').trim(); // unrecognized — the validator will reject it
+}
+
 function buildPreferredTimeAnswer(preferredTime, slots, dayName, date) {
   const pt = String(preferredTime || '').trim().toLowerCase();
   if (!pt) return null;
@@ -274,12 +306,18 @@ async function createBooking({ client_id, customer_name, customer_phone, service
   const phone = customer_phone || patient_phone;
   const service = service_name || treatment;
   const apptDate = appointment_date || date;
-  const apptTime = appointment_time || time;
-  
+  let apptTime = appointment_time || time;
+
   try {
     // Validation
     if (!name || !phone || !service || !apptDate || !apptTime) {
       return { success: false, error: 'Missing required fields: name, phone, service, date, time' };
+    }
+
+    // v2.5.16 (F5): strict format gate — never write an unparseable date/time
+    apptTime = normalizeTo24h(apptTime);
+    if (!isValidDateStr(apptDate) || !isValidTimeStr(apptTime)) {
+      return { success: false, error: `I couldn't read that date/time clearly ("${apptDate} ${apptTime}"). Could you give a real date and time, e.g. 21 November 2026 at 2pm?` };
     }
     
     // Get clinic config
@@ -451,7 +489,11 @@ async function updateBooking({ client_id, appointment_id, date, time, service, d
     }
 
     const newDate = date || existing.appointment_date;
-    const newTime = time || existing.appointment_time;
+    // v2.5.16 (F5): normalize + strict format gate on schedule edits too
+    const newTime = normalizeTo24h(time || existing.appointment_time);
+    if (!isValidDateStr(newDate) || !isValidTimeStr(newTime)) {
+      return { success: false, error: `I couldn't read that new date/time clearly ("${newDate} ${newTime}"). Could you give a real date and time?` };
+    }
     const newService = service || existing.service;
     const newDuration = parseInt(duration) || existing.duration || clinic.appointment_duration_minutes || 60;
 
@@ -667,7 +709,11 @@ async function rescheduleBooking({ client_id, customer_phone, new_date, new_time
     // Normalize LLM time formats ("13:00:00" → "13:00") before slot matching —
     // strict string equality against HH:MM slots was a silent-failure trap.
     const { normalizeTimeStr } = require('../../utils/date-helpers');
-    const normalizedTime = normalizeTimeStr(new_time);
+    // v2.5.16 (F5): normalize (incl. am/pm + seconds) + strict format gate
+    const normalizedTime = normalizeTo24h(normalizeTimeStr(new_time));
+    if (!isValidDateStr(new_date) || !isValidTimeStr(normalizedTime)) {
+      return { success: false, error: `I couldn't read that new date/time clearly ("${new_date} ${new_time}"). Could you give a real date and time?` };
+    }
     
     // Find existing appointment
     const { data: appointments, error: findErr } = await supabase
