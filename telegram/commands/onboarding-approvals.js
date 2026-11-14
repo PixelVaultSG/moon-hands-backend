@@ -377,7 +377,7 @@ async function handleApproveClinic(ctx, refArg) {
     } else {
       try {
         const { sendWhatsAppMessage } = require('../../jobs/reminders');
-        const welcomeMsg = `Welcome to Moon Hands! 🌙\n\nYour clinic "${submission.clinic_name}" has been approved and is now live.\n\nYour AI assistant ${config.agent_name} is ready to handle patient inquiries 24/7.\n\nNeed help? Contact us at pixelvaultsg@gmail.com`;
+        const welcomeMsg = `Welcome to Moon Hands! 🌙\n\nYour clinic "${submission.clinic_name}" has been approved.\n\nYour AI assistant ${config.agent_name} is being set up — we'll confirm as soon as it's ready to take patient inquiries.\n\nNeed help? Contact us at pixelvaultsg@gmail.com`;
         const sent = await sendWhatsAppMessage(welcomeTo, welcomeMsg);
         welcomeStatus = sent ? 'sent ✅' : 'FAILED — send manually ⚠️';
       } catch (waErr) {
