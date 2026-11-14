@@ -159,18 +159,56 @@ function claimsBookingConfirmation(text) {
   );
 }
 
+// Detect the patient's language from THEIR message (en/zh/ms/ta — the four
+// selectable clinic languages). Chinese/Tamil are script-detected; Malay is
+// Latin-script so it needs vocabulary. Conservative: ambiguous → 'en'.
+function detectPatientLanguage(text) {
+  const t = String(text || '');
+  if (/[\u4e00-\u9fff]/.test(t)) return 'zh';
+  if (/[\u0b80-\u0bff]/.test(t)) return 'ta';
+  if (/\b(saya|nak|anda|boleh|tempah|tempahan|temujanji|konsultasi|esok|pukul|hari|tidak|adakah|berapa)\b/i.test(t)) return 'ms';
+  return 'en';
+}
+
+// v2.5.21: deterministic function results (fnResult.message — closed-day
+// answers, slot lists, booking confirmations) are authored in English. A
+// patient writing zh/ms/ta deserves the SAME message in their language with
+// every fact intact — the translate pass is instructed to change nothing
+// but the language, and any failure falls back to the English original.
+async function localizeDeterministicMessage(message, patientText) {
+  const lang = detectPatientLanguage(patientText);
+  if (lang === 'en' || !String(message || '').trim()) return message;
+  const langName = { zh: 'Simplified Chinese', ms: 'Malay (Bahasa Melayu)', ta: 'Tamil' }[lang];
+  try {
+    const tr = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        { role: 'system', content: `Translate this clinic WhatsApp message into ${langName}. HARD RULES: translate ONLY — every date, time, price, name, service, and fact stays EXACTLY as given; no additions, removals, or commentary. Keep WhatsApp formatting (*, •, emojis) and line structure.` },
+        { role: 'user', content: message }
+      ],
+      temperature: 0,
+      max_tokens: 500
+    });
+    const out = tr.choices?.[0]?.message?.content?.trim();
+    return out || message;
+  } catch (e) {
+    console.error('[BOT_ENGINE] localization failed, sending English original:', e.message);
+    return message;
+  }
+}
+
 // Detect the patient's language from THEIR message and return an honest
 // "we'll confirm shortly" in that language. The admin stall alert that
 // accompanies the replacement is what makes "our team will confirm" true.
 function honestBookingHandoff(patientMessage) {
-  const m = String(patientMessage || '');
-  if (/[\u4e00-\u9fff]/.test(m)) {
+  const lang = detectPatientLanguage(patientMessage);
+  if (lang === 'zh') {
     return '谢谢您的咨询！为了确保预约准确无误，我已通知我们的团队，他们会尽快在这里与您确认预约详情。抱歉给您带来不便。';
   }
-  if (/[\u0b80-\u0bff]/.test(m)) {
+  if (lang === 'ta') {
     return 'உங்கள் விசாரணைக்கு நன்றி! சரியான முன்பதிவை உறுதி செய்ய, எங்கள் குழுவிடம் தெரிவித்துள்ளேன் — விரைவில் இங்கே உங்கள் நேரத்தை உறுதிப்படுத்துவார்கள்.';
   }
-  if (/\b(saya|nak|tempah|tempahan|temujanji|boleh|konsultasi|esok|pukul|hari)\b/i.test(m)) {
+  if (lang === 'ms') {
     return 'Terima kasih! Untuk memastikan tempahan anda tepat, saya telah maklumkan pasukan kami — mereka akan mengesahkan janji temu anda di sini tidak lama lagi.';
   }
   return "Thank you! To make sure this is booked correctly, I've flagged our team — they'll confirm your appointment details here shortly.";
@@ -1362,11 +1400,17 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
         expertKeys, messageText, clientConfig, conversationHistory, patientPhone
       );
       
-      if (expertResult.text) {
+      // v2.5.21: gate on functionCall too — a FORCED function call returns
+      // null prose, and the old text-only gate silently skipped the whole
+      // expert block (function execution, deterministic replacement,
+      // Invariant 20) and fell through to the generalist, which re-ran the
+      // same function at double cost and paraphrased freely (it even asked
+      // a WhatsApp patient for their phone number, live Malay test).
+      if (expertResult.text || expertResult.functionCall) {
         // Log the expert response
         const expertsUsed = expertResult.expertsUsed || [];
         await logConversation(clientConfig.id, 'whatsapp', patientPhone, null,
-          messageText, expertResult.text, `experts:${expertsUsed.join(',')}`);
+          messageText, expertResult.text || '[forced function call]', `experts:${expertsUsed.join(',')}`);
         
         console.log(`[BOT_ENGINE] Experts: [${expertsUsed.join(', ')}] — cost: $${expertResult.totalCost.toFixed(4)}`);
 
@@ -1406,7 +1450,11 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
             fnResult = { success: false, error: err.message };
           }
           if (fnResult && !fnResult.error && fnResult.success !== false && (fnResult.message || fnResult.success)) {
-            expertResult.text = fnResult.message || expertResult.text;
+            // v2.5.21: deterministic messages are English — localize them for
+            // zh/ms/ta patients with facts preserved (falls back to English).
+            expertResult.text = fnResult.message
+              ? await localizeDeterministicMessage(fnResult.message, messageText)
+              : (expertResult.text || "Sorry, I'm having trouble with that right now — please try again shortly.");
             expertFunctionHandled = true;
             if (fnName === 'create_booking') bookingWriteSucceeded = true;
           } else {
@@ -1414,8 +1462,11 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
               `expert function "${fnName}" failed: ${(fnResult && fnResult.error) || 'unknown error'}`, true);
             // v2.5.13 (P-3): after a FORCED function call the model's prose
             // is empty — never send the patient a blank bubble.
+            // v2.5.21: localized — non-English patients get it in their language.
             if (!expertResult.text || !expertResult.text.trim()) {
-              expertResult.text = "Sorry, I'm having trouble checking our calendar right now. Please try again in a moment, or tell me another day that works for you.";
+              expertResult.text = await localizeDeterministicMessage(
+                "Sorry, I'm having trouble checking our calendar right now. Please try again in a moment, or tell me another day that works for you.",
+                messageText);
             }
           }
         } else {
@@ -1556,7 +1607,14 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
       `FORMAT (WhatsApp): *bold* for treatment names and prices, • for bullet lists, short paragraphs, plain text only — no markdown headers, no [links].\n\n` +
       `BOOKING RULES:\n` +
       `- ALL bookings start as PENDING — clinic must approve. Say "request received, clinic will confirm soon"\n` +
-      `- Confirm name and phone before creating any booking\n` +
+      // v2.5.21: this line used to say "Confirm name and phone" — a direct
+      // contradiction of the NEVER-ask-phone hard rule above, and the model
+      // followed the weaker one (asked a WhatsApp patient for their number
+      // mid-booking, live Malay test 2026-11-14).
+      `- Confirm the patient's NAME before creating any booking — NEVER ask for their phone number; it is auto-filled from the sender.\n` +
+      // v2.5.21 (P-4): same language rule as the booking expert — the
+      // generalist is the fallback for every non-English conversation.
+      `- ALWAYS reply in the SAME LANGUAGE the patient writes in (English, Chinese, Malay, or Tamil).\n` +
       `- For cancellations: get explicit "CANCEL MY BOOKING" confirmation before proceeding\n` +
       `- Today is ${getNowSG().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })} (Singapore time, GMT+8). Current day: ${['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][getNowSG().getDay()]}.\n` +
       // v2.5.11 (P-1): same weekday-truth table as the experts path — a bare
@@ -1760,4 +1818,7 @@ module.exports = {
   // Exported for testing (v2.5.20 Invariant 20 — confirmation honesty)
   claimsBookingConfirmation,
   honestBookingHandoff,
+  // Exported for testing (v2.5.21 — language detection + localization)
+  detectPatientLanguage,
+  localizeDeterministicMessage,
 };
