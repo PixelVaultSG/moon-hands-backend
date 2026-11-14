@@ -57,7 +57,7 @@ Patient WhatsApp → 360dialog → /webhook/whatsapp?clinic_id&token → server/
 
 ### telegram/commands/onboarding-approvals.js — approval forge
 - **Reads:** onboarding_submissions, clients (slug collision). **Writes:** clients, client_configs (jsonb + columns), submission status.
-- **Breaks-if-you-change:** positional→named hours transform; dual-schema services normalizer (dur/desc/cat + duration/description/category + unit); FAQ blank-row filter; jsonb+column sync (v2.5.3); NO WhatsApp on reject (v2.5.5); welcome WA on approve only; handlers take `refArg` (Invariant 5).
+- **Breaks-if-you-change:** positional→named hours transform; dual-schema services normalizer (dur/desc/cat + duration/description/category + unit); FAQ blank-row filter; jsonb+column sync (v2.5.3); NO WhatsApp on reject (v2.5.5); welcome WA on approve only; handlers take `refArg` (Invariant 5). **F7 closed (v2.5.17):** the approval card must report REAL outcomes — welcome WA is attempted BEFORE the card (recipient-guarded, outcome `sent ✅ / FAILED ⚠️ / skipped — no number`) and a config-insert failure appears as "CONFIG INSERT FAILED — bot REFUSES all patients" (was: console-only while the card claimed LIVE). Remaining open (Ash decision): the welcome copy still claims "ready 24/7" before calendar/D360 wiring exists.
 - **Pinned-by:** T67–T72.
 
 ### ai/bot-engine.js — brain stem
