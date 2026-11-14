@@ -854,7 +854,7 @@ async function startBookingFlow(message, clinicConfig, patientPhone, conversatio
             source: 'hardcoded',
             cost_saved: 1,
             latency_ms: Date.now() - startTime,
-            whatsappInteractive: getTimeSlotButtons(avail.slots, avail.operatingHours, bodyTxt)
+            whatsappInteractive: getTimeSlotButtons(avail.slots, avail.operatingHours, bodyTxt, fields.date)
           };
         }
         // v2.4.0: day has no room (closed / holiday / blocked / capped) —
@@ -1178,7 +1178,7 @@ async function rePromptSuspendedState(clinicConfig, patientPhone, suspended, sta
         const avail = await getAvailableSlots(clinicConfig.id, d.date, treatmentNames, clinicConfig);
         if (avail.available && avail.slots.length > 0) {
           const wlBody = `${prefix}Here are available times on ${d.date}:${windowsLineFor(avail.slots, treatmentNames, clinicConfig.config?.services || clinicConfig.services) || `\n🕐 ${avail.operatingHours}`}`;
-          return { ...base, text: wlBody, whatsappInteractive: getTimeSlotButtons(avail.slots, avail.operatingHours, wlBody) };
+          return { ...base, text: wlBody, whatsappInteractive: getTimeSlotButtons(avail.slots, avail.operatingHours, wlBody, d.date) };
         }
         // Slots disappeared meanwhile — step back to date pick
         setState(patientPhone, BOOKING_STATES.AWAITING_DATE, { date: undefined, time: undefined });
@@ -1661,7 +1661,7 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
                 source: 'hardcoded',
                 cost_saved: 1,
                 latency_ms: Date.now() - startTime,
-                whatsappInteractive: getTimeSlotButtons(avail.slots, avail.operatingHours, bodyTxt)
+                whatsappInteractive: getTimeSlotButtons(avail.slots, avail.operatingHours, bodyTxt, offerData.date)
               };
             }
           } catch (e) {
@@ -1742,7 +1742,7 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
               source: 'hardcoded',
               cost_saved: 1,
               latency_ms: Date.now() - startTime,
-              whatsappInteractive: getTimeSlotButtons(sameDay.slots, sameDay.operatingHours, bodyText)
+              whatsappInteractive: getTimeSlotButtons(sameDay.slots, sameDay.operatingHours, bodyText, data.date)
             };
           }
           
@@ -1816,7 +1816,7 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
             source: 'hardcoded',
             cost_saved: 1,
             latency_ms: Date.now() - startTime,
-            whatsappInteractive: getTimeSlotButtons(avail.slots, avail.operatingHours, bodyText)
+            whatsappInteractive: getTimeSlotButtons(avail.slots, avail.operatingHours, bodyText, data.date)
           };
         }
         
@@ -1862,6 +1862,37 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
       return { text: `${data.date} works. What time would you prefer?`, source: 'hardcoded', cost_saved: 1, latency_ms: Date.now() - startTime };
     
     case BOOKING_STATES.AWAITING_TIME:
+      // v2.5.30 (stale-tap supersede): a bare re-statement of the CURRENT date
+      // — e.g. a superseded stale time-button tap (bot-engine re-anchors those
+      // to the flow date), or the patient simply typing the same day again —
+      // refreshes that day's slot list instead of the unhelpful "didn't catch
+      // the time" re-ask. The fresh list's buttons carry fresh dated IDs.
+      if (!data.time && fields.date && fields.date === currentState.data?.date) {
+        try {
+          const { getAvailableSlots: _getSlotsRefresh } = require('./availability-engine');
+          const refreshTx = currentState.data?.treatments || (currentState.data?.treatment ? [currentState.data.treatment] : []);
+          const refreshAvail = await _getSlotsRefresh(clinicConfig.id, fields.date, refreshTx, clinicConfig);
+          if (refreshAvail.available && refreshAvail.slots.length > 0) {
+            const { getTimeSlotButtons: _refreshBtns } = require('./whatsapp-interactive');
+            const { formatDateStrDisplay: _fmtRefresh } = require('../utils/date-helpers');
+            const refreshBody = `Here are the current available times on ${_fmtRefresh(fields.date)}:${windowsLineFor(refreshAvail.slots, refreshTx, clinicConfig.config?.services || clinicConfig.services) || `\n🕐 ${refreshAvail.operatingHours}`}`;
+            return {
+              text: refreshBody,
+              source: 'hardcoded',
+              intents: ['time_suggestion'],
+              cost_saved: 1,
+              latency_ms: Date.now() - startTime,
+              whatsappInteractive: _refreshBtns(refreshAvail.slots, refreshAvail.operatingHours, refreshBody, fields.date)
+            };
+          }
+          // The day filled up since the list was sent — honest refusal.
+          console.log(`[AWAITING_TIME] same-date refresh found no slots — ${fields.date}: ${refreshAvail.reason || 'none'}`);
+          return await slotRefusalResponse(clinicConfig, patientPhone, fields.date, null, refreshTx,
+            { reason: refreshAvail.reason || `${fields.date} is fully booked` }, startTime);
+        } catch (rfErr) {
+          console.error(`[AWAITING_TIME] same-date refresh error (falling through to re-ask): ${rfErr.message}`);
+        }
+      }
       // v2.5.10 (R-2): a mid-flow DATE change ("actually, Wednesday 18 November")
       // must REPLACE the stored date — the old early-return dropped fresh fields
       // and the next "11am" silently booked the stale day. Persist first, then
@@ -1934,7 +1965,7 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
               intents: ['time_suggestion'],
               cost_saved: 1,
               latency_ms: Date.now() - startTime,
-              whatsappInteractive: getTimeSlotButtons(sameDay.slots, sameDay.operatingHours, bodyText)
+              whatsappInteractive: getTimeSlotButtons(sameDay.slots, sameDay.operatingHours, bodyText, date)
             };
           }
 
@@ -2297,7 +2328,7 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
             intents: ['time_change'],
             cost_saved: 1,
             latency_ms: Date.now() - startTime,
-            whatsappInteractive: getTimeSlotButtons(slots, label, editBody)
+            whatsappInteractive: getTimeSlotButtons(slots, label, editBody, date)
           };
         } catch (err) {
           console.error(`[EDITING_BOOKING] getAvailableSlots error: ${err.message}`);
@@ -2515,7 +2546,7 @@ async function startConsultQuickBook(clinicConfig, patientPhone, conversationHis
         const qcBody = `Great — ${svc.name} it is. Here are available times on ${merged.date}:${windowsLineFor(avail.slots, treatmentNames, clinicConfig.config?.services || clinicConfig.services) || `\n🕐 ${avail.operatingHours}`}`;
         return { ...base,
           text: qcBody,
-          whatsappInteractive: getTimeSlotButtons(avail.slots, avail.operatingHours, qcBody) };
+          whatsappInteractive: getTimeSlotButtons(avail.slots, avail.operatingHours, qcBody, merged.date) };
       }
     } catch (e) {
       console.error(`[QUICK_CONSULT] getAvailableSlots error: ${e.message}`);
@@ -2699,7 +2730,7 @@ async function slotRefusalResponse(clinicConfig, patientPhone, date, time, treat
         const { getTimeSlotButtons } = require('./whatsapp-interactive');
         setState(patientPhone, BOOKING_STATES.AWAITING_TIME, { date, treatment: treatments[0], treatments });
         const bodyTxt = `Sorry — ${gate.reason} on ${fmtGateDate(date)}.${windowsLineFor(avail.slots, treatments, clinicConfig.config?.services || clinicConfig.services) || `\n🕐 ${avail.operatingHours}`}\n\nPick a time:`;
-        return { ...failBase, text: bodyTxt, whatsappInteractive: getTimeSlotButtons(avail.slots, avail.operatingHours, bodyTxt) };
+        return { ...failBase, text: bodyTxt, whatsappInteractive: getTimeSlotButtons(avail.slots, avail.operatingHours, bodyTxt, date) };
       }
     } catch (altErr) {
       console.error('[CONFIRM_GATE] same-day alternatives failed:', altErr.message);
