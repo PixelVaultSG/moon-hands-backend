@@ -136,6 +136,46 @@ function alertDemoConfigFallback(clientId, reason) {
   } catch (e) { /* alerting must never break the engine */ }
 }
 
+// ─── CONFIRMATION HONESTY (v2.5.20, Invariant 20 / P-4) ──────────
+// A booking confirmation may ONLY leave the building if a create_booking
+// write SUCCEEDED this turn. Before the multilingual routing fix, a
+// non-English conversation bypassed the BOOKING expert entirely and the
+// model role-played a full booking — "confirmed" with no DB row, no admin
+// card, no patient WA (Ash live test in Malay, 2026-11-14). This detector
+// covers en/zh/ms/ta; on a false claim the text is replaced with an honest
+// handoff in the patient's language (and the admin gets a stall alert).
+function claimsBookingConfirmation(text) {
+  const t = String(text || '');
+  if (!t.trim()) return false;
+  return (
+    // English: "your booking is confirmed", "you're all booked", "I've locked in your appointment"
+    /(?:your (?:booking|appointment|appt)[^.!?]{0,40}(?:is|has been|'s) (?:confirmed|booked|secured|reserved|locked in|scheduled))|(?:booking (?:is )?confirmed)|(?:appointment (?:is )?confirmed)|(?:you'?re (?:all )?(?:booked|confirmed|locked in|scheduled))|(?:i'?ve (?:booked|confirmed|secured|locked in|reserved) your)/i.test(t) ||
+    // Malay: "tempahan anda telah disahkan", "sudah ditempah"
+    /(?:tempahan|temujanji)[^.!?]{0,40}(?:disahkan|ditempah|dikunci|berjaya)|(?:disahkan|ditempah)[^.!?]{0,40}(?:tempahan|temujanji)|anda sudah (?:ditempah|disahkan)/i.test(t) ||
+    // Chinese: 已确认 / 预约成功 / 订好了 / 约好了
+    /(?:已确认|确认成功|预约成功|预订成功|已预订|已预约|订好了|约好了|帮你订了|为您预约了)/.test(t) ||
+    // Tamil: உறுதி செய்யப்பட்டது / முன்பதிவு செய்யப்பட்டது
+    /(?:உறுதி\s*செய்யப்பட்டது|உறுதிப்படுத்தப்பட்டது|முன்பதிவு\s*செய்யப்பட்டது)/.test(t)
+  );
+}
+
+// Detect the patient's language from THEIR message and return an honest
+// "we'll confirm shortly" in that language. The admin stall alert that
+// accompanies the replacement is what makes "our team will confirm" true.
+function honestBookingHandoff(patientMessage) {
+  const m = String(patientMessage || '');
+  if (/[\u4e00-\u9fff]/.test(m)) {
+    return '谢谢您的咨询！为了确保预约准确无误，我已通知我们的团队，他们会尽快在这里与您确认预约详情。抱歉给您带来不便。';
+  }
+  if (/[\u0b80-\u0bff]/.test(m)) {
+    return 'உங்கள் விசாரணைக்கு நன்றி! சரியான முன்பதிவை உறுதி செய்ய, எங்கள் குழுவிடம் தெரிவித்துள்ளேன் — விரைவில் இங்கே உங்கள் நேரத்தை உறுதிப்படுத்துவார்கள்.';
+  }
+  if (/\b(saya|nak|tempah|tempahan|temujanji|boleh|konsultasi|esok|pukul|hari)\b/i.test(m)) {
+    return 'Terima kasih! Untuk memastikan tempahan anda tepat, saya telah maklumkan pasukan kami — mereka akan mengesahkan janji temu anda di sini tidak lama lagi.';
+  }
+  return "Thank you! To make sure this is booked correctly, I've flagged our team — they'll confirm your appointment details here shortly.";
+}
+
 function getDemoConfig() {
   return {
     id: 'demo',
@@ -1337,6 +1377,7 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
         // with the same client_id/verified-phone injection as the generalist
         // path, and the deterministic result replaces the AI's paraphrase.
         let expertFunctionHandled = false;
+        let bookingWriteSucceeded = false; // Invariant 20 (v2.5.20)
         if (expertResult.functionCall) {
           const fnName = expertResult.functionCall.name;
           let fnArgs = {};
@@ -1367,6 +1408,7 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
           if (fnResult && !fnResult.error && fnResult.success !== false && (fnResult.message || fnResult.success)) {
             expertResult.text = fnResult.message || expertResult.text;
             expertFunctionHandled = true;
+            if (fnName === 'create_booking') bookingWriteSucceeded = true;
           } else {
             maybeAlertStall(clientConfig, patientPhone, messageText,
               `expert function "${fnName}" failed: ${(fnResult && fnResult.error) || 'unknown error'}`, true);
@@ -1394,6 +1436,20 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
           }
         }
         
+        // CONFIRMATION HONESTY (v2.5.20, Invariant 20 / P-4): if the expert's
+        // text claims a booking confirmation but no create_booking write
+        // succeeded this turn, the claim is FALSE (classic case: non-English
+        // conversation that never reached the booking expert — the model
+        // role-played the whole flow). Replace it with an honest handoff in
+        // the patient's language and alert admin; the fnResult replacement
+        // above already handles the successful-write case.
+        if (!bookingWriteSucceeded && claimsBookingConfirmation(expertResult.text)) {
+          console.error(`[BOT_ENGINE] FALSE CONFIRMATION intercepted (no successful create_booking this turn) — replacing with honest handoff`);
+          maybeAlertStall(clientConfig, patientPhone, messageText,
+            'expert claimed a booking confirmation with NO successful write — replaced (Invariant 20)', true);
+          expertResult.text = honestBookingHandoff(messageText);
+        }
+
         // If the reply ends by offering to arrange/book ("Would you like me to
         // arrange that?"), park the conversation in BOOKING_OFFERED so a bare
         // "yes please" next turn starts the booking flow deterministically
@@ -1587,7 +1643,18 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
         max_tokens: 500
       });
 
-      const finalResponse = secondCompletion.choices[0].message.content;
+      let finalResponse = secondCompletion.choices[0].message.content;
+
+      // CONFIRMATION HONESTY (v2.5.20, Invariant 20): even after a function
+      // ran, the second pass can paraphrase a FAILED create_booking as
+      // "you're booked!". Only a successful create_booking may confirm.
+      const generalistBookingOk = funcName === 'create_booking' && functionResult && functionResult.success !== false && !functionResult.error;
+      if (!generalistBookingOk && claimsBookingConfirmation(finalResponse)) {
+        console.error(`[BOT_ENGINE] FALSE CONFIRMATION intercepted on generalist path (fn=${funcName}, success=${functionResult && functionResult.success}) — replacing`);
+        maybeAlertStall(clientConfig, patientPhone, messageText,
+          `generalist claimed confirmation without a successful create_booking (fn=${funcName}) — replaced (Invariant 20)`, true);
+        finalResponse = honestBookingHandoff(messageText);
+      }
 
       await logConversation(clientConfig.id, 'whatsapp', patientPhone, null,
         messageText, finalResponse, `generalist:${funcName}`);
@@ -1603,7 +1670,15 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
     // Direct response (no function call needed)
     // STALL ALARM (v2.2.5): booking action requested, none executed.
     maybeAlertStall(clientConfig, patientPhone, messageText, 'generalist replied without taking any action');
-    const directText = response.message?.content || "I'm sorry, I didn't understand that. How can I help you today?";
+    let directText = response.message?.content || "I'm sorry, I didn't understand that. How can I help you today?";
+    // CONFIRMATION HONESTY (v2.5.20, Invariant 20): no function ran at all —
+    // a confirmation claim here is pure fabrication.
+    if (claimsBookingConfirmation(directText)) {
+      console.error('[BOT_ENGINE] FALSE CONFIRMATION on generalist direct path (no function call) — replacing');
+      maybeAlertStall(clientConfig, patientPhone, messageText,
+        'generalist direct reply claimed confirmation with NO function call — replaced (Invariant 20)', true);
+      directText = honestBookingHandoff(messageText);
+    }
     await logConversation(clientConfig.id, 'whatsapp', patientPhone, null,
       messageText, directText, 'generalist:direct');
     const directFooter = withActionFooter(directText, clientConfig, [], resumePrompt);
@@ -1682,4 +1757,7 @@ module.exports = {
   deterministicCancelBookings,
   // Exported for testing (v2.4.7 demo-fallback alerting)
   loadClientConfig,
+  // Exported for testing (v2.5.20 Invariant 20 — confirmation honesty)
+  claimsBookingConfirmation,
+  honestBookingHandoff,
 };

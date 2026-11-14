@@ -193,41 +193,45 @@ function formatOperatingHours(hours) {
 // ─── LOCATION ─────────────────────────────────────────────────────
 
 function handleLocation({ clinicConfig, message }) {
-  // Use DB config if available, otherwise fall back to Pixel Vault mock data
+  // v2.5.20 (F9): REAL config fields only. The old mock fallbacks (a fake
+  // River Valley address, fake MRT/landmark/parking/phone) fired PER-FIELD
+  // whenever a clinic skipped an OPTIONAL onboarding field (landmarks,
+  // parking, mrt save as '') — patients got fabricated directions stitched
+  // into the clinic's real address. Post-v2.5.7 there is no demo
+  // impersonation left to justify mocks.
   const address = clinicConfig.address || clinicConfig.config?.address;
   const landmarks = clinicConfig.landmarks || clinicConfig.config?.landmarks;
   const parking = clinicConfig.parking_info || clinicConfig.config?.parking_info;
   const mrt = clinicConfig.nearest_mrt || clinicConfig.config?.nearest_mrt;
   const phone = clinicConfig.phone || clinicConfig.config?.phone || clinicConfig.whatsapp_number;
   const hours = clinicConfig.operating_hours || clinicConfig.config?.operating_hours;
-  
-  // Pixel Vault mock fallback data
-  const mockAddress = address || '123A River Valley Road, #02-01\nSingapore 238275';
-  const mockMrt = mrt || 'Fort Canning MRT (DT20) — 5 min walk';
-  const mockLandmarks = landmarks || 'Opposite Clarke Quay Central, near UE Square';
-  const mockParking = parking || 'Basement parking available. Street parking along River Valley Rd (coupon).';
-  const mockPhone = phone || '+65 6123 4567';
-  
+
+  if (!address) {
+    return phone
+      ? `I don't have our full address on file right now — please contact us at ${phone} and we'll get you directions.`
+      : `I don't have our location details on file right now — please contact the clinic directly and we'll point you the right way.`;
+  }
+
   let response = '';
-  
-  response += `We're located at:\n📍 ${mockAddress}`;
-  
-  if (mockMrt) {
-    response += `\n\n🚇 Nearest MRT: ${mockMrt}`;
+
+  response += `We're located at:\n📍 ${address}`;
+
+  if (mrt) {
+    response += `\n\n🚇 Nearest MRT: ${mrt}`;
   }
-  
-  if (mockLandmarks) {
-    response += `\n🏢 Nearby: ${mockLandmarks}`;
+
+  if (landmarks) {
+    response += `\n🏢 Nearby: ${landmarks}`;
   }
-  
-  if (mockParking) {
-    response += `\n🅿️ Parking: ${mockParking}`;
+
+  if (parking) {
+    response += `\n🅿️ Parking: ${parking}`;
   }
-  
-  if (mockPhone) {
-    response += `\n\n📞 Contact: ${mockPhone}`;
+
+  if (phone) {
+    response += `\n\n📞 Contact: ${phone}`;
   }
-  
+
   // Add operating hours if available
   if (hours && Array.isArray(hours) && hours.length > 0) {
     const today = new Date().toLocaleDateString('en-SG', { weekday: 'long' });

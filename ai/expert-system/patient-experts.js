@@ -255,6 +255,8 @@ BOOKING RULES (STRICT — never break):
 9. Max advance booking: ${clinicConfig.booking_max_advance_days || 30} days
 10. Min notice: ${clinicConfig.booking_min_notice_hours || 2} hours
 11. Phone required: ${clinicConfig.booking_require_phone !== false ? 'YES' : 'optional'}
+12. NEVER say a booking is confirmed, booked, locked in, or reserved unless the create_booking function has returned success in THIS conversation. If you have not completed the function call, say you are checking or taking details — never claim a done deal. (v2.5.20)
+13. ALWAYS reply in the SAME LANGUAGE the patient writes in — English, Chinese, Malay, or Tamil. All function calls work identically regardless of language. (v2.5.20)
 
 TONE: Professional, organized, efficient. Double-check everything.`;
 }
@@ -353,6 +355,14 @@ function classifyMessage(message, intents, conversationHistory) {
     if (normalized.match(/(unhappy|disappoint|terrible|bad|complain|upset|angry|worried|scared)/)) activeExperts.add('EMPATHY');
     if (normalized.match(/(recommend|suggest|also get|what else|combine|package|bundle)/)) activeExperts.add('UPSELL');
   }
+
+  // v2.5.20 (P-4): multilingual booking intent (ms/zh/ta — every language a
+  // clinic can select). The deterministic layer was English-only: a Malay
+  // "saya nak tempah konsultasi" matched NOTHING, fell to a function-less
+  // expert, and the model role-played a full booking ending in a fabricated
+  // "confirmed" — no write, no admin card, no patient WA (Ash live test
+  // 2026-11-14). BOOKING is the only expert that can actually act.
+  if (MULTILINGUAL_BOOKING.test(normalized)) activeExperts.add('BOOKING');
   
   // v2.5.14 (P-3 routing): availability questions ("is Sat 10am free?")
   // matched NO intent and no booking keyword — they fell to INFO (zero
@@ -371,8 +381,12 @@ function classifyMessage(message, intents, conversationHistory) {
   if (!activeExperts.has('BOOKING') && Array.isArray(conversationHistory) && conversationHistory.length > 0) {
     const lastTurn = conversationHistory[conversationHistory.length - 1] || {};
     const lastAi = String(lastTurn.ai || lastTurn.content || '');
-    if (/cancel|cancell|reschedule|which one|which day|which treatment|what.*name|availability|book(ing)?\b|appointment/i.test(lastAi)
-        && /provid|which|what|confirm|verify|proceed|interested|slots?|name|\?/i.test(lastAi)) {
+    if ((/cancel|cancell|reschedule|which one|which day|which treatment|what.*name|availability|book(ing)?\b|appointment/i.test(lastAi)
+        && /provid|which|what|confirm|verify|proceed|interested|slots?|name|\?/i.test(lastAi))
+        // v2.5.20 (P-4): an in-flight booking conducted in ms/zh/ta has an
+        // AI side full of non-English text — the English-only probe dropped
+        // the patient out of the booking flow mid-conversation.
+        || (MULTILINGUAL_BOOKING.test(lastAi) || MULTILINGUAL_AVAILABILITY.test(lastAi))) {
       activeExperts.add('BOOKING');
     }
   }
@@ -401,9 +415,23 @@ function classifyMessage(message, intents, conversationHistory) {
 // demo clinic "cannot access real-time booking information"). Availability
 // questions now FORCE the function call; the deterministic result replaces
 // the model's prose downstream.
+// v2.5.20 (P-4): multilingual availability terms (ms/zh/ta — every language
+// a clinic can select at onboarding). The English-only detector let
+// non-English availability questions fall to experts with NO functions, and
+// the model improvised answers — the same P-3 lie in another language.
+// Kept conservative: availability-only terms, no booking-intent words.
+const MULTILINGUAL_AVAILABILITY = /(\bkosong\b|kekosongan|masih ada (?:slot|tempat|kosong))|有空位?|还有位|可以约|இடம் உண்டா|காலி இடம்/i;
+
+// Booking-intent verbs/nouns in Malay, Chinese, Tamil (script detection
+// handles zh/ta; Malay is Latin-script so it needs vocabulary). Conservative:
+// booking/cancel/reschedule terms only — hours/location questions still go
+// to INFO, pricing to PRICING.
+const MULTILINGUAL_BOOKING = /(tempah|tempahan|temujanji|janji ?temu|batalkan?|ubah (?:temujanji|janji)|pinda(?:n|an)? (?:temujanji|janji))|预约|预订|挂号|订位|取消|改期|முன்பதிவு|ரத்து|நேரம் மாற்ற|அப்பாயின்ட்மென்ட்/i;
+
 function isAvailabilityQuestion(message) {
   const m = String(message || '');
   if (!m.trim()) return false;
+  if (MULTILINGUAL_AVAILABILITY.test(m)) return true;
   if (!/\b(available|availability|free|openings?|slots?|vacanc(?:y|ies)|spaces?)\b/i.test(m)) return false;
   // "free" as in $0 (pricing question), not availability — only when "free"
   // sits next to a pricing/service word ("free consultation", "is the
@@ -574,4 +602,6 @@ module.exports = {
   buildExpertPrompt,
   getClinicPersonality,
   isAvailabilityQuestion,
+  MULTILINGUAL_BOOKING,
+  MULTILINGUAL_AVAILABILITY,
 };
