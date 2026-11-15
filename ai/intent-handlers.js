@@ -452,12 +452,17 @@ async function handleCancelRequest({ clinicConfig, patientPhone }) {
   // lookup match nothing — patient cancel/reschedule/check always replied
   // "no upcoming appointments". Accept both shapes defensively.
   const clinicId = clinicConfig.client_id || clinicConfig.id;
+  // v2.5.32: "upcoming" means FUTURE — this list showed Oct/Nov past-dated
+  // rows to a patient on Nov 15 (Ash UVT: "5 upcoming bookings" that did
+  // not exist). Filter them out at the query, not the wording.
+  const todaySG = new Date(Date.now() + 8 * 3600e3).toISOString().slice(0, 10);
   const { data: appointments, error } = await supabase
     .from('appointments')
     .select('*')
     .eq('client_id', clinicId)
     .eq('customer_phone', patientPhone)
     .in('status', ['confirmed', 'pending'])
+    .gte('appointment_date', todaySG)
     .order('appointment_date', { ascending: true })
     .limit(5);
 
@@ -494,12 +499,15 @@ async function handleRescheduleRequest({ clinicConfig, patientPhone }) {
   }
 
   const clinicId = clinicConfig.client_id || clinicConfig.id; // v2.5.8 (B2-1)
+  // v2.5.32: future-only, same rule as the cancel list.
+  const todaySG = new Date(Date.now() + 8 * 3600e3).toISOString().slice(0, 10);
   const { data: appointments, error } = await supabase
     .from('appointments')
     .select('*')
     .eq('client_id', clinicId)
     .eq('customer_phone', patientPhone)
     .in('status', ['confirmed', 'pending'])
+    .gte('appointment_date', todaySG)
     .order('appointment_date', { ascending: true })
     .limit(5);
   
@@ -524,12 +532,15 @@ async function handleCheckAppointment({ clinicConfig, patientPhone }) {
   }
 
   const clinicId = clinicConfig.client_id || clinicConfig.id; // v2.5.8 (B2-1)
+  // v2.5.32: future-only, same rule as the cancel list.
+  const todaySG = new Date(Date.now() + 8 * 3600e3).toISOString().slice(0, 10);
   const { data: appointments, error } = await supabase
     .from('appointments')
     .select('*')
     .eq('client_id', clinicId)
     .eq('customer_phone', patientPhone)
     .in('status', ['confirmed', 'pending'])
+    .gte('appointment_date', todaySG)
     .order('appointment_date', { ascending: true })
     .limit(5);
   
