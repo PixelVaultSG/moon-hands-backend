@@ -268,7 +268,20 @@ function parseDatePhrase(phrase) {
   for (const [short, full] of Object.entries(SHORT_FORMS)) {
     expanded = expanded.replace(new RegExp(`\\b${short}\\b`, 'g'), full);
   }
-  
+
+  // v2.5.32 (C3): Malay date words — patients write "Hari Sabtu", "esok",
+  // "hari ini". Map to English BEFORE the English logic below; bare "hari"
+  // (day) is then dropped as filler so "hari saturday" still parses.
+  expanded = expanded.replace(/\bhari ini\b/g, 'today');
+  const MALAY_DAYS = { 'isnin': 'monday', 'selasa': 'tuesday', 'rabu': 'wednesday', 'khamis': 'thursday', 'jumaat': 'friday', 'sabtu': 'saturday', 'ahad': 'sunday', 'esok': 'tomorrow' };
+  for (const [ms, en] of Object.entries(MALAY_DAYS)) {
+    expanded = expanded.replace(new RegExp(`\\b${ms}\\b`, 'g'), en);
+  }
+  expanded = expanded.replace(/\bhari\b\s*/g, '').trim();
+
+  if (expanded === 'today') {
+    return formatDate(now);
+  }
   if (expanded === 'tomorrow') {
     const d = new Date(now); d.setDate(d.getDate() + 1);
     return formatDate(d);
@@ -314,6 +327,12 @@ function formatDate(d) {
 }
 
 function parseTimePhrase(phrase) {
+  // v2.5.32 (C3): Malay time markers — "pukul 10 pagi" = 10am,
+  // "pukul 3 petang/malam" = 3pm. Normalize to English before parsing.
+  phrase = String(phrase)
+    .replace(/\bpukul\b/gi, '')
+    .replace(/\bpagi\b/gi, 'am')
+    .replace(/\b(petang|malam|siang)\b/gi, 'pm');
   const lower = phrase.toLowerCase();
   if (lower === 'morning') return '10:00';
   if (lower === 'afternoon') return '14:00';
@@ -449,12 +468,17 @@ function extractBookingFields(message, services = []) {
     /\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}\b/i,
     /\b\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b/i,
     /\d{4}-\d{2}-\d{2}/,
+    // v2.5.32 (C3): Malay date words — "Hari Sabtu", "esok", "hari ini"
+    /\bhari\s+(isnin|selasa|rabu|khamis|jumaat|sabtu|ahad|ini)\b/i,
+    /\b(isnin|selasa|rabu|khamis|jumaat|sabtu|ahad|esok)\b/i,
   ];
   for (const p of datePatterns) { const m = message.match(p); if (m) { const d = parseDatePhrase(m[0]); if (d) { fields.date = d; break; } } }
   // Time — accept both colon (:) and dot (.) as separators
   const timePatterns = [
     /(\d{1,2})[:.](\d{2})\s*(am|pm)/i, /(\d{1,2})\s*(am|pm)/i,
     /(\d{1,2})[:.](\d{2})/, /\b(morning|afternoon|evening)\b/i,
+    // v2.5.32 (C3): Malay time — "pukul 10 pagi", "3 petang", "7 malam"
+    /(?:pukul\s+)?(\d{1,2})(?:[:.](\d{2}))?\s*(pagi|petang|malam|siang)\b/i,
   ];
   for (const p of timePatterns) { const m = message.match(p); if (m) { const t = parseTimePhrase(m[0]); if (t) { fields.time = t; break; } } }
   // Treatment(s) — extract ALL treatments for multi-treatment bookings
@@ -478,7 +502,11 @@ function isConfirmation(message) {
   const l = message.toLowerCase().trim().replace(/[!.,?]+$/, '');
   const words = l.split(/\s+/);
   if (words.length > 4) return false; // Long messages are substantive, not confirmations
-  return ['yes','yeah','yup','correct',"that's right",'right','sure','ok','okay','yep','true','accurate','both','go ahead','fine','proceed','confirm','confirmed','mhm','alright','definitely','of course','absolutely','certainly','gladly','happily','by all means','very well']
+  // v2.5.32 (C3): non-English affirmatives — "Ya" (Malay), 好的/可以/是
+  // (Chinese), ஆம்/சரி (Tamil). Deliberately NOT "boleh": it also starts
+  // questions ("boleh saya tanya…") and would misfire as a YES.
+  return ['yes','yeah','yup','correct',"that's right",'right','sure','ok','okay','yep','true','accurate','both','go ahead','fine','proceed','confirm','confirmed','mhm','alright','definitely','of course','absolutely','certainly','gladly','happily','by all means','very well',
+    'ya','baik','是','好','好的','可以','确认','ஆம்','சரி']
     .some(w => l === w || l.startsWith(w + ' '));
 }
 

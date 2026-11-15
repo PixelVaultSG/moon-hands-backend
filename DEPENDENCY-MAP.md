@@ -189,3 +189,21 @@ Ash: "This multiple gates of entries must be considered on all possible features
 
 ## Audit batch one — CLOSED (Nov 14 2026)
 A-1 ✓ v2.5.25 · A-2 ✓ v2.5.24 · A-3 ✓ v2.5.25 · A-4 ✓ v2.5.26 (migration pending Ash) · B-1 ✓ v2.5.27 · B-2 parked by Ash (Malay cancel quality, backlog).
+
+## v2.5.32 — UVT feedback fixes (C2/C3/C4 + phantom bookings)
+
+**Date:** 2026-11-15
+**Harness:** T98
+
+| Change | File | What |
+|---|---|---|
+| Past-date filter on patient-facing appointment lists | ai/bot-engine.js (deterministicCancelBookings, handleCancelBooking), ai/intent-handlers.js (handleCancelRequest, handleRescheduleRequest, check-appointment) | `.gte('appointment_date', todaySG)` — past-dated confirmed/pending rows no longer listed or cancellable |
+| MADS medical-advice texts localized | ai/bot-engine.js | offerText, callback_accepted, callback-failure now run through localizeDeterministicMessage (language signal = callbackTopic original message for the tap path) |
+| Malay booking/cancel entry | ai/intent-matcher.js | booking_request regex += nak/mahu/ingin + jumpa/tempah/temujanji; cancel_request += \bbatal\w*\b (0.95 > booking 0.9, cancel wins) |
+| Malay date/time parsing | ai/conversation-state.js | parseDatePhrase: hari/isnin..ahad/esok/hari ini/today; parseTimePhrase: pukul/pagi/petang/malam/siang; extractBookingFields patterns added |
+| Non-English affirmatives | ai/conversation-state.js | isConfirmation += ya/baik/好的/可以/是/确认/ஆம்/சரி (NOT "boleh" — question starter) |
+| Mid-flow question escape (C4) | ai/smart-router.js | escape gate now `midFlowQuestion || (!fields.date && !fields.time)`; qmark + question word (en/ms/zh/ta), never with a parsed time, never "how about" |
+| Malay mid-flow cancel guard | ai/smart-router.js | APPOINTMENT_CANCEL_RE += \bbatal\w*\b |
+| Multi-number cancel | ai/bot-engine.js | cancel_pending intercept accepts "cancel 2", "4 and 5", "2, 3" — cancels each, per-number honest failures |
+
+**Census:** interactive-gate inventory UNCHANGED (30 static entries + 5 dynamic branches / 6 prefixes); BOOKING_STATES unchanged (14). No new interactive prefixes. The escape addition is a ternary `{ intent: 'offtopic_question' }` — not a static gate-map entry.

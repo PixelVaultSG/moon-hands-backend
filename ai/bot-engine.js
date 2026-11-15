@@ -721,12 +721,17 @@ async function cancelOneBooking(booking, clientConfig) {
 
 async function deterministicCancelBookings(clientConfig, patientPhone) {
   const phoneDigits = String(patientPhone || '').replace(/\D/g, '');
+  // v2.5.32: "upcoming" means FUTURE — past-dated rows still sitting in
+  // confirmed/pending (test residue, no-shows never marked completed) were
+  // listed for cancellation and then "cancelled" days after their date.
+  const todaySG = new Date(Date.now() + 8 * 3600e3).toISOString().slice(0, 10);
   const { data: bookings, error } = await db.supabase
     .from('appointments')
     .select('*')
     .eq('client_id', clientConfig.id)
     .eq('customer_phone', phoneDigits)
     .in('status', ['confirmed', 'pending', 'pending_approval'])
+    .gte('appointment_date', todaySG)
     .order('appointment_date', { ascending: true });
 
   if (error) {
@@ -758,6 +763,9 @@ async function handleCancelBooking(args, clientConfig) {
     .eq('client_id', clientConfig.id)
     .eq('customer_phone', patient_phone)
     .in('status', ['confirmed', 'pending', 'pending_approval']);
+
+  // v2.5.32: future-only — never list or cancel a past-dated appointment.
+  query.gte('appointment_date', new Date(Date.now() + 8 * 3600e3).toISOString().slice(0, 10));
 
   if (date) query.eq('appointment_date', date);
 
@@ -1079,13 +1087,17 @@ async function handleCallbackChoice(interactiveId, clientConfig, patientPhone, m
         { text: '🚫 Cancel', callback_data: `cbcancel:${cbShort}` }
       ]] } }
     ).catch(e => console.error('[MADS] callback alert failed:', e.message));
-    const text = "Thank you! Our doctor will call you shortly. Is there anything else I can help with in the meantime?";
+    // v2.5.32 (C2): localize — a Tamil/Chinese/Malay patient hears the
+    // callback confirmation in THEIR language, same rule as Path A. The
+    // language signal is the ORIGINAL message (callbackTopic) — a button
+    // tap carries an English title and would misdetect.
+    const text = await localizeDeterministicMessage("Thank you! Our doctor will call you shortly. Is there anything else I can help with in the meantime?", pending.data?.callbackTopic || messageText);
     await logConversation(clientConfig.id, 'whatsapp', patientPhone, null, messageText, text, 'mads:callback_accepted');
     return { text, function_called: 'create_callback_request', model: 'mads-callback', latency_ms: Date.now() - startTime };
   } catch (err) {
     console.error('[MADS] callback creation failed:', err.message);
     return {
-      text: "I've noted your request for a doctor's call. If our team doesn't reach out shortly, please call the clinic directly.",
+      text: await localizeDeterministicMessage("I've noted your request for a doctor's call. If our team doesn't reach out shortly, please call the clinic directly.", messageText),
       function_called: null, model: 'mads-callback', error: err.message, latency_ms: Date.now() - startTime
     };
   }
@@ -1132,7 +1144,10 @@ async function madsGate(messageText, clientConfig, patientPhone, startTime) {
 
   if (classification.isMedicalAdvice) {
     convState.setState(patientPhone, 'callback_pending', { callbackTopic: String(messageText).slice(0, 500) });
-    const offerText = "I'm not a medical professional, so I can't give clinical advice. Would you like our doctor to give you a call to discuss this?";
+    // v2.5.32 (C2): localize — this went out in English to a Tamil patient
+    // (Ash UVT 2026-11-15). The emergency Path A was already multilingual;
+    // the medical-advice offer was the remaining hardcoded-English MADS text.
+    const offerText = await localizeDeterministicMessage("I'm not a medical professional, so I can't give clinical advice. Would you like our doctor to give you a call to discuss this?", messageText);
     const interactive = buildQuickReplyButtons({
       body: offerText,
       buttons: [
@@ -1389,22 +1404,30 @@ async function processMessage(messageText, clientId, conversationHistory = [], p
     // from the idle cancel_request handler, which now arms cancel_pending).
     const cancelPendingState = patientPhone ? convState.getState(patientPhone) : null;
     const cancelPendingIds = cancelPendingState?.data?.ids || [];
-    const isCancelNumber = cancelPendingState?.state === 'cancel_pending' && /^\s*\d{1,2}\s*$/.test(messageText || '');
+    // v2.5.32: accept "cancel 2", "4 and 5", "2, 3" — patients naturally
+    // answer the numbered list with a leading "cancel" or several numbers.
+    // The old bare-digit gate let "Cancel 4 and 5" fall into the AI layer,
+    // which re-sent the list and cancelled NOTHING (Ash UVT 2026-11-15).
+    const isCancelNumber = cancelPendingState?.state === 'cancel_pending' && /^\s*(?:cancel\s+)?\d{1,2}(?:\s*(?:,|&|\band\b)\s*\d{1,2})*\s*$/i.test(messageText || '');
     const isCancelYes = cancelPendingState?.state === 'cancel_pending' && cancelPendingIds.length === 1 && convState.isConfirmation(messageText || '');
     if (isCancelNumber || isCancelYes) {
-      const idx = isCancelYes ? 0 : parseInt(messageText.trim(), 10) - 1;
+      const pickNums = isCancelYes ? [1] : (messageText.match(/\d{1,2}/g) || []).map(Number);
       const ids = cancelPendingIds;
       const labels = cancelPendingState.data?.label || [];
       convState.resetIdle(patientPhone);
-      let dcText;
-      if (ids[idx]) {
-        const { data: bk } = await db.supabase.from('appointments').select('*').eq('id', ids[idx]).single();
-        dcText = bk
+      const dcParts = [];
+      for (const n of pickNums) {
+        const id = ids[n - 1];
+        if (!id) {
+          dcParts.push(`Number ${n} isn't on the list — please pick from:\n\n${labels.map((l, i) => `${i + 1}. ${l}`).join('\n')}`);
+          continue;
+        }
+        const { data: bk } = await db.supabase.from('appointments').select('*').eq('id', id).single();
+        dcParts.push(bk
           ? await cancelOneBooking(bk, clientConfig)
-          : "That booking is no longer available — it may already be cancelled.";
-      } else {
-        dcText = `Please reply with a number from the list:\n\n${labels.map((l, i) => `${i + 1}. ${l}`).join('\n')}`;
+          : `Booking ${n} is no longer available — it may already be cancelled.`);
       }
+      const dcText = dcParts.join('\n\n');
       await logConversation(clientConfig.id, 'whatsapp', patientPhone, null, messageText, dcText, 'deterministic:cancel_choice');
       return {
         text: dcText,

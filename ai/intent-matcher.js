@@ -137,7 +137,11 @@ const INTENT_PATTERNS = {
     // CRITICAL: "I would like do a chemical peel" (no "to") must match — patients drop "to"
     // Also: "I'd like to get Botox", "I wanna do microneedling"
     // Also handles WhatsApp interactive button titles: "3. Book Appointment"
-    regex: /(?:i\s+(?:want|would\s+like|wanna)\s+(?:to\s+)?(?:book|make|schedule)|can\s+i\s+(?:book|make|schedule|come)|(?:book|schedule|make)\s+(?:an?\s+)?(?:appointment|booking|slot)|(?:i\s+want|looking\s+for)\s+(?:an?\s+)?(?:slot|appointment)|when\s+(?:can|is)\s+i\s+(?:book|come)|next\s+available|earliest\s+(?:slot|appointment)|i\s+(?:want|wanna)\s+(?:to\s+)?(?:botox|filler|hifu|laser|facial|rejuran|thread|peel|microneedling)|i\s+(?:want|would\s+like|wanna)\s+(?:to\s+)?(?:do|get|have)\s+(?:a\s+)?(?:chemical\s+peel|botox|filler|hifu|laser|facial|rejuran|thread|peel|microneedling|treatment|service)|i\s+(?:want|would\s+like|wanna)\s+(?:to\s+)?do\s+(?:a\s+)?(?:chemical\s+peel|botox|filler|hifu|laser|facial|rejuran|thread|peel|microneedling|treatment|service)|i\s+(?:want|would\s+like|wanna)\s+do\s+(?:a\s+)?(?:chemical\s+peel|botox|filler|hifu|laser|facial|rejuran|thread|peel|microneedling|treatment|service)|\bbook\s+appointment\b)/i,
+    // v2.5.32 (C3): Malay booking entry — "Saya nak jumpa doctor", "nak tempah",
+    // "buat temujanji" now enter the deterministic booking flow instead of the
+    // LLM improvising one (it asked for the patient's phone — which we have — and
+    // the next "Yes" restarted the flow at the date question).
+    regex: /(?:i\s+(?:want|would\s+like|wanna)\s+(?:to\s+)?(?:book|make|schedule)|can\s+i\s+(?:book|make|schedule|come)|(?:book|schedule|make)\s+(?:an?\s+)?(?:appointment|booking|slot)|(?:i\s+want|looking\s+for)\s+(?:an?\s+)?(?:slot|appointment)|when\s+(?:can|is)\s+i\s+(?:book|come)|next\s+available|earliest\s+(?:slot|appointment)|i\s+(?:want|wanna)\s+(?:to\s+)?(?:botox|filler|hifu|laser|facial|rejuran|thread|peel|microneedling)|i\s+(?:want|would\s+like|wanna)\s+(?:to\s+)?(?:do|get|have)\s+(?:a\s+)?(?:chemical\s+peel|botox|filler|hifu|laser|facial|rejuran|thread|peel|microneedling|treatment|service)|i\s+(?:want|would\s+like|wanna)\s+(?:to\s+)?do\s+(?:a\s+)?(?:chemical\s+peel|botox|filler|hifu|laser|facial|rejuran|thread|peel|microneedling|treatment|service)|i\s+(?:want|would\s+like|wanna)\s+do\s+(?:a\s+)?(?:chemical\s+peel|botox|filler|hifu|laser|facial|rejuran|thread|peel|microneedling|treatment|service)|\bbook\s+appointment\b|\b(?:saya\s+)?(?:nak|mahu|ingin)\s+(?:jumpa|tempah|tempahkan|buat\s+temujanji|buat\s+appointment)\b|\b(?:tempah|tempahkan)\s+(?:temujanji|slot)\b|\bbuat\s+temujanji\b)/i,
     keywords: ['book', 'appointment', 'schedule', 'slot', 'booking', 'i want to come', 'available slots', 'i would like', 'i want to do', 'i would like to do', 'i wanna do', 'book appointment'],
     weight: 0.9,
     extract: (match, msg) => {
@@ -156,7 +160,10 @@ const INTENT_PATTERNS = {
   },
   
   cancel_request: {
-    regex: /(?:cancel|delete|remove)\s+(?:my\s+)?(?:appointment|booking)|i\s+(?:want|need|would\s+like)\s+to\s+cancel|(?:can\s+i|how\s+do\s+i)\s+cancel/i,
+    // v2.5.32 (C3): Malay cancel — "batalkan temujanji saya", "nak batal".
+    // Weight 0.95 > booking_request 0.9, so "nak batalkan temujanji"
+    // (matches both) resolves as a CANCEL, never a booking.
+    regex: /(?:cancel|delete|remove)\s+(?:my\s+)?(?:appointment|booking)|i\s+(?:want|need|would\s+like)\s+to\s+cancel|(?:can\s+i|how\s+do\s+i)\s+cancel|\bbatal\w*\b|\bpembatalan\b/i,
     keywords: ['cancel', 'delete booking'],
     weight: 0.95,
   },

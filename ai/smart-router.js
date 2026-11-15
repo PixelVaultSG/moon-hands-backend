@@ -1468,7 +1468,7 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
   // typed mid-flow (UVT 2026-11-12: patient got "No problem!" and the cancel
   // vanished). Exit the stale flow and hand the message to the AI layer,
   // where the cancel functions live.
-  const APPOINTMENT_CANCEL_RE = /(?:cancel|delete|remove)\s+(?:my\s+)?(?:appointment|booking|appt)\b|i\s+(?:want|need|would\s+like)\s+to\s+cancel/i;
+  const APPOINTMENT_CANCEL_RE = /(?:cancel|delete|remove)\s+(?:my\s+)?(?:appointment|booking|appt)\b|i\s+(?:want|need|would\s+like)\s+to\s+cancel|\bbatal\w*\b|\bpembatalan\b/i;
   if (APPOINTMENT_CANCEL_RE.test(message)) {
     resetIdle(patientPhone);
     return { text: null, source: 'openai', intents: ['cancel_request'], cost_saved: 0, latency_ms: Date.now() - startTime };
@@ -1502,7 +1502,17 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
   // exit the booking flow and answer their actual question.
   // (Date/time answers and bare treatment names still continue the booking —
   //  only messages with a clear NON-booking intent escape.)
-  if (!fields.date && !fields.time) {
+  // v2.5.32 (C4): a mid-flow QUESTION escapes even when a date word parses —
+  // "Adakah anda buka pada hari Rabu? … senarai harga?" is a QUESTION to be
+  // answered, not a date change. The old gate needed an English intent match,
+  // so Malay/zh/ta questions fell through to "Sorry, I didn't catch the time."
+  // Guards: a parsed TIME means a booking answer ("how about 2pm?"); a bare
+  // "Saturday?" (qmark, no question word) is a date proposal, not an escape;
+  // "how about …" is a suggestion, not a question.
+  const MIDFLOW_QWORD_RE = /吗|么|adakah|berapakah?|bolehkah|\bharga\b|\bsenarai\b|什么|多少|价格|என்ன|எவ்வளவு|\b(?:what|which|why|when|where|price|pricing|cost|how\s+much|how\s+long|list)\b/i;
+  const midFlowQuestion = (!fields.time && /\?|？/.test(message) && MIDFLOW_QWORD_RE.test(message) && !/how\s+about/i.test(message))
+    ? { intent: 'offtopic_question' } : null;
+  if (midFlowQuestion || (!fields.date && !fields.time)) {
     const isBareServiceName = services.some(s => msgLower === s.name.toLowerCase());
     // NEW: In AWAITING_TREATMENT, any message containing a service name is likely
     // the user providing their treatment choice — don't treat as off-topic inquiry.
@@ -1540,7 +1550,7 @@ async function handleBookingFlow(message, clinicConfig, patientPhone, currentSta
       // from false-firing; date/time/selection guards above still apply.
       const SYMPTOM_RE = /\b(pain|ache|aching|hurts?|hurting|sore(?:ness)?|stiff(?:ness)?|numb(?:ness)?|tingl(?:e|es|ing)|cramp(?:s|ing)?|spasms?|strain(?:ed)?|sprain(?:ed)?|injur(?:y|ies|ed)|sciatica|migraines?|headaches?|discomfort)\b/i;
       const symptomMatch = SYMPTOM_RE.test(message) ? { intent: 'offtopic_question' } : null;
-      const escapeIntent = offTopicMatch || inquiryMatch || compareInfoMatch || symptomMatch;
+      const escapeIntent = midFlowQuestion || offTopicMatch || inquiryMatch || compareInfoMatch || symptomMatch;
       // Waitlist request mid-booking (v2.3.3, Feedback: "replied yes to the
       // waitlist but conversation seems to break"). Handle DETERMINISTICALLY
       // with the booking context we already hold: insert the row now (the old
